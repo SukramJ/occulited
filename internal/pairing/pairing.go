@@ -1,0 +1,641 @@
+// Package pairing is how a program off the system gets an API token without anybody copying a
+// secret (openccu-lite task 219, the maintainer's decisions of 2026-09-24): the program asks
+// without a credential, with the access it wants per area; both it and the system compute the
+// same six-digit code; an administrator sees the request on the Status page with that code and
+// approves it with one click - all or nothing - and the waiting program receives its token.
+//
+// The code is bound to the certificate the program sees: code = six digits of
+// SHA-256(nonce ‖ client_nonce ‖ fingerprint), where nonce is the system's random half,
+// client_nonce the program's (committed to as SHA-256(client_nonce) in the request, revealed with
+// its first poll, so a man in the middle cannot try certificates until the codes match), and
+// fingerprint the SHA-256 of the TLS certificate the program saw - the system's own on this side.
+// Over plain HTTP the fingerprint is empty: the code still binds the request, not the connection.
+//
+// Nothing here is a credential until an administrator approves: a request lives five minutes, at
+// most five wait, one per address and program, ten an hour per address, and a rejection mutes the
+// address and program for ten minutes. Only the local networks may ask.
+package pairing
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/binary"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"log/slog"
+	"regexp"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/hobbyquaker/occulited/internal/auth"
+)
+
+// The limits (task 219).
+const (
+	Lifetime     = 5 * time.Minute
+	MaxPending   = 5
+	PerHour      = 10
+	MuteFor      = 10 * time.Minute
+	Interval     = 2 * time.Second
+	MaxWait      = 30 * time.Second
+	maxPurposeLn = 200
+)
+
+// The states of a request.
+const (
+	StatePending  = "pending"
+	StateApproved = "approved"
+	StateRejected = "rejected"
+	StateExpired  = "expired"
+)
+
+// Errors the HTTP layer maps.
+var (
+	ErrOff       = errors.New("pairing is switched off on this system: an administrator switches it on in the API tokens panel, or creates a token there")
+	ErrNotLocal  = errors.New("pairing is open to the local networks only")
+	ErrLimit     = errors.New("too many pairing requests")
+	ErrMuted     = errors.New("a request of this program from this address was rejected a moment ago")
+	ErrInvalid   = errors.New("invalid pairing request")
+	ErrUnknown   = errors.New("no such pairing request (any more)")
+	ErrPoll      = errors.New("not this request's poll secret")
+	ErrSlowDown  = errors.New("slow down")
+	ErrWrongCode = errors.New("the code is not this request's")
+	ErrNotReady  = errors.New("the program has not revealed its half of the code yet")
+)
+
+// The areas and their levels (task 219's decided table): each level carries the scopes below it.
+// What pairing never grants - *, auth:admin, radio:keys, power, backup - is in no level.
+var levels = map[string]map[string]auth.Scopes{
+	"devices": {
+		"read":       {auth.ScopeRPCRead},
+		"operate":    {auth.ScopeRPCRead, auth.ScopeRPCOperate},
+		"configure":  {auth.ScopeRPCRead, auth.ScopeRPCOperate, auth.ScopeRPCConfigure},
+		"administer": {auth.ScopeRPCRead, auth.ScopeRPCOperate, auth.ScopeRPCConfigure, auth.ScopeRPCAdmin},
+	},
+	"names": {
+		"read":      {auth.ScopeMetaRead},
+		"configure": {auth.ScopeMetaRead, auth.ScopeMetaWrite},
+	},
+	"system": {
+		"read":      {auth.ScopeSystemRead, auth.ScopeLogsRead},
+		"configure": {auth.ScopeSystemRead, auth.ScopeLogsRead, auth.ScopeSystemWrite},
+	},
+}
+
+// Areas lists the areas in the card's order.
+var Areas = []string{"devices", "names", "system"}
+
+// ScopesFor maps an access request to scopes; an unknown area or level is ErrInvalid.
+func ScopesFor(access map[string]string) (auth.Scopes, error) {
+	var out auth.Scopes
+	for area, level := range access {
+		if level == "" || level == "none" {
+			continue
+		}
+		lv, ok := levels[area]
+		if !ok {
+			return nil, fmt.Errorf("%w: unknown area %q (devices, names, system)", ErrInvalid, area)
+		}
+		s, ok := lv[level]
+		if !ok {
+			var names []string
+			for n := range lv {
+				names = append(names, n)
+			}
+			sort.Strings(names)
+			return nil, fmt.Errorf("%w: %s has no level %q (%s)", ErrInvalid, area, level, strings.Join(names, ", "))
+		}
+		out = append(out, s...)
+	}
+	out = out.Normalize()
+	if len(out) == 0 {
+		return nil, fmt.Errorf("%w: ask for access to at least one area", ErrInvalid)
+	}
+	return out, nil
+}
+
+// Code is the six digits both sides compute.
+func Code(nonce, clientNonce, fingerprint []byte) string {
+	h := sha256.New()
+	h.Write(nonce)
+	h.Write(clientNonce)
+	h.Write(fingerprint)
+	sum := h.Sum(nil)
+	return fmt.Sprintf("%06d", binary.BigEndian.Uint32(sum[:4])%1_000_000)
+}
+
+// Ask is a program's request.
+type Ask struct {
+	App        string            `json:"app"`
+	AppVersion string            `json:"app_version"`
+	Instance   string            `json:"instance"`
+	Name       string            `json:"name"`
+	Access     map[string]string `json:"access"`
+	Purpose    map[string]string `json:"purpose"`
+	// Commit is hex SHA-256 of the program's client_nonce
+	Commit string `json:"commit"`
+}
+
+// Answer is the 202 to a request.
+type Answer struct {
+	ID        string `json:"id"`
+	Poll      string `json:"poll"`
+	Nonce     string `json:"nonce"`
+	ExpiresIn int    `json:"expires_in"`
+	Interval  int    `json:"interval"`
+	// Fingerprint is the certificate the system bound the code to (hex), "" over plain HTTP
+	Fingerprint string `json:"fingerprint"`
+}
+
+// Result is what a poll answers.
+type Result struct {
+	State  string            `json:"state"`
+	Token  string            `json:"token,omitempty"`
+	Name   string            `json:"name,omitempty"`
+	Scopes []string          `json:"scopes,omitempty"`
+	Access map[string]string `json:"access,omitempty"`
+}
+
+// View is one request as the card shows it: never the poll secret.
+type View struct {
+	ID          string            `json:"id"`
+	App         string            `json:"app"`
+	AppVersion  string            `json:"app_version,omitempty"`
+	Instance    string            `json:"instance,omitempty"`
+	Name        string            `json:"name"`
+	Address     string            `json:"address"`
+	Access      map[string]string `json:"access"`
+	Purpose     map[string]string `json:"purpose,omitempty"`
+	Scopes      []string          `json:"scopes"`
+	Code        string            `json:"code"`
+	Fingerprint string            `json:"fingerprint,omitempty"` // colon-separated, for the card's certificate line
+	Created     time.Time         `json:"created"`
+	Expires     time.Time         `json:"expires"`
+	// LookAlike: another pending request under the same program and instance, or from the same
+	// address - "compare the code carefully"
+	LookAlike bool `json:"look_alike,omitempty"`
+}
+
+type request struct {
+	id          string
+	pollHash    [32]byte
+	nonce       []byte
+	commit      []byte
+	clientNonce []byte
+	fp          []byte
+	ask         Ask
+	scopes      auth.Scopes
+	address     string
+	created     time.Time
+	expires     time.Time
+	state       string
+	result      Result
+	lastPoll    time.Time
+	changed     chan struct{} // closed and replaced on every change
+}
+
+// Minter makes the token of an approved request (the auth store).
+type Minter interface {
+	CreatePairedToken(base string, scopes auth.Scopes, client auth.TokenClient) (name, secret string, err error)
+}
+
+// Manager keeps the pending requests.
+type Manager struct {
+	Minter Minter
+	// Enabled is the switch (occulited.json auth.pairing; on unless switched off)
+	Enabled func() bool
+	// Local says whether an address is on the local networks
+	Local func(addr string) bool
+	Log   *slog.Logger
+	Now   func() time.Time
+	// OnChange is told after every change of the pending list (the card's stream)
+	OnChange func()
+
+	mu       sync.Mutex
+	reqs     map[string]*request
+	mutes    map[string]time.Time
+	perHour  map[string][]time.Time
+	watchers map[chan struct{}]struct{}
+}
+
+func (m *Manager) now() time.Time {
+	if m.Now != nil {
+		return m.Now()
+	}
+	return time.Now()
+}
+
+func (m *Manager) log() *slog.Logger {
+	if m.Log != nil {
+		return m.Log
+	}
+	return slog.Default()
+}
+
+var (
+	appRe  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,47}$`)
+	hex64  = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	textRe = regexp.MustCompile(`^[^\x00-\x1f\x7f]*$`)
+)
+
+func randHex(n int) (string, []byte, error) {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		return "", nil, err
+	}
+	return hex.EncodeToString(b), b, nil
+}
+
+// expireLocked drops what has run out; true when the pending list changed.
+func (m *Manager) expireLocked(now time.Time) bool {
+	changed := false
+	for id, r := range m.reqs {
+		if r.state == StatePending && !now.Before(r.expires) {
+			r.state = StateExpired
+			m.log().Info("pairing: a request expired", "app", r.ask.App, "instance", r.ask.Instance, "address", r.address)
+			m.signalLocked(r)
+			changed = true
+		}
+		// a finished request stays a minute for the program's last poll
+		if r.state != StatePending && now.Sub(r.expires) > time.Minute {
+			delete(m.reqs, id)
+		}
+	}
+	for k, until := range m.mutes {
+		if !now.Before(until) {
+			delete(m.mutes, k)
+		}
+	}
+	return changed
+}
+
+func (m *Manager) signalLocked(r *request) {
+	close(r.changed)
+	r.changed = make(chan struct{})
+}
+
+func (m *Manager) changedList() {
+	m.mu.Lock()
+	for w := range m.watchers {
+		select {
+		case w <- struct{}{}:
+		default:
+		}
+	}
+	m.mu.Unlock()
+	if m.OnChange != nil {
+		m.OnChange()
+	}
+}
+
+// Watch is the card's stream: a channel told of every change, and its end.
+func (m *Manager) Watch() (<-chan struct{}, func()) {
+	ch := make(chan struct{}, 1)
+	m.mu.Lock()
+	if m.watchers == nil {
+		m.watchers = map[chan struct{}]struct{}{}
+	}
+	m.watchers[ch] = struct{}{}
+	m.mu.Unlock()
+	return ch, func() {
+		m.mu.Lock()
+		delete(m.watchers, ch)
+		m.mu.Unlock()
+	}
+}
+
+func clip(s string, n int) string {
+	s = strings.TrimSpace(s)
+	if len(s) > n {
+		s = s[:n]
+	}
+	return s
+}
+
+// Request takes a program's request from addr; fingerprint is the certificate the system served
+// on this connection (nil over plain HTTP).
+func (m *Manager) Request(a Ask, addr string, fingerprint []byte) (Answer, error) {
+	if m.Enabled != nil && !m.Enabled() {
+		return Answer{}, ErrOff
+	}
+	if m.Local != nil && !m.Local(addr) {
+		m.log().Warn("pairing: a request from outside the local networks refused", "address", addr, "app", a.App)
+		return Answer{}, ErrNotLocal
+	}
+	a.App, a.Instance, a.AppVersion, a.Name = clip(a.App, 48), clip(a.Instance, 64), clip(a.AppVersion, 32), clip(a.Name, 80)
+	if !appRe.MatchString(a.App) {
+		return Answer{}, fmt.Errorf("%w: app is a short id (letters, digits, . _ -)", ErrInvalid)
+	}
+	for _, s := range []string{a.Instance, a.AppVersion, a.Name} {
+		if !textRe.MatchString(s) {
+			return Answer{}, fmt.Errorf("%w: no control characters", ErrInvalid)
+		}
+	}
+	if !hex64.MatchString(strings.ToLower(a.Commit)) {
+		return Answer{}, fmt.Errorf("%w: commit is the hex SHA-256 of the program's client_nonce", ErrInvalid)
+	}
+	scopes, err := ScopesFor(a.Access)
+	if err != nil {
+		return Answer{}, err
+	}
+	purpose := map[string]string{}
+	for area, p := range a.Purpose {
+		if _, ok := levels[area]; !ok {
+			continue
+		}
+		if p = clip(p, maxPurposeLn); p != "" && textRe.MatchString(p) {
+			purpose[area] = p
+		}
+	}
+	a.Purpose = purpose
+	if a.Name == "" {
+		a.Name = a.App
+		if a.Instance != "" {
+			a.Name += " on " + a.Instance
+		}
+	}
+	now := m.now()
+	m.mu.Lock()
+	if m.reqs == nil {
+		m.reqs, m.mutes, m.perHour = map[string]*request{}, map[string]time.Time{}, map[string][]time.Time{}
+	}
+	listChanged := m.expireLocked(now)
+	key := addr + "|" + a.App
+	if until, ok := m.mutes[key]; ok && now.Before(until) {
+		m.mu.Unlock()
+		return Answer{}, ErrMuted
+	}
+	var recent []time.Time
+	for _, t := range m.perHour[addr] {
+		if now.Sub(t) < time.Hour {
+			recent = append(recent, t)
+		}
+	}
+	m.perHour[addr] = recent
+	pending := 0
+	for _, r := range m.reqs {
+		if r.state != StatePending {
+			continue
+		}
+		pending++
+		if r.address == addr && r.ask.App == a.App {
+			m.mu.Unlock()
+			return Answer{}, fmt.Errorf("%w: one request per program and address at a time", ErrLimit)
+		}
+	}
+	if pending >= MaxPending {
+		m.mu.Unlock()
+		return Answer{}, fmt.Errorf("%w: %d are waiting", ErrLimit, MaxPending)
+	}
+	if len(recent) >= PerHour {
+		m.mu.Unlock()
+		return Answer{}, fmt.Errorf("%w: %d an hour from one address", ErrLimit, PerHour)
+	}
+	id, _, err := randHex(8)
+	if err != nil {
+		m.mu.Unlock()
+		return Answer{}, err
+	}
+	poll, _, err := randHex(24)
+	if err != nil {
+		m.mu.Unlock()
+		return Answer{}, err
+	}
+	nonceHex, nonce, err := randHex(16)
+	if err != nil {
+		m.mu.Unlock()
+		return Answer{}, err
+	}
+	commit, _ := hex.DecodeString(strings.ToLower(a.Commit))
+	r := &request{id: id, pollHash: sha256.Sum256([]byte(poll)), nonce: nonce, commit: commit, fp: fingerprint, ask: a, scopes: scopes,
+		address: addr, created: now, expires: now.Add(Lifetime), state: StatePending, changed: make(chan struct{})}
+	m.reqs[id] = r
+	m.perHour[addr] = append(recent, now)
+	m.mu.Unlock()
+	m.log().Info("pairing: a program asks for access", "app", a.App, "version", a.AppVersion, "instance", a.Instance, "address", addr, "access", a.Access, "scopes", scopes.Strings())
+	if listChanged {
+		m.changedList()
+	}
+	return Answer{ID: id, Poll: poll, Nonce: nonceHex, ExpiresIn: int(Lifetime / time.Second), Interval: int(Interval / time.Second), Fingerprint: hex.EncodeToString(fingerprint)}, nil
+}
+
+func (m *Manager) find(id, poll string) (*request, error) {
+	r := m.reqs[id]
+	if r == nil {
+		return nil, ErrUnknown
+	}
+	h := sha256.Sum256([]byte(poll))
+	if subtle.ConstantTimeCompare(h[:], r.pollHash[:]) != 1 {
+		return nil, ErrPoll
+	}
+	return r, nil
+}
+
+// Poll is the program's wait: it reveals client_nonce (hex) with its first poll; wait > 0 holds
+// the answer until the state changes or wait passes. The approved answer carries the token once:
+// the request is gone after it.
+func (m *Manager) Poll(ctx context.Context, id, poll, clientNonce string, wait time.Duration) (Result, error) {
+	now := m.now()
+	m.mu.Lock()
+	listChanged := m.expireLocked(now)
+	r, err := m.find(id, poll)
+	if err != nil {
+		m.mu.Unlock()
+		return Result{}, err
+	}
+	revealed := false
+	if clientNonce != "" && r.clientNonce == nil {
+		cn, err := hex.DecodeString(strings.ToLower(clientNonce))
+		sum := sha256.Sum256(cn)
+		if err != nil || len(cn) < 16 || subtle.ConstantTimeCompare(sum[:], r.commit) != 1 {
+			m.mu.Unlock()
+			return Result{}, fmt.Errorf("%w: client_nonce does not match the commitment", ErrInvalid)
+		}
+		r.clientNonce = cn
+		revealed = true
+	}
+	if wait <= 0 && !revealed && r.state == StatePending && !r.lastPoll.IsZero() && now.Sub(r.lastPoll) < Interval-200*time.Millisecond {
+		m.mu.Unlock()
+		return Result{}, ErrSlowDown
+	}
+	r.lastPoll = now
+	if wait > MaxWait {
+		wait = MaxWait
+	}
+	ch := r.changed
+	state := r.state
+	m.mu.Unlock()
+	if revealed || listChanged {
+		m.changedList()
+	}
+	if state == StatePending && wait > 0 {
+		t := time.NewTimer(wait)
+		select {
+		case <-ch:
+		case <-t.C:
+		case <-ctx.Done():
+		}
+		t.Stop()
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.expireLocked(m.now())
+	if r.state == StatePending {
+		return Result{State: StatePending}, nil
+	}
+	res := r.result
+	res.State = r.state
+	delete(m.reqs, id) // the answer once: a second poll is ErrUnknown
+	return res, nil
+}
+
+// Withdraw is the program giving up.
+func (m *Manager) Withdraw(id, poll string) error {
+	m.mu.Lock()
+	r, err := m.find(id, poll)
+	if err == nil {
+		delete(m.reqs, id)
+		m.signalLocked(r)
+	}
+	m.mu.Unlock()
+	if err == nil {
+		m.log().Info("pairing: a program withdrew its request", "app", r.ask.App, "address", r.address)
+		m.changedList()
+	}
+	return err
+}
+
+// fingerprintText is the card's colon-separated certificate fingerprint.
+func fingerprintText(fp []byte) string {
+	if len(fp) == 0 {
+		return ""
+	}
+	parts := make([]string, len(fp))
+	for i, b := range fp {
+		parts[i] = fmt.Sprintf("%02X", b)
+	}
+	return strings.Join(parts, ":")
+}
+
+// Pending is the card's list: the requests whose program revealed its half, oldest first.
+func (m *Manager) Pending() []View {
+	m.mu.Lock()
+	changed := m.expireLocked(m.now())
+	out := []View{}
+	for _, r := range m.reqs {
+		if r.state != StatePending || r.clientNonce == nil {
+			continue
+		}
+		out = append(out, View{ID: r.id, App: r.ask.App, AppVersion: r.ask.AppVersion, Instance: r.ask.Instance, Name: r.ask.Name, Address: r.address,
+			Access: r.ask.Access, Purpose: r.ask.Purpose, Scopes: r.scopes.Strings(), Code: Code(r.nonce, r.clientNonce, r.fp),
+			Fingerprint: fingerprintText(r.fp), Created: r.created, Expires: r.expires})
+	}
+	m.mu.Unlock()
+	if changed {
+		m.changedList()
+	}
+	for i := range out {
+		for j := range out {
+			if i != j && (out[i].Address == out[j].Address || out[i].App == out[j].App && out[i].Instance == out[j].Instance) {
+				out[i].LookAlike = true
+			}
+		}
+	}
+	sort.Slice(out, func(a, b int) bool { return out[a].Created.Before(out[b].Created) })
+	return out
+}
+
+// slug makes a token name from the program and its instance: lower case, [a-z0-9.-_], 2-28
+// characters (room for "-NN").
+func slug(app, instance string) string {
+	s := strings.ToLower(app)
+	if instance != "" {
+		s += "-" + strings.ToLower(instance)
+	}
+	var b strings.Builder
+	for _, c := range s {
+		switch {
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '_', c == '-':
+			b.WriteRune(c)
+		default:
+			b.WriteRune('-')
+		}
+	}
+	out := strings.Trim(b.String(), "-_.")
+	for strings.Contains(out, "--") {
+		out = strings.ReplaceAll(out, "--", "-")
+	}
+	if len(out) > 28 {
+		out = strings.TrimRight(out[:28], "-_.")
+	}
+	if len(out) < 2 {
+		out = "client"
+	}
+	return out
+}
+
+// Approve mints the token for a request whose code the administrator compared; a code that is
+// not the request's rejects it.
+func (m *Manager) Approve(id, code, by string) (auth.TokenClient, string, error) {
+	m.mu.Lock()
+	m.expireLocked(m.now())
+	r := m.reqs[id]
+	if r == nil || r.state != StatePending {
+		m.mu.Unlock()
+		return auth.TokenClient{}, "", ErrUnknown
+	}
+	if r.clientNonce == nil {
+		m.mu.Unlock()
+		return auth.TokenClient{}, "", ErrNotReady
+	}
+	if want := Code(r.nonce, r.clientNonce, r.fp); subtle.ConstantTimeCompare([]byte(want), []byte(strings.TrimSpace(code))) != 1 {
+		r.state = StateRejected
+		m.mutes[r.address+"|"+r.ask.App] = m.now().Add(MuteFor)
+		m.signalLocked(r)
+		m.mu.Unlock()
+		m.log().Warn("pairing: a wrong code - the request is rejected", "app", r.ask.App, "address", r.address, "by", by)
+		m.changedList()
+		return auth.TokenClient{}, "", ErrWrongCode
+	}
+	now := m.now()
+	client := auth.TokenClient{App: r.ask.App, AppVersion: r.ask.AppVersion, Instance: r.ask.Instance, Label: r.ask.Name, PairedAt: now, PairedBy: by,
+		Address: r.address, Fingerprint: hex.EncodeToString(r.fp), Access: r.ask.Access}
+	ask, scopes, address := r.ask, r.scopes, r.address
+	m.mu.Unlock()
+	name, secret, err := m.Minter.CreatePairedToken(slug(ask.App, ask.Instance), scopes, client)
+	if err != nil {
+		return auth.TokenClient{}, "", err
+	}
+	m.mu.Lock()
+	if r2 := m.reqs[id]; r2 == r && r.state == StatePending {
+		r.state = StateApproved
+		r.result = Result{Token: secret, Name: name, Scopes: scopes.Strings(), Access: ask.Access}
+		m.signalLocked(r)
+	}
+	m.mu.Unlock()
+	m.log().Info("pairing: approved - a token minted", "app", ask.App, "instance", ask.Instance, "address", address, "token", name, "scopes", scopes.Strings(), "by", by)
+	m.changedList()
+	return client, name, nil
+}
+
+// Reject turns a request down and mutes its address and program for MuteFor.
+func (m *Manager) Reject(id, by string) error {
+	m.mu.Lock()
+	r := m.reqs[id]
+	if r == nil || r.state != StatePending {
+		m.mu.Unlock()
+		return ErrUnknown
+	}
+	r.state = StateRejected
+	m.mutes[r.address+"|"+r.ask.App] = m.now().Add(MuteFor)
+	m.signalLocked(r)
+	m.mu.Unlock()
+	m.log().Info("pairing: rejected", "app", r.ask.App, "instance", r.ask.Instance, "address", r.address, "by", by)
+	m.changedList()
+	return nil
+}

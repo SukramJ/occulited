@@ -1,0 +1,284 @@
+package radio
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+)
+
+// systemctlCalls are the stop and start calls a hotplug made, in order.
+func systemctlCalls(rec *recorder) []string {
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	var out []string
+	for _, c := range rec.calls {
+		if strings.HasPrefix(c, "systemctl stop") || strings.HasPrefix(c, "systemctl start") {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func resetCalls(rec *recorder) {
+	rec.mu.Lock()
+	rec.calls = nil
+	rec.mu.Unlock()
+}
+
+func plug(t *testing.T, root, name, typ string) {
+	t.Helper()
+	_ = os.MkdirAll(filepath.Join(root, "sys/class/raw-uart", name), 0o755)
+	_ = os.WriteFile(filepath.Join(root, "sys/class/raw-uart", name, "device_type"), []byte(typ+"\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(root, "sys/class/raw-uart", name, "reset_radio_module"), nil, 0o644)
+	_ = os.WriteFile(filepath.Join(root, "dev", name), nil, 0o644)
+}
+
+func unplug(root, name string) {
+	_ = os.RemoveAll(filepath.Join(root, "sys/class/raw-uart", name))
+	_ = os.Remove(filepath.Join(root, "dev", name))
+}
+
+func TestHotplugTKStickPulledAndBack(t *testing.T) {
+	fakeUsers(t)
+	root, rec := boxRoot(t, map[string]string{"raw-uart1": "eQ-3 HmIP-RFUSB-TK@usb-1"})
+	rec.probe.answers = map[string]string{"raw-uart1": "HMIP-RFUSB-TK 0001TK0001 3014F711A0000000001TK0001 0x000000 0x7F7A51 2.8.6"}
+	d := Detector{Root: root, Run: rec.run, Sleep: func(time.Duration) {}}
+	logf := func(string, ...any) {}
+	ctx := context.Background()
+	if _, err := Run(ctx, root, d, logf); err != nil {
+		t.Fatal(err)
+	}
+	// nothing changed: nothing restarted, the stick not probed again (a daemon holds it)
+	resetCalls(rec)
+	rep, err := Hotplug(ctx, root, d, 0, logf)
+	if err != nil || rep.Changed || len(systemctlCalls(rec)) != 0 || rec.probe.seen["raw-uart1"] != 1 {
+		t.Fatalf("unchanged: %+v %v %v probes %d", rep, err, systemctlCalls(rec), rec.probe.seen["raw-uart1"])
+	}
+	// pulled: hmipserver alone restarts, on its VirtualDevices half
+	unplug(root, "raw-uart1")
+	rep, err = Hotplug(ctx, root, d, 0, logf)
+	if err != nil || !rep.Changed || !reflect.DeepEqual(rep.Restarted, []string{"hmipserver"}) {
+		t.Fatalf("pulled: %+v %v", rep, err)
+	}
+	if got := systemctlCalls(rec); !reflect.DeepEqual(got, []string{"systemctl stop -- hmipserver.service", "systemctl start -- hmipserver.service"}) {
+		t.Fatalf("units: %v", got)
+	}
+	env := readFile(filepath.Join(root, "run/occulite/radio/hmipserver.env"))
+	if !strings.Contains(env, "HMIP_CLASS=de.eq3.ccu.server.HMServer") {
+		t.Fatalf("hmipserver without the stick:\n%s", env)
+	}
+	// back: probed once more (a new node), hmipserver restarts on it
+	resetCalls(rec)
+	plug(t, root, "raw-uart1", "eQ-3 HmIP-RFUSB-TK@usb-1")
+	rep, err = Hotplug(ctx, root, d, 0, logf)
+	if err != nil || !reflect.DeepEqual(rep.Restarted, []string{"hmipserver"}) || rec.probe.seen["raw-uart1"] != 2 {
+		t.Fatalf("back: %+v %v probes %d", rep, err, rec.probe.seen["raw-uart1"])
+	}
+	if env = readFile(filepath.Join(root, "run/occulite/radio/hmipserver.env")); !strings.Contains(env, "HMIP_DEVNODE=/dev/raw-uart1") {
+		t.Fatalf("hmipserver on the stick again:\n%s", env)
+	}
+}
+
+func TestHotplugSecondStickAndAdapter(t *testing.T) {
+	fakeUsers(t)
+	root, rec := boxRoot(t, map[string]string{"raw-uart": "GPIO@3f201000.serial"})
+	d := Detector{Root: root, Run: rec.run, Sleep: func(time.Duration) {}}
+	var lines []string
+	logf := func(f string, a ...any) { lines = append(lines, f) }
+	ctx := context.Background()
+	if _, err := Run(ctx, root, d, logf); err != nil {
+		t.Fatal(err)
+	}
+	// a second stick nothing uses (auto keeps both stacks on the RPI-RF-MOD): the results change,
+	// no daemon restarts, and the page offers the stick
+	resetCalls(rec)
+	rec.probe.answers["raw-uart1"] = "HMIP-RFUSB 1709ADFA5B 3014F711A000041709ADFA5B 0x000000 0x7F7A50 4.4.18"
+	plug(t, root, "raw-uart1", "eQ-3 HmIP-RFUSB@usb-1")
+	rep, err := Hotplug(ctx, root, d, 0, logf)
+	if err != nil || !rep.Changed || len(rep.Restarted) != 0 || len(systemctlCalls(rec)) != 0 {
+		t.Fatalf("second stick: %+v %v %v", rep, err, systemctlCalls(rec))
+	}
+	var det Detection
+	if err := readJSONFile(filepath.Join(root, "run/occulite/radio/modules.json"), &det); err != nil || len(det.Modules) != 2 || rec.probe.seen["raw-uart"] != 1 {
+		t.Fatalf("modules.json: %+v %v probes of the held module %d", det.Modules, err, rec.probe.seen["raw-uart"])
+	}
+	// an HM-CFG-USB-2 takes BidCos-RF (auto): multimacd goes, rfd moves to it, hmipserver opens the
+	// module directly - all three restart
+	usb := filepath.Join(root, "sys/bus/usb/devices/1-1.4")
+	_ = os.MkdirAll(usb, 0o755)
+	_ = os.WriteFile(filepath.Join(usb, "idVendor"), []byte("1b1f\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(usb, "idProduct"), []byte("c00f\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(usb, "serial"), []byte("KEQ0123456\n"), 0o644)
+	rep, err = Hotplug(ctx, root, d, 0, logf)
+	if err != nil || !reflect.DeepEqual(rep.Restarted, []string{"multimacd", "rfd", "hmipserver"}) {
+		t.Fatalf("adapter: %+v %v", rep, err)
+	}
+	want := []string{"systemctl stop -- hmipserver.service", "systemctl stop -- rfd.service", "systemctl stop -- multimacd.service", "systemctl start -- multimacd.service", "systemctl start -- rfd.service", "systemctl start -- hmipserver.service"}
+	if got := systemctlCalls(rec); !reflect.DeepEqual(got, want) {
+		t.Fatalf("units: %v", got)
+	}
+	if exists(filepath.Join(root, "run/occulite/radio/multimacd.enabled")) || !strings.Contains(readFile(filepath.Join(root, "etc/config/rfd.conf")), "Type = USB Interface") {
+		t.Fatal("multimacd still enabled, or rfd.conf without the adapter")
+	}
+}
+
+func TestAffected(t *testing.T) {
+	dual := MakePlan(inputs(rpiRFMod("/dev/raw-uart")))
+	direct := func() Plan {
+		in := inputs(rpiRFMod("/dev/raw-uart"))
+		in.RFDConf, in.RFDConfExists = SetBidCosChoice(rfdTemplate, BidCosNone), true
+		return MakePlan(in)
+	}()
+	if got := Affected(dual, dual); len(got) != 0 {
+		t.Fatalf("same plan: %v", got)
+	}
+	if got := Affected(dual, direct); !reflect.DeepEqual(got, []string{"multimacd", "rfd", "hmipserver"}) {
+		t.Fatalf("dual to direct: %v", got)
+	}
+	if !SameModules([]Module{rpiRFMod("/dev/raw-uart"), rfusb("/dev/raw-uart1")}, []Module{rfusb("/dev/raw-uart1"), rpiRFMod("/dev/raw-uart")}) {
+		t.Fatal("the order does not matter")
+	}
+}
+
+func TestHotplugStandsAsideDuringAFlash(t *testing.T) {
+	fakeUsers(t)
+	root, rec := boxRoot(t, map[string]string{"raw-uart1": "eQ-3 HmIP-RFUSB-TK@usb-1"})
+	rec.probe.answers = map[string]string{"raw-uart1": "HMIP-RFUSB-TK 0001TK0001 3014F711A0000000001TK0001 0x000000 0x7F7A51 2.8.6"}
+	d := Detector{Root: root, Run: rec.run, Sleep: func(time.Duration) {}}
+	logf := func(string, ...any) {}
+	if _, err := Run(context.Background(), root, d, logf); err != nil {
+		t.Fatal(err)
+	}
+	busy := filepath.Join(root, BusyFiles[0])
+	_ = os.MkdirAll(filepath.Dir(busy), 0o755)
+	_ = os.WriteFile(busy, []byte("{}"), 0o600)
+	resetCalls(rec)
+	unplug(root, "raw-uart1")
+	if rep, err := Hotplug(context.Background(), root, d, 0, logf); err != nil || rep.Changed || len(systemctlCalls(rec)) != 0 {
+		t.Fatalf("during a flash: %+v %v %v", rep, err, systemctlCalls(rec))
+	}
+}
+
+// a stick pulled while multimacd held its node: the node stays with connection_state 0 and counts
+// as gone - .170's HB-RF-USB with the PCB swapped for a TK, where the rescan kept the PCB
+func TestHotplugHeldNodeOfAPulledStick(t *testing.T) {
+	fakeUsers(t)
+	root, rec := boxRoot(t, map[string]string{"raw-uart1": "HB-RF-USB@usb-0000:01:00.0-1.3"})
+	rec.probe.answers = map[string]string{
+		"raw-uart1": "HM-MOD-RPI-PCB MEQ0835626 3014F711A061A7D3C996282A 0x3D1BAE 0x1EE437 2.8.6",
+		"raw-uart2": "HMIP-RFUSB-TK 1D899272DB 3014F5AC9400041D899272DB 0x000000 0x7F7A51 4.2.14",
+	}
+	d := Detector{Root: root, Run: rec.run, Sleep: func(time.Duration) {}}
+	logf := func(string, ...any) {}
+	ctx := context.Background()
+	if _, err := Run(ctx, root, d, logf); err != nil {
+		t.Fatal(err)
+	}
+	resetCalls(rec)
+	_ = os.WriteFile(filepath.Join(root, "sys/class/raw-uart/raw-uart1/connection_state"), []byte("0\n"), 0o644)
+	plug(t, root, "raw-uart2", "eQ-3 HmIP-RFUSB@usb-0000:01:00.0-1.3")
+	rep, err := Hotplug(ctx, root, d, 0, logf)
+	if err != nil || !reflect.DeepEqual(rep.Restarted, []string{"multimacd", "rfd", "hmipserver"}) {
+		t.Fatalf("%+v %v", rep, err)
+	}
+	env := readFile(filepath.Join(root, "run/occulite/radio/hmipserver.env"))
+	if !strings.Contains(env, "HMIP_DEVNODE=/dev/raw-uart2") || exists(filepath.Join(root, "run/occulite/radio/multimacd.enabled")) {
+		t.Fatalf("hmipserver on the TK directly, no multimacd:\n%s", env)
+	}
+}
+
+// D-102: hmipserver's ready step fails at once on a known fatal line in its own output and leaves
+// the marker that keeps the unit from restarting; the next run clears it
+func TestReadyHmIPServerFailsFastOnAKnownError(t *testing.T) {
+	fakeUsers(t)
+	root, rec := boxRoot(t, map[string]string{"raw-uart": "GPIO@3f201000.serial"})
+	d := Detector{Root: root, Run: rec.run, Sleep: func(time.Duration) {}}
+	logf := func(string, ...any) {}
+	if _, err := Run(context.Background(), root, d, logf); err != nil {
+		t.Fatal(err)
+	}
+	rec.answers["journalctl"] = "Init Hardware Info\nde.eq3.cbcs.server.local.base.internal.HMIPTRXInitialResponseListener [vert.x-eventloop-thread-0] Adapter exchange was rejected by key server.\n"
+	err := Ready(context.Background(), d, "hmipserver", 4242, logf)
+	if err == nil || !strings.Contains(err.Error(), "adapter-exchange-rejected") {
+		t.Fatalf("ready: %v", err)
+	}
+	if !rec.called("journalctl _PID=4242") {
+		t.Fatalf("the main process's output was not read: %v", rec.calls)
+	}
+	f := ReadHmIPFatal(root)
+	if f == nil || f.Code != "adapter-exchange-rejected" || f.Adapter != "3014F711A0001F58A9A728D4" || !strings.Contains(f.Line, "rejected by key server") || f.Cause != CauseRefused {
+		t.Fatalf("marker: %+v", f)
+	}
+	// the next run of the stack clears it
+	rec.answers["systemctl"] = "inactive\ninactive\ninactive\ninactive\ninactive\n"
+	if _, err := Run(context.Background(), root, d, logf); err != nil {
+		t.Fatal(err)
+	}
+	if ReadHmIPFatal(root) != nil {
+		t.Fatal("the marker survived a new run")
+	}
+	if code, _, _ := hmipFatal("Init Hardware Info\nstarted\n"); code != "" {
+		t.Fatalf("a normal start is fatal: %s", code)
+	}
+}
+
+// B-218: after a power cycle of the board the kernel's reconnect never took it back (the lab,
+// 14:43-14:56); the watch's hotplug connects it afresh and restarts the daemons on it, whose module
+// was reset under them. The same loss without the watch's note (a udev hotplug) is the kernel's.
+func TestHotplugBoardPowerCycle(t *testing.T) {
+	fakeUsers(t)
+	root, rec := boxRoot(t, map[string]string{"raw-uart1": "HB-RF-ETH@192.0.2.10"})
+	rec.probe.answers = map[string]string{"raw-uart1": "HM-MOD-RPI-PCB MEQ0835626 3014F711A061A7D3C996282A 0x3D1BAE 0xB4C139 2.8.6"}
+	for p, c := range map[string]string{
+		"etc/config/hb_rf_eth":                          "192.0.2.10\n",
+		"sys/module/hb_rf_eth/parameters/connect":       "",
+		"sys/module/hb_rf_eth/parameters/autoreconnect": "1\n",
+		"sys/class/hb-rf-eth/hb-rf-eth/connect":         "",
+		HBRFETHConnectedFile[1:]:                        "1\n",
+		"usr/local/etc/occulite/.keep":                  "",
+	} {
+		_ = os.MkdirAll(filepath.Join(root, filepath.Dir(p)), 0o755)
+		_ = os.WriteFile(filepath.Join(root, p), []byte(c), 0o644)
+	}
+	d := Detector{Root: root, Run: rec.run, Sleep: func(time.Duration) {}}
+	logf := func(string, ...any) {}
+	ctx := context.Background()
+	if _, err := Run(ctx, root, d, logf); err != nil {
+		t.Fatal(err)
+	}
+	p, err := LoadPlan(root)
+	if _, _, daemons := p.OnHBRFETH(); err != nil || len(daemons) == 0 {
+		t.Fatalf("no daemons on the board in the plan: %v %+v", err, p)
+	}
+	_, _, want := p.OnHBRFETH()
+	// the board is off: the kernel reconnects, the node is held with connection_state 0
+	_ = os.WriteFile(filepath.Join(root, HBRFETHConnectedFile), []byte("0\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(root, "sys/class/raw-uart/raw-uart1/connection_state"), []byte("0\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(root, "sys/class/hb-rf-eth/hb-rf-eth/connect"), nil, 0o644)
+	resetCalls(rec)
+	rep, err := Hotplug(ctx, root, d, 0, logf)
+	if err != nil || len(rep.Restarted) != 0 {
+		t.Fatalf("a udev hotplug during the kernel's reconnect: %+v %v", rep, err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(root, "sys/class/hb-rf-eth/hb-rf-eth/connect")); len(b) != 0 {
+		t.Fatalf("the address was written: %q", b)
+	}
+	// the kernel did not get it back: the watch's note, a fresh connect, the daemons restarted
+	_ = os.WriteFile(filepath.Join(root, HBRFETHReconnectFile), []byte("192.0.2.10\n"), 0o644)
+	resetCalls(rec)
+	rep, err = Hotplug(ctx, root, d, 0, logf)
+	if err != nil || !reflect.DeepEqual(rep.Restarted, want) {
+		t.Fatalf("after the power cycle: %+v %v, want %v", rep, err, want)
+	}
+	if b, _ := os.ReadFile(filepath.Join(root, "sys/class/hb-rf-eth/hb-rf-eth/connect")); string(b) != "192.0.2.10" {
+		t.Fatalf("not connected afresh: %q", b)
+	}
+	calls := strings.Join(systemctlCalls(rec), ";")
+	if !strings.HasPrefix(calls, "systemctl stop -- "+want[len(want)-1]+".service") || !strings.HasSuffix(calls, "systemctl start -- "+want[len(want)-1]+".service") {
+		t.Errorf("order: %s", calls)
+	}
+}
