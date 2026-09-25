@@ -1,0 +1,22 @@
+{
+  "format": 1,
+  "id": "ccu-jack",
+  "name": "CCU-Jack",
+  "description": {
+    "de": "REST (VEAP) und MQTT für das System, mit TLS und Zugriffsrechten. Noch nicht auf openccu-lite ausprobiert: Namen, Räume und Gewerke liest CCU-Jack aus der ReGa; ohne sie liefert er Werte, aber keine Namen, bis er die openccu-lite-Metadaten kennt.",
+    "en": "REST (VEAP) and MQTT for the system, with TLS and access control. Not yet tried on openccu-lite: CCU-Jack reads names, rooms and functions from the ReGa; without it it serves values but no names until it knows the openccu-lite metadata."
+  },
+  "homepage": "https://github.com/mdzio/ccu-jack",
+  "licence": "GPL-3.0",
+  "release": {
+    "github": "mdzio/ccu-jack",
+    "assets": {
+      "armv7l": "ccu-jack-ccu3-rm-rp2+3-{version}.tar.gz",
+      "aarch64": "ccu-jack-rm-rp4-{version}.tar.gz",
+      "x86_64": "ccu-jack-vccu-x86_64-{version}.tar.gz"
+    }
+  },
+  "requires": {
+    "architectures": ["armv7l", "aarch64", "x86_64"]
+  }
+}

@@ -1,0 +1,1127 @@
+// Package catalog is the addon catalogue (task 10, D-119): a JSON file that says where the addons'
+// manifests are - the repository, the manifest's path in it, an untested flag - and nothing else
+// (docs/catalog-format.md). Everything an addon says about itself is in its manifest
+// (docs/manifest-format.md, internal/manifest): the page shows the manifest fetched from the
+// repository at its latest release tag, the install applies the one inside the package.
+//
+// Nothing here is fetched in the background: the catalogue file, the manifests, the star counts
+// and the latest releases are loaded when the user runs a check (Refresh) and cached on disk
+// (D-90); a page load answers from the cache. The bundled copy the image carries stands in for
+// the published file, and the adapter manifests beside it are known without any fetch.
+package catalog
+
+import (
+	"bufio"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"math"
+	"math/rand/v2"
+	"net/http"
+	"net/url"
+	"os"
+	"path"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/hobbyquaker/occulited/internal/manifest"
+)
+
+// Format is the catalogue file's format this binary reads.
+const Format = 1
+
+// AdapterPrefix marks a manifest path that names an adapter manifest in the catalogue's own
+// repository (catalog/manifests/<id>.json), read beside the catalogue file rather than from the
+// addon's repository.
+const AdapterPrefix = "catalog/manifests/"
+
+// Catalog is the catalogue file.
+type Catalog struct {
+	Format int     `json:"format"`
+	Addons []Entry `json:"addons"`
+}
+
+// Entry is one addon in the catalogue file: exactly three fields (D-119, revised 2026-09-25).
+// A catalogue written before then carries `verified` instead of `untested`; the field is
+// ignored like any other unknown key.
+type Entry struct {
+	Git      string `json:"git"`                // the addon's repository, https://
+	Manifest string `json:"manifest"`           // the manifest's path in it, or an adapter under AdapterPrefix
+	Untested bool   `json:"untested,omitempty"` // not tried on openccu-lite yet; a label, grants and refuses nothing
+}
+
+// Adapter says whether the entry's manifest is an adapter in the catalogue's repository.
+func (e Entry) Adapter() bool { return strings.HasPrefix(e.Manifest, AdapterPrefix) }
+
+// Item is one addon as the page sees it: the entry, and what the cache knows of its manifest.
+type Item struct {
+	Git          string `json:"git"`
+	ManifestPath string `json:"manifest_path"`
+	Untested     bool   `json:"untested,omitempty"`
+	Adapter      bool   `json:"adapter,omitempty"`
+	// Manifest is the fetched (or bundled adapter) manifest, flattened into the item: id, name,
+	// description, homepage, release, requires, ui, runtime. Nil until the first check.
+	*manifest.Manifest
+	// Tag is the release tag the manifest was read at ("" for the default branch or an adapter),
+	// Fetched when; Error is why the last fetch failed, with the previous manifest kept.
+	Tag     string     `json:"tag,omitempty"`
+	Fetched *time.Time `json:"fetched,omitempty"`
+	Error   string     `json:"error,omitempty"`
+	// Stars is the repository's GitHub star count from the last check, 0 for unknown.
+	Stars int `json:"stars,omitempty"`
+	// Latest is the release the resolver would pick for this box, absent while unknown.
+	Latest *Latest `json:"latest,omitempty"`
+	// UpdateAvailable is set by the API when the addon is installed and Latest is newer.
+	UpdateAvailable bool `json:"update_available,omitempty"`
+}
+
+// View is what Fetch answers: the catalogue joined with the cache.
+type View struct {
+	Format int    `json:"format"`
+	Addons []Item `json:"addons"`
+	// Checked is when the user last ran a check that loaded everything; nil before the first.
+	Checked *time.Time `json:"checked,omitempty"`
+}
+
+// Latest is the newest release the resolver picked for this architecture.
+type Latest struct {
+	Version string `json:"version"`
+	Asset   string `json:"asset"`
+}
+
+// Resolved is one release asset, ready to download.
+type Resolved struct {
+	Tag     string `json:"tag"`
+	Version string `json:"version"`
+	Asset   string `json:"asset"`
+	URL     string `json:"url"`
+	Size    int64  `json:"size"`
+	SHA256  string `json:"sha256_url,omitempty"`
+	Release string `json:"release_url,omitempty"`
+}
+
+// Progress is the state of one install.
+type Progress struct {
+	AddonID  string     `json:"addon_id"`
+	Phase    string     `json:"phase"` // resolving, downloading, verifying, installing, done, failed
+	Message  string     `json:"message,omitempty"`
+	Bytes    int64      `json:"bytes,omitempty"`
+	Total    int64      `json:"total,omitempty"`
+	Started  time.Time  `json:"started"`
+	Finished *time.Time `json:"finished,omitempty"`
+	Result   any        `json:"result,omitempty"`
+	// Percent (30.2) is one bar from 0 to 100 over the whole run: the download by bytes against
+	// the content length, the install by elapsed time against a duration learned from the last
+	// install of the same addon (or estimated from the archive size), never reaching 100 before
+	// the installer has returned, never sitting still while something is happening.
+	Percent int `json:"percent"`
+}
+
+// Installer is the piece that takes the archive: system.SystemdAddons.Install. The context
+// names the addon the archive is (AddonID).
+type Installer interface {
+	Install(ctx context.Context, archive io.Reader) (any, error)
+}
+
+type addonIDKey struct{}
+
+// AddonID is the catalogue id of the addon an Installer is handed, "" outside a catalogue install.
+func AddonID(ctx context.Context) string {
+	id, _ := ctx.Value(addonIDKey{}).(string)
+	return id
+}
+
+// cached is what the disk cache keeps per catalogue entry, keyed by the repository URL.
+type cached struct {
+	Manifest *manifest.Manifest `json:"manifest,omitempty"`
+	Tag      string             `json:"tag,omitempty"`
+	ETag     string             `json:"etag,omitempty"`
+	Fetched  time.Time          `json:"fetched"`
+	Error    string             `json:"error,omitempty"`
+}
+
+// cacheFile is the disk cache's shape.
+type cacheFile struct {
+	Entries   map[string]cached `json:"entries"`
+	Stars     map[string]int    `json:"stars,omitempty"`
+	StarsETag map[string]string `json:"stars_etag,omitempty"`
+	Latest    map[string]Latest `json:"latest,omitempty"`
+	Checked   *time.Time        `json:"checked,omitempty"`
+}
+
+// Service loads the catalogue, fetches manifests and installs from them.
+type Service struct {
+	URLs      []string // the catalogue file's URLs: the published one first, the bundled copy last
+	Arch      string   // uname -m
+	HTTP      *http.Client
+	GitHubAPI string // https://api.github.com, overridable for tests
+	RawGitHub string // https://raw.githubusercontent.com, overridable for tests
+	Installer Installer
+	// BundledManifests is the directory of adapter manifests the image carries beside the bundled
+	// catalogue (/etc/occulite/manifests); "" for none.
+	BundledManifests string
+	// Daily says whether Run's daily release refresh goes out (task 244); nil = always.
+	Daily func() bool
+	// CacheFile keeps the fetched manifests, the star counts and the latest releases across
+	// restarts; "" = this process only.
+	CacheFile string
+	// TimingsFile keeps what the last install of each addon took (30.2), so the bar's install
+	// half moves at the right speed the next time; "" = remembered for this process only.
+	TimingsFile string
+
+	refreshing sync.Mutex // one refresh at a time
+
+	mu        sync.Mutex
+	catalog   *Catalog // the merged catalogue file, with the source URL per entry
+	sources   map[string]string
+	catalogAt time.Time
+	cache     cacheFile
+	loaded    bool
+	adapters  map[string]*manifest.Manifest // the bundled adapter manifests by id
+	releases  map[string]releaseCache
+	timings   map[string]float64 // addon id -> install seconds
+	phaseAt   time.Time          // when the current phase began
+	progress  *Progress
+}
+
+// New returns a service for the catalogue URLs.
+func New(urls []string, arch string, inst Installer) *Service {
+	return &Service{URLs: urls, Arch: arch, HTTP: &http.Client{Timeout: 10 * time.Minute}, GitHubAPI: "https://api.github.com", RawGitHub: "https://raw.githubusercontent.com", Installer: inst}
+}
+
+var gitRe = regexp.MustCompile(`^https://[A-Za-z0-9.-]+(?::\d+)?/[\w.-]+/[\w.-]+$`)
+
+// RegaFreeAdapterIDs reads the ids of the adapter manifests the image carries (no network) that
+// do not declare requires.rega: the addons whose authors ship no manifest and that the ReGa scan
+// must not flag. An adapter listed only as untested that does need the ReGa (homekit-ccu) is left
+// out, so its own manifest's verdict stands. An unreadable directory yields none.
+func RegaFreeAdapterIDs(dir string) []string {
+	var ids []string
+	for id, m := range loadAdapters(dir) {
+		if !m.NeedsRega() {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func loadAdapters(dir string) map[string]*manifest.Manifest {
+	out := map[string]*manifest.Manifest{}
+	if dir == "" {
+		return out
+	}
+	names, _ := filepath.Glob(filepath.Join(dir, "*.json"))
+	for _, p := range names {
+		m, err := manifest.ParseFile(p)
+		if err != nil {
+			slog.Warn("catalog: a bundled adapter manifest does not parse", "file", p, "err", err)
+			continue
+		}
+		if m.ID != strings.TrimSuffix(filepath.Base(p), ".json") {
+			continue
+		}
+		out[m.ID] = m
+	}
+	return out
+}
+
+// loadLocked reads the disk cache and the bundled adapters once. s.mu held.
+func (s *Service) loadLocked() {
+	if s.loaded {
+		return
+	}
+	s.loaded = true
+	s.adapters = loadAdapters(s.BundledManifests)
+	s.cache = cacheFile{Entries: map[string]cached{}}
+	if s.CacheFile == "" {
+		return
+	}
+	b, err := os.ReadFile(s.CacheFile)
+	if err != nil {
+		return
+	}
+	var c cacheFile
+	if json.Unmarshal(b, &c) != nil {
+		return
+	}
+	if c.Entries == nil {
+		c.Entries = map[string]cached{}
+	}
+	s.cache = c
+}
+
+// saveLocked writes the disk cache. s.mu held.
+func (s *Service) saveLocked() {
+	if s.CacheFile == "" {
+		return
+	}
+	b, err := json.MarshalIndent(s.cache, "", "  ")
+	if err != nil {
+		return
+	}
+	if err := os.WriteFile(s.CacheFile, b, 0o644); err != nil {
+		slog.Warn("catalog: the cache could not be written", "file", s.CacheFile, "err", err)
+	}
+}
+
+// Fetch loads and merges the configured catalogue files (first wins per repository), cached for
+// ten minutes unless force, and answers the view: the entries joined with the cached manifests,
+// the bundled adapters, the star counts and the latest releases. It fetches no manifest: that is
+// Refresh's, on the user's request. An error only when no catalogue file could be loaded.
+func (s *Service) Fetch(ctx context.Context, force bool) (*View, error) {
+	s.mu.Lock()
+	s.loadLocked()
+	fresh := !force && s.catalog != nil && time.Since(s.catalogAt) < 10*time.Minute
+	s.mu.Unlock()
+	if !fresh {
+		cat, sources, err := s.loadCatalog(ctx)
+		if err != nil {
+			return nil, err
+		}
+		s.mu.Lock()
+		s.catalog, s.sources, s.catalogAt = cat, sources, time.Now()
+		s.mu.Unlock()
+	}
+	return s.view(), nil
+}
+
+// Cached is the view from what the system holds already - the catalogue file of the last Fetch and
+// the cached manifests and releases - or nil before any Fetch. It never goes out (task 248: the
+// Status warning and the menu dot of an addon update read it once a minute).
+func (s *Service) Cached() *View {
+	s.mu.Lock()
+	s.loadLocked()
+	have := s.catalog != nil
+	s.mu.Unlock()
+	if !have {
+		return nil
+	}
+	return s.view()
+}
+
+// loadCatalog reads every configured URL and merges the entries, the first per repository winning.
+func (s *Service) loadCatalog(ctx context.Context) (*Catalog, map[string]string, error) {
+	merged := &Catalog{Format: Format}
+	sources := map[string]string{}
+	seen := map[string]bool{}
+	var firstErr error
+	loaded := 0
+	for _, u := range s.URLs {
+		cat, err := s.fetchCatalog(ctx, u)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("%s: %w", u, err)
+			}
+			continue
+		}
+		loaded++
+		for _, e := range cat.Addons {
+			e.Git = strings.TrimSuffix(strings.TrimSuffix(strings.TrimSpace(e.Git), "/"), ".git")
+			key := entryKey(e.Git)
+			if !gitRe.MatchString(e.Git) || e.Manifest == "" || strings.Contains(e.Manifest, "..") || strings.HasPrefix(e.Manifest, "/") {
+				slog.Warn("catalog: an entry is not usable and was skipped", "git", e.Git, "manifest", e.Manifest, "catalog", u)
+				continue
+			}
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			merged.Addons = append(merged.Addons, e)
+			sources[key] = u
+		}
+	}
+	if loaded == 0 && firstErr != nil {
+		return nil, nil, firstErr
+	}
+	return merged, sources, nil
+}
+
+// entryKey is how two catalogue files name the same repository: the URL lower-cased, without a
+// trailing slash or .git.
+func entryKey(git string) string {
+	return strings.ToLower(strings.TrimSuffix(strings.TrimSuffix(strings.TrimSpace(git), "/"), ".git"))
+}
+
+func (s *Service) fetchCatalog(ctx context.Context, u string) (*Catalog, error) {
+	var b []byte
+	var err error
+	if strings.HasPrefix(u, "file://") {
+		b, err = os.ReadFile(strings.TrimPrefix(u, "file://"))
+	} else {
+		b, _, err = s.getETag(ctx, u, "", 1<<20)
+	}
+	if err != nil {
+		return nil, err
+	}
+	var cat Catalog
+	if err := json.Unmarshal(b, &cat); err != nil {
+		return nil, err
+	}
+	if cat.Format != Format {
+		return nil, fmt.Errorf("catalogue format %d is not %d", cat.Format, Format)
+	}
+	return &cat, nil
+}
+
+var errNotModified = errors.New("not modified")
+
+// httpStatusError is an answer other than 200: the status, so a caller can tell a 404 (the file is
+// not at that ref) from a failing host.
+type httpStatusError int
+
+func (e httpStatusError) Error() string { return fmt.Sprintf("HTTP %d", int(e)) }
+
+// isNotFound says whether err is a 404.
+func isNotFound(err error) bool {
+	var se httpStatusError
+	return errors.As(err, &se) && int(se) == http.StatusNotFound
+}
+
+// getETag is one GET with a byte cap; etag adds If-None-Match, and a 304 answers errNotModified.
+func (s *Service) getETag(ctx context.Context, u, etag string, limit int64) ([]byte, string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	if etag != "" {
+		req.Header.Set("If-None-Match", etag)
+	}
+	res, err := s.HTTP.Do(req)
+	if err != nil {
+		return nil, "", err
+	}
+	defer res.Body.Close()
+	if res.StatusCode == http.StatusNotModified && etag != "" {
+		return nil, etag, errNotModified
+	}
+	if res.StatusCode != 200 {
+		return nil, "", httpStatusError(res.StatusCode)
+	}
+	b, err := io.ReadAll(io.LimitReader(res.Body, limit+1))
+	if err != nil {
+		return nil, "", err
+	}
+	if int64(len(b)) > limit {
+		return nil, "", fmt.Errorf("larger than %d bytes", limit)
+	}
+	return b, res.Header.Get("ETag"), nil
+}
+
+// view joins the catalogue with the cache. It never fetches.
+func (s *Service) view() *View {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v := &View{Format: Format, Checked: s.cache.Checked, Addons: []Item{}}
+	if s.catalog == nil {
+		return v
+	}
+	for _, e := range s.catalog.Addons {
+		it := Item{Git: e.Git, ManifestPath: e.Manifest, Untested: e.Untested, Adapter: e.Adapter()}
+		if c, ok := s.cache.Entries[entryKey(e.Git)]; ok {
+			it.Manifest, it.Tag, it.Error = c.Manifest, c.Tag, c.Error
+			if !c.Fetched.IsZero() {
+				f := c.Fetched
+				it.Fetched = &f
+			}
+		}
+		// the bundled adapter is known without a fetch; the fetched copy of it wins when there is one
+		if it.Manifest == nil && e.Adapter() {
+			it.Manifest = s.adapters[adapterID(e.Manifest)]
+		}
+		if it.Manifest != nil {
+			if it.Release != nil {
+				it.Stars = s.cache.Stars[it.Release.GitHub]
+			}
+			if l, ok := s.cache.Latest[it.ID]; ok {
+				cp := l
+				it.Latest = &cp
+			}
+		}
+		v.Addons = append(v.Addons, it)
+	}
+	sort.SliceStable(v.Addons, func(i, j int) bool {
+		a, b := v.Addons[i], v.Addons[j]
+		if a.Untested != b.Untested {
+			return b.Untested
+		}
+		return strings.ToLower(itemName(a)) < strings.ToLower(itemName(b))
+	})
+	return v
+}
+
+// adapterID is the id an adapter manifest path names: its file name.
+func adapterID(manifestPath string) string {
+	return strings.TrimSuffix(path.Base(manifestPath), ".json")
+}
+
+// itemName is what an item is called before a manifest is known: the repository's name.
+func itemName(it Item) string {
+	if it.Manifest != nil {
+		return it.Name.In("en")
+	}
+	return RepoName(it.Git)
+}
+
+// RepoName is "owner/repo" of a repository URL, for an entry whose manifest is not fetched yet.
+func RepoName(git string) string {
+	u, err := url.Parse(git)
+	if err != nil {
+		return git
+	}
+	return strings.Trim(u.Path, "/")
+}
+
+// Refresh is the user's check (D-90): the catalogue files again, every entry's manifest at its
+// latest release tag (or the adapter beside the catalogue), the star counts, the latest releases;
+// all of it cached. An entry whose fetch fails keeps its last manifest and records the error;
+// the call fails only when no catalogue file loads. One refresh at a time; a second caller waits.
+func (s *Service) Refresh(ctx context.Context) error {
+	s.refreshing.Lock()
+	defer s.refreshing.Unlock()
+	if _, err := s.Fetch(ctx, true); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	cat, sources := s.catalog, s.sources
+	s.mu.Unlock()
+	for _, e := range cat.Addons {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		c := s.fetchManifest(ctx, e, sources[entryKey(e.Git)])
+		s.mu.Lock()
+		s.cache.Entries[entryKey(e.Git)] = c
+		s.mu.Unlock()
+		if c.Manifest != nil && c.Manifest.Release != nil {
+			s.refreshStars(ctx, c.Manifest.Release.GitHub)
+		}
+	}
+	s.RefreshReleases(ctx)
+	now := time.Now()
+	s.mu.Lock()
+	s.cache.Checked = &now
+	s.saveLocked()
+	s.mu.Unlock()
+	return nil
+}
+
+// fetchManifest reads one entry's manifest: an adapter from beside the catalogue file it came
+// from, else from the repository at its latest release tag (GitHub), or its default branch - also
+// when the file is not at the tag yet.
+func (s *Service) fetchManifest(ctx context.Context, e Entry, source string) cached {
+	s.mu.Lock()
+	prev := s.cache.Entries[entryKey(e.Git)]
+	s.mu.Unlock()
+	out := cached{Manifest: prev.Manifest, Tag: prev.Tag, ETag: prev.ETag, Fetched: time.Now()}
+	fail := func(err error) cached {
+		out.Error = err.Error()
+		slog.Warn("catalog: an entry's manifest could not be fetched", "git", e.Git, "manifest", e.Manifest, "err", err)
+		return out
+	}
+	var b []byte
+	var etag string
+	var err error
+	if e.Adapter() {
+		u := adapterURL(source, e.Manifest)
+		if strings.HasPrefix(u, "file://") {
+			b, err = os.ReadFile(strings.TrimPrefix(u, "file://"))
+		} else {
+			b, etag, err = s.getETag(ctx, u, prev.ETag, manifest.MaxSize)
+		}
+		out.Tag = ""
+	} else {
+		var tag string
+		if tag, err = s.latestTag(ctx, e.Git); err != nil {
+			return fail(err)
+		}
+		etagIn := ""
+		if tag == prev.Tag {
+			etagIn = prev.ETag
+		}
+		for _, u := range rawURLs(s.RawGitHub, e.Git, e.Manifest, tag) {
+			b, etag, err = s.getETag(ctx, u, etagIn, manifest.MaxSize)
+			if err == nil || errors.Is(err, errNotModified) {
+				break
+			}
+		}
+		if tag != "" && isNotFound(err) {
+			// the latest release predates the addon's manifest (the four first-class addons
+			// between their manifest commit and their next release): the default branch
+			// describes the addon until a release carries the file - the rule for a repository
+			// without releases, applied to one whose release lacks the file. Recorded as no tag.
+			for _, u := range rawURLs(s.RawGitHub, e.Git, e.Manifest, "") {
+				b, etag, err = s.getETag(ctx, u, "", manifest.MaxSize)
+				if err == nil {
+					break
+				}
+			}
+			tag = ""
+		}
+		out.Tag = tag
+	}
+	switch {
+	case errors.Is(err, errNotModified):
+		out.Error = ""
+		return out // the manifest we have is the current one
+	case err != nil:
+		return fail(err)
+	}
+	m, err := manifest.Parse(b)
+	if err != nil {
+		return fail(err)
+	}
+	if e.Adapter() && m.ID != adapterID(e.Manifest) {
+		return fail(fmt.Errorf("the adapter manifest names %s, not its file", m.ID))
+	}
+	out.Manifest, out.ETag, out.Error = m, etag, ""
+	return out
+}
+
+// adapterURL is where an adapter manifest lives beside the catalogue file it came from: the
+// file's directory plus manifests/<name>. The bundled copy lives the same way in /etc/occulite.
+func adapterURL(catalogURL, manifestPath string) string {
+	dir := catalogURL[:strings.LastIndex(catalogURL, "/")+1]
+	return dir + "manifests/" + path.Base(manifestPath)
+}
+
+// rawURLs are where the raw file is on the repository's host: GitHub's raw host at the tag (or
+// HEAD without one), else the Gitea shape at the tag, or at the default branches this binary knows.
+func rawURLs(rawGitHub, git, file, tag string) []string {
+	u, err := url.Parse(git)
+	if err != nil {
+		return nil
+	}
+	if strings.EqualFold(u.Host, "github.com") {
+		ref := tag
+		if ref == "" {
+			ref = "HEAD"
+		}
+		return []string{rawGitHub + "/" + strings.Trim(u.Path, "/") + "/" + ref + "/" + file}
+	}
+	base := strings.TrimSuffix(git, "/")
+	if tag != "" {
+		return []string{base + "/raw/tag/" + tag + "/" + file}
+	}
+	return []string{base + "/raw/branch/main/" + file, base + "/raw/branch/master/" + file}
+}
+
+// latestTag is the repository's latest release tag: for GitHub from the releases list (the first
+// stable release, else the first prerelease; conditional, so a repeat is free of the rate
+// limit), "" for a repository without releases and for every other host.
+func (s *Service) latestTag(ctx context.Context, git string) (string, error) {
+	u, err := url.Parse(git)
+	if err != nil || !strings.EqualFold(u.Host, "github.com") {
+		return "", nil
+	}
+	rels, err := s.releasesOf(ctx, strings.Trim(u.Path, "/"))
+	if err != nil {
+		return "", err
+	}
+	for _, r := range rels {
+		if !r.Draft && !r.Prerelease {
+			return r.TagName, nil
+		}
+	}
+	for _, r := range rels {
+		if !r.Draft {
+			return r.TagName, nil
+		}
+	}
+	return "", nil
+}
+
+// refreshStars asks GitHub for a repository's star count once per check (ETag-cached) and
+// remembers it; a failing call keeps the last value.
+func (s *Service) refreshStars(ctx context.Context, repo string) {
+	if !repoRe.MatchString(repo) {
+		return
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.GitHubAPI+"/repos/"+repo, nil)
+	if err != nil {
+		return
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	s.mu.Lock()
+	if etag := s.cache.StarsETag[repo]; etag != "" {
+		req.Header.Set("If-None-Match", etag)
+	}
+	s.mu.Unlock()
+	res, err := s.HTTP.Do(req)
+	if err != nil {
+		return
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		return
+	}
+	var body struct {
+		Stars int `json:"stargazers_count"`
+	}
+	if json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&body) != nil {
+		return
+	}
+	s.mu.Lock()
+	if s.cache.Stars == nil {
+		s.cache.Stars, s.cache.StarsETag = map[string]int{}, map[string]string{}
+	}
+	s.cache.Stars[repo], s.cache.StarsETag[repo] = body.Stars, res.Header.Get("ETag")
+	s.mu.Unlock()
+}
+
+// RefreshReleases resolves every known manifest's newest release once and remembers what it
+// picked, so that the page can show a version and an update hint. Resolve is conditional (ETag)
+// and falls back to the last answer when the shared address is rate-limited.
+func (s *Service) RefreshReleases(ctx context.Context) {
+	v := s.view()
+	changed := false
+	for _, it := range v.Addons {
+		if ctx.Err() != nil {
+			break
+		}
+		if it.Manifest == nil || it.Release == nil || !it.SupportsArch(s.Arch) {
+			continue
+		}
+		r, err := s.Resolve(ctx, it.Release)
+		if err != nil {
+			continue // no package for this box, or GitHub said no: keep whatever we had
+		}
+		s.mu.Lock()
+		if s.cache.Latest == nil {
+			s.cache.Latest = map[string]Latest{}
+		}
+		if cur, ok := s.cache.Latest[it.ID]; !ok || cur.Version != r.Version || cur.Asset != r.Asset {
+			s.cache.Latest[it.ID], changed = Latest{Version: r.Version, Asset: r.Asset}, true
+		}
+		s.mu.Unlock()
+	}
+	if changed {
+		s.mu.Lock()
+		s.saveLocked()
+		s.mu.Unlock()
+	}
+}
+
+// Run refreshes the latest releases of the manifests the box already knows shortly after start
+// and then once a day, with jitter: conditional GitHub calls, no manifest and no star fetch -
+// those are the user's check (D-90).
+//
+// Task 244: only while Daily says so (the Addons page's *Check daily*); nil = always.
+func (s *Service) Run(ctx context.Context) {
+	daily := func() bool { return s.Daily == nil || s.Daily() }
+	first := time.After(3*time.Minute + time.Duration(rand.Int64N(int64(5*time.Minute))))
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-first:
+			if !daily() {
+				continue
+			}
+			if _, err := s.Fetch(ctx, false); err == nil {
+				s.RefreshReleases(ctx)
+			}
+		case <-time.After(24*time.Hour + time.Duration(rand.Int64N(int64(2*time.Hour)))):
+			if !daily() {
+				continue
+			}
+			if _, err := s.Fetch(ctx, false); err == nil {
+				s.RefreshReleases(ctx)
+			}
+		}
+	}
+}
+
+// Item finds an addon by its manifest id in the view; nil when none is known.
+func (s *Service) Item(ctx context.Context, id string) *Item {
+	v, err := s.Fetch(ctx, false)
+	if err != nil {
+		return nil
+	}
+	for i := range v.Addons {
+		if v.Addons[i].Manifest != nil && v.Addons[i].ID == id {
+			return &v.Addons[i]
+		}
+	}
+	return nil
+}
+
+// Manifest is the catalogue's manifest for an addon id - the fetched one, or the bundled adapter -
+// or nil: what stands in for a package without a manifest (system.SystemdAddons.FallbackManifest).
+// It never fetches a manifest; loading the catalogue itself is bounded, so a policy write never
+// hangs on it, and the bundled copy answers when the network does not.
+func (s *Service) Manifest(id string) *manifest.Manifest {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if it := s.Item(ctx, id); it != nil {
+		return it.Manifest
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.loadLocked()
+	return s.adapters[id]
+}
+
+type ghRelease struct {
+	TagName    string `json:"tag_name"`
+	Draft      bool   `json:"draft"`
+	Prerelease bool   `json:"prerelease"`
+	HTMLURL    string `json:"html_url"`
+	Assets     []struct {
+		Name string `json:"name"`
+		Size int64  `json:"size"`
+		URL  string `json:"browser_download_url"`
+	} `json:"assets"`
+}
+
+// releaseCache is the last releases answer per repository with its ETag.
+type releaseCache struct {
+	etag string
+	rels []ghRelease
+}
+
+var repoRe = regexp.MustCompile(`^[\w.-]+/[\w.-]+$`)
+
+// releasesOf lists a repository's releases: conditional requests are free of GitHub's 60/h
+// budget, which this box shares with every addon CGI that asks the same API and with everything
+// else behind the same public address.
+func (s *Service) releasesOf(ctx context.Context, repo string) ([]ghRelease, error) {
+	if !repoRe.MatchString(repo) {
+		return nil, fmt.Errorf("%q is not owner/repo", repo)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.GitHubAPI+"/repos/"+repo+"/releases?per_page=10", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	s.mu.Lock()
+	cached, ok := s.releases[repo]
+	s.mu.Unlock()
+	if ok && cached.etag != "" {
+		req.Header.Set("If-None-Match", cached.etag)
+	}
+	res, err := s.HTTP.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	var rels []ghRelease
+	switch {
+	case res.StatusCode == http.StatusNotModified && ok:
+		rels = cached.rels
+	case res.StatusCode == 200:
+		if err := json.NewDecoder(io.LimitReader(res.Body, 4<<20)).Decode(&rels); err != nil {
+			return nil, err
+		}
+		s.mu.Lock()
+		if s.releases == nil {
+			s.releases = map[string]releaseCache{}
+		}
+		s.releases[repo] = releaseCache{etag: res.Header.Get("ETag"), rels: rels}
+		s.mu.Unlock()
+	case res.StatusCode == http.StatusForbidden && ok:
+		rels = cached.rels // rate limited: the last answer is better than none
+	default:
+		return nil, fmt.Errorf("GitHub releases: HTTP %d", res.StatusCode)
+	}
+	return rels, nil
+}
+
+// Resolve picks the release and the asset for this architecture from a manifest's release source.
+func (s *Service) Resolve(ctx context.Context, rel *manifest.Release) (*Resolved, error) {
+	if rel == nil || !repoRe.MatchString(rel.GitHub) {
+		return nil, errors.New("the manifest has no usable release source")
+	}
+	rels, err := s.releasesOf(ctx, rel.GitHub)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range rels {
+		if r.Draft || (r.Prerelease && !rel.Prerelease) {
+			continue
+		}
+		version := strings.TrimPrefix(r.TagName, "v")
+		for _, pattern := range []string{rel.Assets[s.Arch], rel.Asset, rel.Fallback} {
+			if pattern == "" {
+				continue
+			}
+			re := patternRe(pattern, s.Arch)
+			for _, a := range r.Assets {
+				if re.MatchString(a.Name) {
+					out := &Resolved{Tag: r.TagName, Version: version, Asset: a.Name, URL: a.URL, Size: a.Size, Release: r.HTMLURL}
+					for _, b := range r.Assets {
+						if b.Name == a.Name+".sha256" {
+							out.SHA256 = b.URL
+						}
+					}
+					return out, nil
+				}
+			}
+		}
+	}
+	return nil, fmt.Errorf("no release of %s has a package for %s", rel.GitHub, s.Arch)
+}
+
+// patternRe turns "mosquitto-{arch}-{version}.tar.gz" into a regexp; {version} matches anything
+// without a slash so tags with suffixes (3.5.2-beta) still resolve.
+func patternRe(pattern, arch string) *regexp.Regexp {
+	q := regexp.QuoteMeta(pattern)
+	q = strings.ReplaceAll(q, regexp.QuoteMeta("{arch}"), regexp.QuoteMeta(arch))
+	q = strings.ReplaceAll(q, regexp.QuoteMeta("{version}"), `[^/]+`)
+	return regexp.MustCompile("^" + q + "$")
+}
+
+// Progress returns the current or last install progress.
+func (s *Service) Progress() *Progress {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.progress == nil {
+		return nil
+	}
+	p := *s.progress
+	p.Percent = s.percentLocked(time.Now())
+	return &p
+}
+
+// The bar's budget per phase. Measured on the lab box 2026-09-08: RedMatic 94.3 MB installed
+// in 17.7 s, homematic-manager 45.9 MB in 5.0 s - so the install is a good half of the whole
+// on a LAN download; the download half is real (bytes), the install half is paced.
+const (
+	pctDownloadFrom = 4
+	pctDownloadTo   = 52
+	pctVerify       = 54
+	pctInstallFrom  = 56
+	pctInstallCap   = 97 // the installer has not returned: the bar creeps up to here and waits
+)
+
+// percentLocked is Percent for the current phase at time now; s.mu held.
+func (s *Service) percentLocked(now time.Time) int {
+	p := s.progress
+	switch p.Phase {
+	case "resolving":
+		return 2
+	case "downloading":
+		if p.Total > 0 {
+			return pctDownloadFrom + int(float64(pctDownloadTo-pctDownloadFrom)*float64(p.Bytes)/float64(p.Total))
+		}
+		// no content length: pace by the expected download time of a typical archive at 5 MB/s
+		return paced(pctDownloadFrom, pctDownloadTo-2, now.Sub(s.phaseAt).Seconds(), 20)
+	case "verifying":
+		return pctVerify
+	case "installing":
+		return paced(pctInstallFrom, pctInstallCap, now.Sub(s.phaseAt).Seconds(), s.expectedInstallLocked(p.AddonID, p.Total))
+	case "done":
+		return 100
+	case "failed":
+		return p.Percent
+	}
+	return 0
+}
+
+// paced moves from lo towards hi with elapsed/expected, decelerating past the expected time so
+// a slow install still shows movement without ever reaching hi: 63 % of the way at the expected
+// time, 86 % at twice it.
+func paced(lo, hi int, elapsed, expected float64) int {
+	if expected <= 0 {
+		expected = 1
+	}
+	f := 1 - math.Exp(-elapsed/expected*1.0)
+	return lo + int(float64(hi-lo)*f)
+}
+
+// expectedInstallLocked is the install duration to pace against: what this addon took last
+// time, or an estimate from the archive size (0.16 s per MB plus a second, the lab box's
+// numbers). s.mu held.
+func (s *Service) expectedInstallLocked(id string, bytes int64) float64 {
+	if s.timings == nil {
+		s.loadTimingsLocked()
+	}
+	if v, ok := s.timings[id]; ok && v > 0 {
+		return v
+	}
+	return 1 + 0.16*float64(bytes)/1e6
+}
+
+func (s *Service) loadTimingsLocked() {
+	s.timings = map[string]float64{}
+	if s.TimingsFile == "" {
+		return
+	}
+	if b, err := os.ReadFile(s.TimingsFile); err == nil {
+		_ = json.Unmarshal(b, &s.timings)
+	}
+}
+
+// rememberInstallLocked keeps the measured install time of an addon (a mean with the previous
+// one, so one slow run does not set the pace forever). s.mu held.
+func (s *Service) rememberInstallLocked(id string, seconds float64) {
+	if s.timings == nil {
+		s.loadTimingsLocked()
+	}
+	if prev, ok := s.timings[id]; ok && prev > 0 {
+		seconds = (prev + seconds) / 2
+	}
+	s.timings[id] = seconds
+	if s.TimingsFile != "" {
+		if b, err := json.MarshalIndent(s.timings, "", "  "); err == nil {
+			_ = os.WriteFile(s.TimingsFile, b, 0o644)
+		}
+	}
+}
+
+func (s *Service) setPhase(phase, msg string) {
+	s.mu.Lock()
+	if s.progress != nil {
+		s.progress.Phase, s.progress.Message = phase, msg
+		s.phaseAt = time.Now()
+	}
+	s.mu.Unlock()
+}
+
+// Install resolves, downloads, verifies and installs one catalogue addon from its manifest's
+// release source; one at a time. The installer applies the package's own manifest; the
+// catalogue's stands in for a package without one (system.SystemdAddons.FallbackManifest).
+func (s *Service) Install(ctx context.Context, id string) (*Progress, error) {
+	s.mu.Lock()
+	if s.progress != nil && s.progress.Finished == nil {
+		s.mu.Unlock()
+		return nil, errors.New("an install is already running")
+	}
+	s.progress = &Progress{AddonID: id, Phase: "resolving", Started: time.Now()}
+	s.phaseAt = time.Now()
+	s.mu.Unlock()
+	fail := func(err error) (*Progress, error) {
+		now := time.Now()
+		s.mu.Lock()
+		s.progress.Phase, s.progress.Message, s.progress.Finished = "failed", err.Error(), &now
+		p := *s.progress
+		s.mu.Unlock()
+		return &p, err
+	}
+	it := s.Item(ctx, id)
+	if it == nil {
+		return fail(errors.New("unknown addon: run a check first, so that its manifest is known"))
+	}
+	if !it.SupportsArch(s.Arch) {
+		return fail(fmt.Errorf("%s is not available for %s", it.Name.In("en"), s.Arch))
+	}
+	r, err := s.Resolve(ctx, it.Release)
+	if err != nil {
+		return fail(err)
+	}
+	s.setPhase("downloading", r.Asset)
+	tmp, err := os.CreateTemp("", "occulite-catalog-*.tar.gz")
+	if err != nil {
+		return fail(err)
+	}
+	defer os.Remove(tmp.Name())
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.URL, nil)
+	if err != nil {
+		return fail(err)
+	}
+	res, err := s.HTTP.Do(req)
+	if err != nil {
+		return fail(err)
+	}
+	if res.StatusCode != 200 {
+		res.Body.Close()
+		return fail(fmt.Errorf("download: HTTP %d", res.StatusCode))
+	}
+	h := sha256.New()
+	counter := &countingWriter{w: io.MultiWriter(tmp, h), s: s, total: res.ContentLength}
+	_, err = io.Copy(counter, io.LimitReader(res.Body, 400<<20))
+	res.Body.Close()
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return fail(err)
+	}
+	s.mu.Lock()
+	s.progress.Bytes, s.progress.Total = counter.n, max(counter.total, counter.n) // the final count, whatever the last tick said
+	s.mu.Unlock()
+	if r.SHA256 != "" {
+		s.setPhase("verifying", "sha256")
+		want, err := s.fetchSHA(ctx, r.SHA256)
+		if err != nil {
+			return fail(fmt.Errorf("checksum: %w", err))
+		}
+		if got := hex.EncodeToString(h.Sum(nil)); got != want {
+			return fail(fmt.Errorf("checksum mismatch: got %s, release says %s", got, want))
+		}
+	}
+	s.setPhase("installing", r.Asset)
+	slog.Info("catalog: installing", "addon", id, "asset", r.Asset, "version", r.Version, "bytes", counter.n)
+	f, err := os.Open(tmp.Name())
+	if err != nil {
+		return fail(err)
+	}
+	defer f.Close()
+	result, err := s.Installer.Install(context.WithValue(ctx, addonIDKey{}, id), f)
+	if err != nil {
+		return fail(err)
+	}
+	now := time.Now()
+	s.mu.Lock()
+	s.rememberInstallLocked(id, now.Sub(s.phaseAt).Seconds())
+	s.progress.Phase, s.progress.Message, s.progress.Finished, s.progress.Result = "done", r.Asset, &now, result
+	s.progress.Percent = 100
+	p := *s.progress
+	s.mu.Unlock()
+	slog.Info("catalog: installed", "addon", id, "version", r.Version, "result", result)
+	return &p, nil
+}
+
+func (s *Service) fetchSHA(ctx context.Context, u string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return "", err
+	}
+	res, err := s.HTTP.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		return "", fmt.Errorf("HTTP %d", res.StatusCode)
+	}
+	sc := bufio.NewScanner(io.LimitReader(res.Body, 4096))
+	for sc.Scan() {
+		f := strings.Fields(sc.Text())
+		if len(f) > 0 && regexp.MustCompile(`^[0-9a-fA-F]{64}$`).MatchString(f[0]) {
+			return strings.ToLower(f[0]), nil
+		}
+	}
+	return "", errors.New("no sha256 in the checksum file")
+}
+
+type countingWriter struct {
+	w     io.Writer
+	s     *Service
+	n     int64
+	total int64
+	last  time.Time
+}
+
+func (c *countingWriter) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	c.n += int64(n)
+	if time.Since(c.last) > 300*time.Millisecond {
+		c.last = time.Now()
+		c.s.mu.Lock()
+		if c.s.progress != nil {
+			c.s.progress.Bytes, c.s.progress.Total = c.n, c.total
+		}
+		c.s.mu.Unlock()
+	}
+	return n, err
+}

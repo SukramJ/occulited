@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/hobbyquaker/occulited/master/docs/manifest.schema.json",
+  "title": "openccu-lite addon manifest (openccu-lite.json)",
+  "description": "What an addon declares about itself for openccu-lite: identity, texts, compatibility, where its releases are, how the shell opens it and what it needs to run. See docs/manifest-format.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "id", "name"],
+  "$defs": {
+    "text": {
+      "description": "A text in German and English, or one string for both.",
+      "oneOf": [
+        {"type": "string", "minLength": 1},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "de": {"type": "string", "minLength": 1},
+            "en": {"type": "string", "minLength": 1}
+          },
+          "anyOf": [{"required": ["de"]}, {"required": ["en"]}]
+        }
+      ]
+    },
+    "relpath": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_][A-Za-z0-9_./-]{0,200}$",
+      "not": {"pattern": "\\.\\."}
+    },
+    "abspath": {
+      "type": "string",
+      "pattern": "^/[A-Za-z0-9_./-]{0,200}$",
+      "not": {"pattern": "\\.\\."}
+    }
+  },
+  "properties": {
+    "format": {"const": 1},
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_.-]{0,31}$",
+      "description": "The addon's rc.d id: the name its update_script links into /usr/local/etc/config/rc.d."
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+(\\.[0-9]+)*([-+][A-Za-z0-9.+-]+)?$",
+      "description": "The package's version; informational, the installed version is read from the rc.d script's info."
+    },
+    "name": {"$ref": "#/$defs/text"},
+    "description": {"$ref": "#/$defs/text"},
+    "homepage": {"type": "string", "pattern": "^https?://"},
+    "licence": {"type": "string", "minLength": 1},
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["github"],
+      "properties": {
+        "github": {"type": "string", "pattern": "^[\\w.-]+/[\\w.-]+$", "description": "owner/repo"},
+        "asset": {"type": "string", "minLength": 1, "description": "the asset name with {arch} and {version}"},
+        "assets": {
+          "type": "object",
+          "additionalProperties": {"type": "string", "minLength": 1},
+          "description": "architecture (uname -m) → asset pattern, for projects that do not name packages by uname -m"
+        },
+        "fallback_asset": {"type": "string", "minLength": 1, "description": "tried when asset matches nothing: a package for every architecture"},
+        "prerelease": {"type": "boolean"}
+      },
+      "anyOf": [{"required": ["asset"]}, {"required": ["assets"]}, {"required": ["fallback_asset"]}]
+    },
+    "requires": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "lite": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]+)*([-+][A-Za-z0-9.+-]+)?$", "description": "the oldest openccu-lite the addon runs on"},
+        "rega": {"type": "boolean", "description": "the addon needs the ReGa, which openccu-lite does not have"},
+        "forms": {"type": "array", "items": {"type": "string", "enum": ["sd", "ova"]}, "uniqueItems": true},
+        "architectures": {"type": "array", "items": {"type": "string", "enum": ["armv7l", "aarch64", "x86_64", "any"]}, "uniqueItems": true}
+      }
+    },
+    "ui": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "icon": {"$ref": "#/$defs/relpath", "description": "a square icon, SVG preferred, relative to the package root"},
+        "icon_dark": {"$ref": "#/$defs/relpath"},
+        "logo": {"$ref": "#/$defs/relpath", "description": "a wide logo, relative to the package root"},
+        "logo_dark": {"$ref": "#/$defs/relpath"},
+        "settings_url": {
+          "type": "string",
+          "pattern": "^/addons/[A-Za-z0-9][A-Za-z0-9._~-]*(/[A-Za-z0-9][A-Za-z0-9._~-]*)*/?(\\?[A-Za-z0-9._~%&=+-]*)?$",
+          "description": "the settings page where the addon's Config-Url is not it"
+        },
+        "session_header": {"type": "boolean", "description": "this version reads X-Occulite-Session everywhere the shell opens it"},
+        "own_updater": {"type": "boolean", "description": "the addon still carries an update mechanism of its own"}
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "root": {"type": "boolean"},
+        "capabilities": {"type": "array", "items": {"type": "string", "pattern": "^CAP_[A-Z_]{1,40}$"}, "uniqueItems": true},
+        "groups": {"type": "array", "items": {"type": "string", "pattern": "^[a-z_][a-z0-9_-]{0,31}$"}, "uniqueItems": true},
+        "paths": {"type": "array", "items": {"$ref": "#/$defs/abspath"}, "uniqueItems": true},
+        "data_dirs": {"type": "array", "items": {"allOf": [{"$ref": "#/$defs/abspath"}, {"pattern": "^/usr/local/"}]}, "uniqueItems": true},
+        "ports": {"type": "array", "items": {"type": "integer", "minimum": 1, "maximum": 65535}, "uniqueItems": true},
+        "port_info": {
+          "type": "object",
+          "propertyNames": {"pattern": "^[0-9]{1,5}$"},
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "proto": {"type": "string", "enum": ["tcp", "udp"]},
+              "tls": {"type": "boolean"},
+              "label": {"$ref": "#/$defs/text"}
+            }
+          }
+        },
+        "needs": {"type": "array", "items": {"type": "string", "enum": ["rfd", "hmipserver", "hs485d"]}, "uniqueItems": true},
+        "start": {"const": "early"},
+        "daemon": {"type": "boolean"},
+        "api_scopes": {"type": "array", "items": {"type": "string", "pattern": "^[a-z]+(:[a-z]+)?$"}, "uniqueItems": true},
+        "note": {"$ref": "#/$defs/text"}
+      }
+    }
+  }
+}

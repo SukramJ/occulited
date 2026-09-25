@@ -1,0 +1,23 @@
+{
+  "format": 1,
+  "id": "jp-hb-devices-addon",
+  "name": "JP-HB-Devices",
+  "description": {
+    "de": "Gerätebeschreibungen für Homebrew-Geräte (AskSin++, HB-*): damit rfd sie anlernen und bedienen kann. Der Kern — die Gerätebeschreibungen unter /firmware/rftypes — funktioniert ohne ReGa; die Patches für die CCU-WebUI (Bilder, Texte, Easymodes) finden hier nichts vor und laufen ins Leere.",
+    "en": "Device descriptions for homebrew devices (AskSin++, HB-*) so that rfd can pair and drive them. The core — the device descriptions under /firmware/rftypes — works without the ReGa; its patches for the CCU WebUI (images, texts, easymodes) find nothing here and run into the void."
+  },
+  "homepage": "https://github.com/jp112sdl/JP-HB-Devices-addon",
+  "licence": "MIT",
+  "release": {
+    "github": "jp112sdl/JP-HB-Devices-addon",
+    "asset": "jp-hb-devices-addon.tgz"
+  },
+  "runtime": {
+    "root": true,
+    "needs": [],
+    "note": {
+      "de": "Das Addon verlinkt seine Gerätebeschreibungen nach /firmware/rftypes und läuft dafür als root; das Recht, das Systemdateisystem neu einzuhängen, hat es nicht — was es dort schreibt, landet im beschreibbaren Erweiterungsverzeichnis.",
+      "en": "The addon links its device descriptions into /firmware/rftypes and runs as root for that; it has no right to remount the system partition — what it writes there lands in the writable extension directory."
+    }
+  }
+}

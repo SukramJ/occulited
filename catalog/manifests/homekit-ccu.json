@@ -1,0 +1,29 @@
+{
+  "format": 1,
+  "id": "homekit-ccu",
+  "name": "HomeKit-CCU",
+  "description": {
+    "de": "Apple-HomeKit-Brücke für Homematic- und Homematic-IP-Geräte, die Fortsetzung von hap-homematic. Gebaut für OpenCCU 3.89: es braucht dessen Node.js 22 und die ReGa (Geräteliste, Namen, Programme, Systemvariablen). openccu-lite hat beides nicht; das Installationsskript bricht dann mit „Node.js not found“ ab, bevor es etwas kopiert.",
+    "en": "Apple HomeKit bridge for Homematic and Homematic IP devices, the continuation of hap-homematic. Built for OpenCCU 3.89: it needs that firmware's Node.js 22 and the ReGa (device list, names, programs, system variables). openccu-lite has neither; the install script then stops with \"Node.js not found\" before it copies anything."
+  },
+  "homepage": "https://github.com/bloop16/homekit-ccu",
+  "licence": "MIT",
+  "release": {
+    "github": "bloop16/homekit-ccu",
+    "asset": "homekit-ccu-{version}.tar.gz"
+  },
+  "requires": {
+    "rega": true
+  },
+  "runtime": {
+    "daemon": true,
+    "ports": [9877],
+    "port_info": {
+      "9877": { "proto": "tcp", "label": { "de": "HomeKit (HAP), erste Brücke", "en": "HomeKit (HAP), first bridge" } }
+    },
+    "note": {
+      "de": "Jede weitere Brücke und jedes einzeln veröffentlichte Zubehör belegt den nächsten TCP-Port ab 9878; eine Video-Türklingel nutzt UDP 9950–9979. Gefunden wird die Brücke über mDNS (UDP 5353), das die Firewall aus den lokalen Netzen ohnehin annimmt. Die Konfigurationsseite läuft über lighttpd zu 127.0.0.1:39874. Nach außen: GitHub, für die eigene Update-Prüfung und – auf Wunsch – ffmpeg für die Türklingel (homebridge/ffmpeg-for-homebridge).",
+      "en": "Every further bridge and every accessory published on its own takes the next TCP port from 9878; a video doorbell uses UDP 9950–9979. The bridge is found through mDNS (UDP 5353), which the firewall accepts from the local networks anyway. The configuration page goes through lighttpd to 127.0.0.1:39874. Outside the system it contacts GitHub: for its own update check and, on request, ffmpeg for the doorbell (homebridge/ffmpeg-for-homebridge)."
+    }
+  }
+}
