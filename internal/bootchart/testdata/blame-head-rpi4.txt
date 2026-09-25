@@ -1,0 +1,15 @@
+32.623s addon-redmatic.service
+24.167s hmipserver.service
+21.177s occu-init-rf-hardware.service
+ 7.690s occu-network.service
+ 6.107s occu-clock-valid.service
+ 3.490s occu-fstrim.service
+ 3.046s occu-boot-message.service
+ 2.181s multimacd.service
+ 2.148s rfd.service
+ 1.681s ca-certificates.service
+ 1.192s dev-mmcblk0p2.device
+  768ms lighttpd.service
+  763ms occu-addons.service
+  739ms systemd-udev-trigger.service
+  537ms occu-ldconfig.service

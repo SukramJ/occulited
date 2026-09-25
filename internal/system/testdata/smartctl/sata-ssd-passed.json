@@ -1,0 +1,32 @@
+{
+  "json_format_version": [1, 0],
+  "smartctl": {
+    "version": [7, 5],
+    "argv": ["smartctl", "-j", "-H", "-A", "-i", "/dev/sda"],
+    "exit_status": 0
+  },
+  "device": {"name": "/dev/sda", "info_name": "/dev/sda [SAT]", "type": "sat", "protocol": "ATA"},
+  "model_family": "Samsung based SSDs",
+  "model_name": "Samsung SSD 870 EVO 500GB",
+  "serial_number": "S6PXNM0T000000",
+  "firmware_version": "SVT02B6Q",
+  "user_capacity": {"blocks": 976773168, "bytes": 500107862016},
+  "logical_block_size": 512,
+  "rotation_rate": 0,
+  "smart_support": {"available": true, "enabled": true},
+  "smart_status": {"passed": true},
+  "ata_smart_attributes": {
+    "revision": 1,
+    "table": [
+      {"id": 5, "name": "Reallocated_Sector_Ct", "value": 100, "worst": 100, "thresh": 10, "when_failed": "", "raw": {"value": 0, "string": "0"}},
+      {"id": 9, "name": "Power_On_Hours", "value": 99, "worst": 99, "thresh": 0, "when_failed": "", "raw": {"value": 4211, "string": "4211"}},
+      {"id": 12, "name": "Power_Cycle_Count", "value": 99, "worst": 99, "thresh": 0, "when_failed": "", "raw": {"value": 312, "string": "312"}},
+      {"id": 177, "name": "Wear_Leveling_Count", "value": 97, "worst": 97, "thresh": 0, "when_failed": "", "raw": {"value": 23, "string": "23"}},
+      {"id": 190, "name": "Airflow_Temperature_Cel", "value": 65, "worst": 52, "thresh": 0, "when_failed": "", "raw": {"value": 35, "string": "35"}},
+      {"id": 241, "name": "Total_LBAs_Written", "value": 99, "worst": 99, "thresh": 0, "when_failed": "", "raw": {"value": 9876543210, "string": "9876543210"}}
+    ]
+  },
+  "power_on_time": {"hours": 4211},
+  "power_cycle_count": 312,
+  "temperature": {"current": 35}
+}

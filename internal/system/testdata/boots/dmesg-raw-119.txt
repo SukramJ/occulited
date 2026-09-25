@@ -1,0 +1,12 @@
+<5>[    0.000000] Linux version 6.18.48 (builder@buildhost) (x86_64-buildroot-linux-gnu-gcc.br_real (Buildroot -gff2ab3030-dirty) 14.4.0, GNU ld (GNU Binutils) 2.45.1) #1 SMP PREEMPT Tue Sep  8 01:06:00 CEST 2026
+<6>[    0.000000] Command line: BOOT_IMAGE=/zImage root=PARTUUID=deedbeef-02 rootfstype=ext4 fsck.repair=yes console=tty2 ro rootwait rootdelay=5 init_on_alloc=1 init_on_free=1 slab_nomerge net.ifnames=0 quiet loglevel=0
+<6>[    0.000000] x86/CPU: Model not found in latest microcode list
+<6>[    0.000000] BIOS-provided physical RAM map:
+<6>[    0.000000] BIOS-e820: [mem 0x0000000000000000-0x000000000009fbff] usable
+<6>[    0.000000] BIOS-e820: [mem 0x000000000009fc00-0x000000000009ffff] reserved
+<6>[    0.000000] BIOS-e820: [mem 0x00000000000f0000-0x00000000000fffff] reserved
+<6>[    0.000000] BIOS-e820: [mem 0x0000000000100000-0x000000003ffd9fff] usable
+<6>[    0.000000] BIOS-e820: [mem 0x000000003ffda000-0x000000003fffffff] reserved
+<6>[    0.000000] BIOS-e820: [mem 0x00000000feffc000-0x00000000feffffff] reserved
+<6>[    0.000000] BIOS-e820: [mem 0x00000000fffc0000-0x00000000ffffffff] reserved
+<6>[    0.000000] NX (Execute Disable) protection: active

@@ -1,0 +1,26 @@
+{
+  "_note": "Expected seconds per phase of a user-initiated reboot, per product (/VERSION's PLATFORM) and kind. down: the request until the box stops answering; http: until lighttpd answers; ui: until occulited answers; ready: until rfd and hmipserver are up. A product not listed uses the one named by default. Read by occulited (go:embed) and by the web UI and the lighttpd waiting page at npm run build. Measured 2026-09-12 (three plain reboots per box, adjusted for the new boot order); rpi5 is a guess.",
+  "default": "rpi4",
+  "products": {
+    "rpi3": {
+      "reboot": {"down": 9, "http": 35, "ui": 2, "ready": 50},
+      "update": {"down": 9, "http": 655, "ui": 2, "ready": 50},
+      "restore": {"down": 9, "http": 655, "ui": 2, "ready": 50}
+    },
+    "rpi4": {
+      "reboot": {"down": 5, "http": 42, "ui": 3, "ready": 48},
+      "update": {"down": 5, "http": 382, "ui": 3, "ready": 48},
+      "restore": {"down": 5, "http": 382, "ui": 3, "ready": 48}
+    },
+    "rpi5": {
+      "reboot": {"down": 3, "http": 25, "ui": 2, "ready": 29},
+      "update": {"down": 3, "http": 230, "ui": 2, "ready": 29},
+      "restore": {"down": 3, "http": 230, "ui": 2, "ready": 29}
+    },
+    "ova": {
+      "reboot": {"down": 5, "http": 31, "ui": 1, "ready": 19},
+      "update": {"down": 5, "http": 116, "ui": 1, "ready": 19},
+      "restore": {"down": 5, "http": 116, "ui": 1, "ready": 19}
+    }
+  }
+}

@@ -1,0 +1,208 @@
+package system
+
+import (
+	"archive/tar"
+	"archive/zip"
+	"bytes"
+	"compress/gzip"
+	"context"
+	"encoding/binary"
+	"os"
+	"strings"
+	"testing"
+)
+
+func zipPadded(names ...string) []byte {
+	var b bytes.Buffer
+	w := zip.NewWriter(&b)
+	for _, n := range names {
+		f, _ := w.Create(n)
+		_, _ = f.Write(bytes.Repeat([]byte("x"), 400))
+	}
+	_ = w.Close()
+	return b.Bytes()
+}
+
+// noise is incompressible enough to keep a test archive above the 512-byte minimum
+func noise(n int) []byte {
+	b := make([]byte, n)
+	x := uint32(2463534242)
+	for i := range b {
+		x ^= x << 13
+		x ^= x >> 17
+		x ^= x << 5
+		b[i] = byte(x)
+	}
+	return b
+}
+
+func tgzWith(names ...string) []byte {
+	var b bytes.Buffer
+	gz := gzip.NewWriter(&b)
+	tw := tar.NewWriter(gz)
+	for _, n := range names {
+		_ = tw.WriteHeader(&tar.Header{Name: n, Size: 1500, Mode: 0o644})
+		_, _ = tw.Write(noise(1500))
+	}
+	_ = tw.Close()
+	_ = gz.Close()
+	return b.Bytes()
+}
+
+func mbrImage(parts int, thirdType byte) []byte {
+	b := make([]byte, 4096)
+	for i := 0; i < parts; i++ {
+		e := b[446+16*i:]
+		e[4] = 0x0c
+		if i == 2 {
+			e[4] = thirdType
+		}
+		binary.LittleEndian.PutUint32(e[8:], uint32(2048*(i+1)))
+		binary.LittleEndian.PutUint32(e[12:], 2048)
+	}
+	b[510], b[511] = 0x55, 0xAA
+	return b
+}
+
+func TestStageSystemUpdate(t *testing.T) {
+	r := rootWith(t, map[string]string{"VERSION": "VERSION=3.89.8.20260719\nPRODUCT=ova\nPLATFORM=ova\n", "usr/local/.keep": ""})
+	if r.StagedSystemUpdate() != nil {
+		t.Fatal("nothing staged yet")
+	}
+	u, err := r.StageSystemUpdate(context.Background(), "OpenCCU-3.89.8.20260906-x86_64-ova.zip", 0, bytes.NewReader(zipPadded("OpenCCU-3.89.8.20260906-x86_64-ova.img", "EULA.en", "EULA.de", "LICENSE")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Kind != "zip" || u.Version != "3.89.8.20260906" || u.Board != "x86_64-ova" || u.Warning != "" || u.RecoveryArmed {
+		t.Fatalf("%+v", u)
+	}
+	link, _ := os.Readlink(r.join("/usr/local/.firmwareUpdate"))
+	if link != "/usr/local/tmp/OpenCCU-3.89.8.20260906-x86_64-ova.zip" {
+		t.Errorf("link %q", link)
+	}
+	got := r.StagedSystemUpdate()
+	if got == nil || got.File != u.File || got.Kind != "zip" || got.Size == 0 {
+		t.Fatalf("%+v", got)
+	}
+	if err := r.ArmSystemUpdate(); err != nil {
+		t.Fatal(err)
+	}
+	if !r.StagedSystemUpdate().RecoveryArmed {
+		t.Error("not armed")
+	}
+	// a second upload replaces the first and clears the marker
+	u, err = r.StageSystemUpdate(context.Background(), "../../OpenCCU-3.89.8.20260906-rpi4.img", 0, bytes.NewReader(mbrImage(3, 0x83)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Kind != "image" || u.Board != "rpi4" || !strings.Contains(u.Warning, "refuse") || u.RecoveryArmed {
+		t.Fatalf("%+v", u)
+	}
+	if _, err := os.Stat(r.join("/usr/local/tmp/OpenCCU-3.89.8.20260906-x86_64-ova.zip")); !os.IsNotExist(err) {
+		t.Error("old file kept")
+	}
+	if _, err := os.Stat(r.join("/usr/local/.recoveryMode")); !os.IsNotExist(err) {
+		t.Error("marker kept")
+	}
+	r.DiscardSystemUpdate()
+	if r.StagedSystemUpdate() != nil {
+		t.Error("still staged")
+	}
+	if err := r.ArmSystemUpdate(); err == nil {
+		t.Error("armed nothing")
+	}
+}
+
+func TestStageSystemUpdateRejects(t *testing.T) {
+	r := rootWith(t, map[string]string{"usr/local/.keep": ""})
+	for name, body := range map[string][]byte{
+		"zip without EULA":  zipPadded("OpenCCU-x.img", "LICENSE"),
+		"zip without image": zipPadded("EULA.en", "EULA.de"),
+		"tgz without EULA":  tgzWith("rootfs.ext4"),
+		"two partitions":    mbrImage(2, 0),
+		"text":              bytes.Repeat([]byte("hello\n"), 200),
+		"tiny":              []byte("PK"),
+	} {
+		if _, err := r.StageSystemUpdate(context.Background(), "f", 0, bytes.NewReader(body)); err == nil {
+			t.Errorf("%s accepted", name)
+		}
+		if r.StagedSystemUpdate() != nil {
+			t.Errorf("%s left a link", name)
+		}
+	}
+	u, err := r.StageSystemUpdate(context.Background(), "", 0, bytes.NewReader(tgzWith("EULA.de", "rootfs.ext4")))
+	if err != nil || u.Kind != "tar" || u.File != "firmwareUpdateFile" {
+		t.Errorf("%v %+v", err, u)
+	}
+}
+
+func TestReleaseNames(t *testing.T) {
+	r := rootWith(t, map[string]string{"VERSION": "VERSION=3.89.8.20260719\nPRODUCT=ova\nPLATFORM=ova\nVARIANT=lite\nLITE=0-beta.1\n"})
+	for name, want := range map[string][2]string{
+		"OpenCCU-3.89.8.20260719-lite.1-x86_64-ova.zip":                {"3.89.8.20260719-lite.1", "x86_64-ova"},
+		"OpenCCU-3.89.8.20260719-lite.0-beta.2-x86_64-ova.zip":         {"3.89.8.20260719-lite.0-beta.2", "x86_64-ova"},
+		"OpenCCU-3.89.8.20260719-lite.snapshot.abc1234-x86_64-ova.zip": {"3.89.8.20260719-lite.snapshot.abc1234", "x86_64-ova"},
+		"OpenCCU-3.89.8.20260719-ova.zip":                              {"3.89.8.20260719", "ova"},
+		"OpenCCU-3.89.8.20260719-lite.0-beta.1-ova-lite-systemd.zip":   {"3.89.8.20260719-lite.0-beta.1", "ova-lite-systemd"}, // beta.1, before D-39/D-43
+		"OpenCCU-3.89.8.20260719-lite.0-beta.2-aarch64-rpi3.img":       {"3.89.8.20260719-lite.0-beta.2", "aarch64-rpi3"},
+		// D-44
+		"openccu-lite-x86_64-ova-1.0.0-alpha.0.zip":                  {"1.0.0-alpha.0", "x86_64-ova"},
+		"openccu-lite-aarch64-rpi3-1.0.0-alpha.1-ccu3.tgz":           {"1.0.0-alpha.1", "aarch64-rpi3"},
+		"openccu-lite-aarch64-rpi4-1.2.0.img":                        {"1.2.0", "aarch64-rpi4"},
+		"openccu-lite-x86_64-ova-1.0.0-alpha.0-snapshot.abc1234.zip": {"1.0.0-alpha.0-snapshot.abc1234", "x86_64-ova"},
+		"OpenCCU-3.89.8.20260719-rpi4-lite.img":                      {"3.89.8.20260719", "rpi4-lite"},
+	} {
+		v, b, w := r.describeRelease(name)
+		if v != want[0] || b != want[1] {
+			t.Errorf("%s: %q %q", name, v, b)
+		}
+		// this box is PRODUCT=ova: every ova file is for it, the two Pi ones are not (B-18)
+		wantWarn := !strings.Contains(b, "ova")
+		if (w != "") != wantWarn {
+			t.Errorf("%s: warning %q, wanted one: %v", name, w, wantWarn)
+		}
+	}
+	// the boards whose name and /VERSION disagree on purpose (B-18): upstream's CCU3 update
+	// package out of the rpi3 build, and the D-39/D-43 product names on top of D-31's /VERSION
+	for _, c := range []struct {
+		board, product string
+		match          bool
+	}{
+		{"ccu3", "rpi3", true},
+		{"aarch64-rpi3", "rpi3", true},
+		{"aarch64-rpi3", "rpi4", false}, // the two board images are not interchangeable
+		{"aarch64-rpi4", "rpi4", true},
+		{"aarch64-rpi4", "rpi3", false},
+		{"x86_64-ova", "ova", true},
+		{"aarch64", "rpi4", false},         // D-43: no product is called that any more
+		{"generic-aarch64", "rpi4", false}, // an alias never applies to a board that contains it
+		{"rpi4", "rpi4", true},
+		{"ova-lite-systemd", "ova", true}, // a beta.1 file still names its box
+		{"rpi4-lite", "ova", false},
+	} {
+		if got := boardMatches(c.board, c.product, c.product); got != c.match {
+			t.Errorf("boardMatches(%q, %q) = %v, want %v", c.board, c.product, got, c.match)
+		}
+	}
+	if r.ReadVersion().Full() != "0-beta.1" { // D-44: the LITE line alone is the identity
+		t.Error(r.ReadVersion().Full())
+	}
+}
+
+func TestDetectRootfsBootfs(t *testing.T) {
+	ext := make([]byte, 4096)
+	binary.LittleEndian.PutUint16(ext[1024+0x38:], 0xEF53)
+	copy(ext[1024+0x78:], "rootfs")
+	f := t.TempDir() + "/rootfs.ext4"
+	_ = os.WriteFile(f, ext, 0o644)
+	if k, err := detectUpdateKind(f); err != nil || k != "rootfs" {
+		t.Errorf("%v %s", err, k)
+	}
+	vfat := make([]byte, 4096)
+	copy(vfat[71:], "bootfs     ")
+	vfat[510], vfat[511] = 0x55, 0xAA
+	_ = os.WriteFile(f, vfat, 0o644)
+	if k, err := detectUpdateKind(f); err != nil || k != "bootfs" {
+		t.Errorf("%v %s", err, k)
+	}
+}

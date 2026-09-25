@@ -1,0 +1,35 @@
+{
+  "json_format_version": [
+    1,
+    0
+  ],
+  "smartctl": {
+    "version": [
+      7,
+      5
+    ],
+    "pre_release": false,
+    "svn_revision": "5714",
+    "platform_info": "aarch64-linux-6.18.34",
+    "build_info": "(local build)",
+    "argv": [
+      "smartctl",
+      "-j",
+      "-H",
+      "-A",
+      "-i",
+      "/dev/mmcblk0"
+    ],
+    "messages": [
+      {
+        "string": "/dev/mmcblk0: Unable to detect device type",
+        "severity": "error"
+      }
+    ],
+    "exit_status": 1
+  },
+  "local_time": {
+    "time_t": 1789204019,
+    "asctime": "Sat Sep 12 11:06:59 2026 CEST"
+  }
+}

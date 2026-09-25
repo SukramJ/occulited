@@ -1,0 +1,560 @@
+package system
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/hobbyquaker/occulited/internal/radio"
+)
+
+// The radio connections (task 129 phase 3, D-81, D-82, D-98): which local module each interface
+// process uses. The choices live in the daemons' own files (radio.ReadChoices); a change is
+// written there, then the stack is re-planned the way a flash re-plans it - the daemons stop in
+// the reverse of the boot order, occu-init-rf-hardware runs `occulited radio run` again, and the
+// daemons start in boot order, each skipped by its unit's condition when the new plan does not
+// need it.
+
+const (
+	hmipUserConf = "/etc/config/crRFD/hmip_user.conf"
+	rfdConfPath  = "/etc/config/rfd.conf"
+)
+
+// ErrConnApplyRunning: one change at a time, and none while a flash holds the stack.
+var ErrConnApplyRunning = errors.New("a radio connection change or a coprocessor flash is running")
+
+// ErrConnUnavailable: the box has no plan - the radio stack is not occulited's (an older image,
+// busybox init) or the detection has not run yet.
+var ErrConnUnavailable = errors.New("the radio plan is not available on this system")
+
+// ConfirmRequired is the refusal of a change that takes the local BidCos-RF radio away while
+// devices are paired: the caller repeats it with confirm once the user has seen the list (D-81).
+type ConfirmRequired struct {
+	Devices []BidCosDevice `json:"devices"`
+}
+
+func (e *ConfirmRequired) Error() string {
+	return fmt.Sprintf("%d paired BidCos-RF devices lose the local radio; confirm the change", len(e.Devices))
+}
+
+// BidCosDevice is one paired device as rfd lists it.
+type BidCosDevice struct {
+	Address string `json:"address"`
+	Type    string `json:"type"`
+}
+
+// ConnApply is one change, in flight or finished.
+type ConnApply struct {
+	Choices  radio.Choices `json:"choices"`
+	Previous radio.Choices `json:"previous"`
+	Started  time.Time     `json:"started"`
+	Finished *time.Time    `json:"finished,omitempty"`
+	OK       bool          `json:"ok"`
+	Error    string        `json:"error,omitempty"`
+	Lines    []string      `json:"lines"`
+}
+
+// ConnDaemon is one interface process in the page's terms.
+type ConnDaemon struct {
+	Run    bool   `json:"run"`
+	Node   string `json:"node,omitempty"`
+	Reason string `json:"reason"`
+}
+
+// ConnPlan is the part of a plan the page shows: per process whether it runs, on what and why,
+// the modules in their roles, and a pinned module that is missing.
+type ConnPlan struct {
+	Multimacd     ConnDaemon  `json:"multimacd"`
+	RFD           ConnDaemon  `json:"rfd"`
+	HmIPServer    ConnDaemon  `json:"hmipserver"`
+	HmRF          *radio.Role `json:"hmrf,omitempty"`
+	HmIP          *radio.Role `json:"hmip,omitempty"`
+	RFDLocal      bool        `json:"rfd_local"`
+	RFDUSBAdapter bool        `json:"rfd_usb_adapter"`
+	RFDLANGateway bool        `json:"rfd_lan_gateway"`
+	// HmIPAdvanced: duty cycle, carrier sense and LAN routing (HAP, DRAP) - an RPI-RF-MOD or an
+	// HmIP-RFUSB only, as upstream sets it.
+	HmIPAdvanced  bool     `json:"hmip_advanced"`
+	MissingHmIP   string   `json:"missing_hmip,omitempty"`
+	MissingBidCos string   `json:"missing_bidcos,omitempty"`
+	Interfaces    []string `json:"interfaces"`
+	Notes         []string `json:"notes"`
+}
+
+func connPlan(p radio.Plan) ConnPlan {
+	c := ConnPlan{
+		Multimacd:  ConnDaemon{Run: p.Multimacd.Run, Node: p.Multimacd.Node, Reason: p.Multimacd.Reason},
+		RFD:        ConnDaemon{Run: p.RFD.Run, Node: p.RFD.Node, Reason: p.RFD.Reason},
+		HmIPServer: ConnDaemon{Run: p.HmIPServer.Run, Node: p.HmIPServer.Node, Reason: p.HmIPServer.Reason},
+		HmRF:       p.HmRF, HmIP: p.HmIP, RFDLocal: p.RFDLocal, RFDUSBAdapter: p.RFDUSBAdapter, RFDLANGateway: p.RFDLANGateway,
+		HmIPAdvanced: p.HmIPServerAdvanced, MissingHmIP: p.MissingHmIP, MissingBidCos: p.MissingBidCos,
+		Interfaces: []string{}, Notes: p.Notes,
+	}
+	for _, i := range p.Interfaces {
+		c.Interfaces = append(c.Interfaces, i.Name)
+	}
+	if c.Notes == nil {
+		c.Notes = []string{}
+	}
+	return c
+}
+
+// localBidCos: rfd has a radio of its own - a module through multimacd or the HM-CFG-USB-2.
+func (c ConnPlan) localBidCos() bool { return c.RFD.Run && (c.RFDLocal || c.RFDUSBAdapter) }
+
+// RadioConnStatus is GET /radio/connections.
+type RadioConnStatus struct {
+	Available bool          `json:"available"`
+	Choices   radio.Choices `json:"choices"`
+	Options   radio.Options `json:"options"`
+	// Plan is what the boot's (or the last change's) run decided.
+	Plan *ConnPlan `json:"plan,omitempty"`
+	Mode string    `json:"mode,omitempty"`
+	// HmIPFatal: hmipserver's last start failed on a known fatal error (D-102), e.g. the key server
+	// rejecting the adapter exchange; the unit waits for the next run of the radio stack
+	HmIPFatal *radio.HmIPFatal `json:"hmip_fatal,omitempty"`
+	Running   *ConnApply       `json:"running"`
+	Last      *ConnApply       `json:"last"`
+}
+
+// ConnPreview is what a change would give: the new plan, and what it costs.
+type ConnPreview struct {
+	Choices radio.Choices `json:"choices"`
+	Plan    ConnPlan      `json:"plan"`
+	// Changed: the plan differs from the running one in a daemon or its connection.
+	Changed bool `json:"changed"`
+	// Restarts are the units the change stops and starts again (all radio units: the detection
+	// must have the modules free).
+	Restarts []string `json:"restarts"`
+	// BidCosLost: the change takes rfd's local radio away; Devices are the paired ones then.
+	BidCosLost bool           `json:"bidcos_lost"`
+	Devices    []BidCosDevice `json:"devices"`
+	// DevicesError: rfd did not answer, so the list may be incomplete.
+	DevicesError string `json:"devices_error,omitempty"`
+}
+
+// RadioConnections is the service.
+type RadioConnections struct {
+	Root     Root
+	Services ServiceManager
+	Systemd  bool
+	// Firmware is the flash service: no change while a flash runs, no flash while a change does.
+	Firmware *RadioFirmware
+	// BidCosDevices lists rfd's paired devices; nil = not available.
+	BidCosDevices func(ctx context.Context) ([]BidCosDevice, error)
+	// Run executes commands for radio.Load (uname, hostname); nil = exec.
+	Run      radio.Runner
+	StateDir string
+	Log      *slog.Logger
+	Now      func() time.Time
+	// Timeout bounds one change (the stop, the run and hmipserver's start with its readiness).
+	Timeout time.Duration
+
+	mu      sync.Mutex
+	running *ConnApply
+	last    *ConnApply
+}
+
+func (s *RadioConnections) log() *slog.Logger {
+	if s.Log != nil {
+		return s.Log
+	}
+	return slog.Default()
+}
+
+func (s *RadioConnections) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
+}
+
+// Busy: a change is running (the flash service asks).
+func (s *RadioConnections) Busy() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.running != nil
+}
+
+// Load reads the last change and closes one that was in flight when occulited stopped: marked
+// failed, and the radio units started - the daemons are never left stopped by a crash.
+func (s *RadioConnections) Load(ctx context.Context) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var last ConnApply
+	if b, err := os.ReadFile(filepath.Join(s.StateDir, "last.json")); err == nil && json.Unmarshal(b, &last) == nil {
+		s.last = &last
+	}
+	var stale ConnApply
+	if b, err := os.ReadFile(filepath.Join(s.StateDir, "running.json")); err == nil && json.Unmarshal(b, &stale) == nil {
+		now := s.now()
+		stale.Finished, stale.OK = &now, false
+		stale.Error = "occulited was restarted while the change was running; the radio daemons were started"
+		s.last = &stale
+		_ = writeJSONFile(filepath.Join(s.StateDir, "last.json"), &stale)
+		_ = os.Remove(filepath.Join(s.StateDir, "running.json"))
+		s.log().Warn("radio connections: a change was running when occulited stopped; starting the radio daemons")
+		if s.Services != nil {
+			for _, u := range append([]string{RadioDetectionUnit}, radioUnits...) {
+				if _, err := s.Services.Control(ctx, u, "start"); err != nil {
+					s.log().Warn("radio connections: start after the interrupted change failed", "unit", u, "err", err)
+				}
+			}
+		}
+	}
+}
+
+// read returns a file through the helper where occulited may not read it (rfd.conf is 0640
+// root:rfd), and whether it exists.
+func (s *RadioConnections) read(p string) (string, bool) {
+	if _, err := os.Stat(s.Root.join(p)); err != nil {
+		return "", false
+	}
+	return readFile(s.Root.join(p)), true
+}
+
+func (s *RadioConnections) detection() (radio.Detection, bool) {
+	var det radio.Detection
+	b, err := os.ReadFile(s.Root.join(filepath.Join(radio.RunDir, "modules.json")))
+	if err != nil || json.Unmarshal(b, &det) != nil {
+		return det, false
+	}
+	return det, true
+}
+
+// BootPlan is the plan the last radio run wrote, and false when there is none.
+func (s *RadioConnections) BootPlan() (radio.Plan, bool) {
+	if s == nil {
+		return radio.Plan{}, false
+	}
+	return s.bootPlan()
+}
+
+func (s *RadioConnections) bootPlan() (radio.Plan, bool) {
+	var p radio.Plan
+	b, err := os.ReadFile(s.Root.join(filepath.Join(radio.RunDir, "plan.json")))
+	if err != nil || json.Unmarshal(b, &p) != nil {
+		return p, false
+	}
+	return p, true
+}
+
+func (s *RadioConnections) choices() radio.Choices {
+	hu, _ := s.read(hmipUserConf)
+	rc, _ := s.read(rfdConfPath)
+	return radio.ReadChoices(hu, rc)
+}
+
+// Status assembles the answer.
+func (s *RadioConnections) Status() RadioConnStatus {
+	st := RadioConnStatus{Choices: s.choices(), Options: radio.Options{HmIP: []radio.Option{}, BidCos: []radio.Option{}}}
+	det, okDet := s.detection()
+	p, okPlan := s.bootPlan()
+	if okDet && okPlan {
+		st.Available = true
+		st.Options = radio.ChoiceOptions(det)
+		cp := connPlan(p)
+		st.Plan, st.Mode = &cp, p.Mode
+		st.HmIPFatal = radio.ReadHmIPFatal(string(s.Root))
+	}
+	s.mu.Lock()
+	st.Running, st.Last = copyApply(s.running), copyApply(s.last)
+	s.mu.Unlock()
+	return st
+}
+
+func copyApply(a *ConnApply) *ConnApply {
+	if a == nil {
+		return nil
+	}
+	c := *a
+	c.Lines = append([]string{}, a.Lines...)
+	return &c
+}
+
+// plan makes the plan the choices would give, from the boot's detection and today's files.
+func (s *RadioConnections) plan(ctx context.Context, c radio.Choices) (radio.Plan, error) {
+	det, ok := s.detection()
+	if !ok {
+		return radio.Plan{}, ErrConnUnavailable
+	}
+	in := radio.Load(ctx, string(s.Root), s.Run, det)
+	// the daemons' files are not all occulited's to read: through the helper
+	in.RFDConf, in.RFDConfExists = s.read(rfdConfPath)
+	in.HS485DConf, in.HS485DConfExists = s.read("/etc/config/hs485d.conf")
+	in.HmIPUserConf, _ = s.read(hmipUserConf)
+	in.IDs, in.IDsExists = s.read("/etc/config/ids")
+	in.RFDConf = radio.SetBidCosChoice(in.RFDConf, c.BidCos)
+	in.HmIPUserConf = radio.SetHmIPPath(radio.SetHmIPChoice(in.HmIPUserConf, c.HmIP), c.HmIPPath)
+	return radio.MakePlan(in), nil
+}
+
+// validate: auto, none (rfd only) or a detected module that can carry the process.
+func (s *RadioConnections) validate(c radio.Choices) error {
+	det, ok := s.detection()
+	if !ok {
+		return ErrConnUnavailable
+	}
+	o := radio.ChoiceOptions(det)
+	has := func(list []radio.Option, id string) bool {
+		for _, x := range list {
+			if strings.EqualFold(x.ID, id) || (x.SGTIN != "" && strings.EqualFold(x.SGTIN, id)) {
+				return true
+			}
+		}
+		return false
+	}
+	current := s.choices()
+	switch {
+	case c.HmIP == radio.ChoiceAuto, c.HmIP == current.HmIP:
+		// auto, or unchanged (a pinned module that is missing now may stay pinned)
+	case c.HmIP == radio.BidCosNone:
+		return fmt.Errorf("hmip: HmIP cannot be switched off while a module can carry it")
+	case !radio.ValidIdentity(c.HmIP):
+		return fmt.Errorf("hmip: %q is not a module serial or SGTIN", c.HmIP)
+	case !has(o.HmIP, c.HmIP):
+		return fmt.Errorf("hmip: no detected module %s can carry HmIP", c.HmIP)
+	}
+	switch c.HmIPPath {
+	case radio.ChoiceAuto, radio.PathDirect, radio.PathMultimacd:
+	default:
+		return fmt.Errorf("hmip_path: %q is not direct, multimacd or automatic", c.HmIPPath)
+	}
+	switch {
+	case c.BidCos == radio.ChoiceAuto, c.BidCos == radio.BidCosNone, c.BidCos == current.BidCos:
+	case !radio.ValidIdentity(c.BidCos):
+		return fmt.Errorf("bidcos: %q is not a module serial", c.BidCos)
+	case !has(o.BidCos, c.BidCos):
+		return fmt.Errorf("bidcos: no detected module %s can carry BidCos-RF", c.BidCos)
+	}
+	return nil
+}
+
+// Preview says what the choices would give.
+func (s *RadioConnections) Preview(ctx context.Context, c radio.Choices) (ConnPreview, error) {
+	if err := s.validate(c); err != nil {
+		return ConnPreview{}, err
+	}
+	np, err := s.plan(ctx, c)
+	if err != nil {
+		return ConnPreview{}, err
+	}
+	if np.Conflict != "" {
+		return ConnPreview{}, errors.New(np.Conflict)
+	}
+	pv := ConnPreview{Choices: c, Plan: connPlan(np), Restarts: []string{}, Devices: []BidCosDevice{}}
+	cur, ok := s.bootPlan()
+	if !ok {
+		return pv, ErrConnUnavailable
+	}
+	cp := connPlan(cur)
+	pv.Changed = cp.Multimacd.Run != pv.Plan.Multimacd.Run || cp.Multimacd.Node != pv.Plan.Multimacd.Node ||
+		cp.RFD.Run != pv.Plan.RFD.Run || cp.RFD.Node != pv.Plan.RFD.Node || cp.HmIPServer.Node != pv.Plan.HmIPServer.Node ||
+		cp.RFDLocal != pv.Plan.RFDLocal || cp.RFDUSBAdapter != pv.Plan.RFDUSBAdapter || c != s.choices()
+	if pv.Changed {
+		pv.Restarts = append(pv.Restarts, radioUnits...)
+	}
+	pv.BidCosLost = cp.localBidCos() && !pv.Plan.localBidCos()
+	if pv.BidCosLost && s.BidCosDevices != nil {
+		devs, err := s.BidCosDevices(ctx)
+		if err != nil {
+			pv.DevicesError = err.Error()
+		}
+		if devs != nil {
+			pv.Devices = devs
+		}
+	}
+	return pv, nil
+}
+
+// Apply writes the choices and re-plans the stack in the background. A change that takes the
+// local BidCos-RF radio away while devices are paired needs confirm (a *ConfirmRequired
+// otherwise).
+func (s *RadioConnections) Apply(ctx context.Context, c radio.Choices, confirm bool) (*ConnApply, error) {
+	if s.Firmware != nil && s.Firmware.Status().Running != nil {
+		return nil, ErrConnApplyRunning
+	}
+	pv, err := s.Preview(ctx, c)
+	if err != nil {
+		return nil, err
+	}
+	if pv.BidCosLost && !confirm && (len(pv.Devices) > 0 || pv.DevicesError != "") {
+		return nil, &ConfirmRequired{Devices: pv.Devices}
+	}
+	s.mu.Lock()
+	if s.running != nil {
+		s.mu.Unlock()
+		return nil, ErrConnApplyRunning
+	}
+	a := &ConnApply{Choices: c, Previous: s.choices(), Started: s.now(), Lines: []string{}}
+	s.running = a
+	s.mu.Unlock()
+	if err := s.writeChoices(a.Previous, c); err != nil {
+		s.finish(a, err)
+		return copyApply(a), err
+	}
+	s.line(a, fmt.Sprintf("choices written: HmIP %s (%s), BidCos-RF %s", orAuto(c.HmIP), orAuto(c.HmIPPath), orAuto(c.BidCos)))
+	_ = writeJSONFile(filepath.Join(s.StateDir, "running.json"), a)
+	// the answer's copy is taken before the attempt runs: from here on apply appends its lines
+	s.mu.Lock()
+	out := copyApply(a)
+	s.mu.Unlock()
+	go s.apply(a)
+	return out, nil
+}
+
+func orAuto(v string) string {
+	if v == "" {
+		return "auto"
+	}
+	return v
+}
+
+// writeChoices writes the files whose choice changed.
+func (s *RadioConnections) writeChoices(prev, c radio.Choices) error {
+	if c.BidCos != prev.BidCos {
+		conf, ok := s.read(rfdConfPath)
+		if !ok {
+			return fmt.Errorf("%s is missing", rfdConfPath)
+		}
+		if conf == "" {
+			return fmt.Errorf("%s is empty or unreadable", rfdConfPath)
+		}
+		// 0640 root:rfd is restored by the run that follows
+		if err := writeFileAtomic(s.Root.join(rfdConfPath), []byte(radio.SetBidCosChoice(conf, c.BidCos)), 0o640); err != nil {
+			return fmt.Errorf("writing %s: %w", rfdConfPath, err)
+		}
+	}
+	if c.HmIP != prev.HmIP || c.HmIPPath != prev.HmIPPath {
+		conf, _ := s.read(hmipUserConf)
+		conf = radio.SetHmIPPath(radio.SetHmIPChoice(conf, c.HmIP), c.HmIPPath)
+		if err := writeFileAtomic(s.Root.join(hmipUserConf), []byte(conf), hmipUserConfMode(conf)); err != nil {
+			return fmt.Errorf("writing %s: %w", hmipUserConf, err)
+		}
+	}
+	return nil
+}
+
+func (s *RadioConnections) line(a *ConnApply, l string) {
+	s.mu.Lock()
+	a.Lines = append(a.Lines, s.now().Format("15:04:05")+" "+l)
+	s.mu.Unlock()
+	s.log().Info("radio connections: " + l)
+}
+
+func (s *RadioConnections) finish(a *ConnApply, err error) {
+	s.mu.Lock()
+	now := s.now()
+	a.Finished, a.OK = &now, err == nil
+	if err != nil {
+		a.Error = err.Error()
+	}
+	s.running, s.last = nil, a
+	last := copyApply(a)
+	s.mu.Unlock()
+	_ = writeJSONFile(filepath.Join(s.StateDir, "last.json"), last)
+	_ = os.Remove(filepath.Join(s.StateDir, "running.json"))
+	if err != nil {
+		s.log().Warn("radio connections: the change failed", "err", err)
+	}
+}
+
+// apply is the orchestration: stop, re-run the detection and the plan, start.
+func (s *RadioConnections) apply(a *ConnApply) {
+	timeout := s.Timeout
+	if timeout == 0 {
+		timeout = 10 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	var err error
+	defer func() { s.finish(a, err) }()
+	// the daemons stop in the reverse of the boot order: the run refuses while one holds a module
+	for i := len(radioUnits) - 1; i >= 0; i-- {
+		if _, cerr := s.Services.Control(ctx, radioUnits[i], "stop"); cerr != nil {
+			err = fmt.Errorf("stopping %s: %w", radioUnits[i], cerr)
+			s.startAll(ctx, a)
+			return
+		}
+		s.line(a, radioUnits[i]+" stopped")
+	}
+	s.line(a, "re-running the radio detection and the plan")
+	if _, rerr := s.Services.Control(ctx, RadioDetectionUnit, "restart"); rerr != nil {
+		err = fmt.Errorf("the detection and plan did not run: %w", rerr)
+		s.startAll(ctx, a)
+		return
+	}
+	s.line(a, "detection and plan done")
+	if serr := s.startAll(ctx, a); serr != nil {
+		err = serr
+		return
+	}
+	if p, ok := s.bootPlan(); ok {
+		s.line(a, "now: "+summary(connPlan(p)))
+	}
+}
+
+// startAll starts the radio units in boot order; a unit the plan does not need is skipped by its
+// condition and ends inactive, not failed.
+func (s *RadioConnections) startAll(ctx context.Context, a *ConnApply) error {
+	var first error
+	for _, u := range radioUnits {
+		if _, err := s.Services.Control(ctx, u, "start"); err != nil {
+			s.line(a, "starting "+u+" failed: "+err.Error())
+			if first == nil {
+				first = fmt.Errorf("%s did not start: %w", u, err)
+			}
+			continue
+		}
+		s.line(a, u+" started (or skipped: not needed by the plan)")
+	}
+	return first
+}
+
+// summary is one line per plan: which daemon runs on what.
+func summary(c ConnPlan) string {
+	var parts []string
+	for _, d := range []struct {
+		name string
+		d    ConnDaemon
+	}{{"multimacd", c.Multimacd}, {"rfd", c.RFD}, {"hmipserver", c.HmIPServer}} {
+		switch {
+		case !d.d.Run:
+			parts = append(parts, d.name+" off")
+		case d.d.Node != "":
+			parts = append(parts, d.name+" on "+d.d.Node)
+		default:
+			parts = append(parts, d.name+" on")
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+// OverlayServiceNotes gives each skipped interface daemon the plan's reason, so the Services page
+// says why it is off instead of only that a condition was not met.
+func (s *RadioConnections) OverlayServiceNotes(list []Service) []Service {
+	if s == nil {
+		return list
+	}
+	p, ok := s.bootPlan()
+	if !ok {
+		return list
+	}
+	why := map[string]radio.Daemon{"multimacd": p.Multimacd, "rfd": p.RFD, "hmipserver": p.HmIPServer, "hs485d": p.HS485D, "hmlangw": p.Hmlangw}
+	for i := range list {
+		if d, ok := why[list[i].ID]; ok && list[i].Skipped && !d.Run && d.Reason != "" {
+			list[i].Note = d.Reason
+		}
+	}
+	return list
+}

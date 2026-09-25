@@ -1,0 +1,34 @@
+The time when unit became active or started is printed after the "@" character.
+The time the unit took to start is printed after the "+" character.
+
+multi-user.target @1min 37.793s
+└─occu-boot-message.service @1min 34.744s +3.046s
+  └─occu-leds.service @1min 34.514s +203ms
+    └─addons.target @1min 34.510s
+      └─addon-redmatic.service @1min 1.885s +32.623s
+        └─addon-hmm.service @1min 1.716s +165ms
+          └─hmipserver.service @37.542s +24.167s
+            └─multimacd.service @35.357s +2.181s
+              └─occu-update-rf-hardware.service @35.280s +69ms
+                └─occu-init-rf-hardware.service @14.095s +21.177s
+                  └─lighttpd.service @13.323s +768ms
+                    └─network.target @13.317s
+                      └─occu-network.service @5.626s +7.690s
+                        └─ca-certificates.service @3.941s +1.681s
+                          └─occu-init-system.service @3.668s +263ms
+                            └─occu-init-rtc.service @3.579s +85ms
+                              └─occu-zram-swap.service @3.483s +89ms
+                                └─occu-init-host.service @3.266s +213ms
+                                  └─occu-watchdog-marker.service @3.158s +103ms
+                                    └─basic.target @3.126s
+                                      └─sockets.target @3.126s
+                                        └─sshd-unix-local.socket @3.122s +3ms
+                                          └─sysinit.target @3.121s
+                                            └─occu-ldconfig.service @2.583s +537ms
+                                              └─systemd-tmpfiles-setup.service @2.482s +96ms
+                                                └─systemd-journal-flush.service @2.432s +46ms
+                                                  └─systemd-journald.service @2.150s +278ms
+                                                    └─occu-machine-id.service @2.040s +77ms
+                                                      └─usr-local.mount @1.894s +133ms
+                                                        └─systemd-fsck@dev-disk-by\x2dlabel-userfs.service @1.718s +164ms
+                                                          └─dev-disk-by\x2dlabel-userfs.device @1.707s

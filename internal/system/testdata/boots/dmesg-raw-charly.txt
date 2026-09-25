@@ -1,0 +1,12 @@
+<6>[    0.000000] Booting Linux on physical CPU 0x0000000000 [0x410fd034]
+<5>[    0.000000] Linux version 6.18.34 (builder@buildhost) (aarch64-buildroot-linux-gnu-gcc.br_real (Buildroot -gd567f9511) 14.4.0, GNU ld (GNU Binutils) 2.45.1) #1 SMP PREEMPT Mon Sep  7 20:29:04 CEST 2026
+<6>[    0.000000] KASLR enabled
+<5>[    0.000000] random: crng init done
+<6>[    0.000000] Machine model: Raspberry Pi 3 Model B Rev 1.2
+<6>[    0.000000] efi: UEFI not found.
+<6>[    0.000000] Reserved memory: created CMA memory pool at 0x000000002c800000, size 256 MiB
+<6>[    0.000000] OF: reserved mem: initialized node linux,cma, compatible id shared-dma-pool
+<6>[    0.000000] OF: reserved mem: 0x000000002c800000..0x000000003c7fffff (262144 KiB) map reusable linux,cma
+<6>[    0.000000] NUMA: Faking a node at [mem 0x0000000000000000-0x000000003dffffff]
+<6>[    0.000000] NODE_DATA(0) allocated [mem 0x3dbe9a80-0x3dbec7ff]
+<6>[    0.000000] Zone ranges:

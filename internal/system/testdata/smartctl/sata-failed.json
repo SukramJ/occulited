@@ -1,0 +1,30 @@
+{
+  "json_format_version": [1, 0],
+  "smartctl": {
+    "version": [7, 5],
+    "argv": ["smartctl", "-j", "-H", "-A", "-i", "/dev/sdb"],
+    "messages": [
+      {"string": "SMART overall-health self-assessment test result: FAILED!", "severity": "warning"}
+    ],
+    "exit_status": 8
+  },
+  "device": {"name": "/dev/sdb", "info_name": "/dev/sdb [SAT]", "type": "sat", "protocol": "ATA"},
+  "model_name": "KINGSTON SA400S37240G",
+  "serial_number": "50026B0000000000",
+  "firmware_version": "SBFKB1D2",
+  "user_capacity": {"blocks": 468862128, "bytes": 240057409536},
+  "rotation_rate": 0,
+  "smart_support": {"available": true, "enabled": true},
+  "smart_status": {"passed": false},
+  "ata_smart_attributes": {
+    "revision": 1,
+    "table": [
+      {"id": 5, "name": "Reallocated_Sector_Ct", "value": 1, "worst": 1, "thresh": 10, "when_failed": "now", "raw": {"value": 1520, "string": "1520"}},
+      {"id": 9, "name": "Power_On_Hours", "value": 100, "worst": 100, "thresh": 0, "when_failed": "", "raw": {"value": 31022, "string": "31022"}},
+      {"id": 197, "name": "Current_Pending_Sector", "value": 100, "worst": 100, "thresh": 0, "when_failed": "", "raw": {"value": 16, "string": "16"}},
+      {"id": 231, "name": "SSD_Life_Left", "value": 12, "worst": 12, "thresh": 0, "when_failed": "", "raw": {"value": 12, "string": "12"}}
+    ]
+  },
+  "power_on_time": {"hours": 31022},
+  "temperature": {"current": 41}
+}

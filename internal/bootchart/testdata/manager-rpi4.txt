@@ -1,0 +1,12 @@
+KernelTimestamp=Thu 1970-01-01 01:00:00 CET
+KernelTimestampMonotonic=0
+InitRDTimestamp=
+InitRDTimestampMonotonic=0
+UserspaceTimestamp=Thu 1970-01-01 01:00:06 CET
+UserspaceTimestampMonotonic=6661784
+FinishTimestamp=Sat 2026-09-12 19:02:47 CEST
+FinishTimestampMonotonic=104456118
+SecurityStartTimestampMonotonic=6712111
+GeneratorsStartTimestampMonotonic=6840450
+UnitsLoadStartTimestampMonotonic=6929196
+UnitsLoadFinishTimestampMonotonic=7071639

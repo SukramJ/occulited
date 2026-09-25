@@ -1,0 +1,12 @@
+KernelTimestamp=Sat 2026-09-12 18:57:31 CEST
+KernelTimestampMonotonic=0
+InitRDTimestamp=
+InitRDTimestampMonotonic=0
+UserspaceTimestamp=Sat 2026-09-12 18:57:38 CEST
+UserspaceTimestampMonotonic=6380673
+FinishTimestamp=Sat 2026-09-12 18:58:45 CEST
+FinishTimestampMonotonic=73643085
+SecurityStartTimestampMonotonic=6381563
+GeneratorsStartTimestampMonotonic=6437867
+UnitsLoadStartTimestampMonotonic=6464869
+UnitsLoadFinishTimestampMonotonic=6526113
