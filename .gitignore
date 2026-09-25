@@ -1,0 +1,8 @@
+/bin/
+/dist/
+*.test
+*.out
+/ui/node_modules
+/ui/dist/
+# internal/ui/dist is committed: the buildroot package builds occulited from a source archive and
+# must not need Node; CI rebuilds it and fails when the committed copy is stale

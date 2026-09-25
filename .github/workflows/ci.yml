@@ -1,0 +1,92 @@
+# openccu-lite: CI for occulited. Runs on the project's own self-hosted runner (host mode) on the
+# private forge the project is developed on. On GitHub it does not run: no self-hosted runner is
+# attached to the public repository (see the job's `if`); a workflow for GitHub-hosted runners is
+# a separate file when there is one.
+name: ci
+
+on:
+  schedule:
+    - cron: '17 4 * * *'
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    if: github.event_name != 'schedule' && github.server_url != 'https://github.com'
+    runs-on: buildroot
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: false
+      - name: Go
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@2026.2.1
+          "$(go env GOPATH)/bin/staticcheck" ./...
+          go version
+          test -z "$(gofmt -l .)" || { gofmt -l .; echo "gofmt"; exit 1; }
+          go vet ./...
+          go test -cover ./...
+      # Its own step so a data race is unmistakable in the log rather than buried in the run
+      # above, and because it is the slow one. It would have caught the race fixed on 2026-09-06.
+      - name: Go, with the race detector
+        run: go test -race ./...
+      - name: UI
+        working-directory: ui
+        run: |
+          node --version
+          npm ci --no-audit --no-fund
+          npx svelte-check --tsconfig ./tsconfig.json
+          npm run build
+      - name: Every string is in German (D-12)
+        run: python3 scripts/i18n-check.py
+      - name: User-facing text says "the system", not "the box" (task 160)
+        run: python3 scripts/wording-check.py
+      - name: svelte-check
+        working-directory: ui
+        run: npm run check
+      - name: The UI in a browser (task 14)
+        working-directory: ui
+        # the runner is a host executor (user builder, no sudo): Chromium's OS libraries were
+        # installed there once as root (`npx playwright install-deps chromium`); the browser
+        # itself lands in builder's ~/.cache/ms-playwright and is a no-op after the first run
+        # a cancelled run leaves the stub behind on the host executor (Playwright's webServer is
+        # not a child the runner kills), and the next run then finds 127.0.0.1:8799 taken
+        run: |
+          for p in $(pgrep -u "$(id -un)" -f test/stub/server.mjs || true); do kill "$p" || true; done
+          npx playwright install chromium
+          npx playwright test
+      - name: Playwright report
+        # Gitea's artifact service does not speak upload-artifact@v4's protocol, so the upload
+        # fails after the tests have passed; the step must not decide the job.
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: ui/playwright-report
+          retention-days: 7
+
+      - name: Committed UI is fresh
+        run: |
+          git status --porcelain internal/ui/dist
+          test -z "$(git status --porcelain internal/ui/dist)" || { echo "internal/ui/dist differs from a fresh build: run 'cd ui && npm run build' and commit"; exit 1; }
+      - name: Static cross-builds
+        run: |
+          scripts/build.sh
+          ls -la dist/
+      - name: Conformance corpus is intact
+        run: |
+          python3 - <<'PY'
+          import json, glob
+          n = 0
+          for f in glob.glob('fixtures/**/*.json', recursive=True):
+              json.load(open(f)); n += 1
+          print(n, 'fixture files parse')
+          PY
