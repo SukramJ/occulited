@@ -1,0 +1,57 @@
+# openccu-lite: the root half of occulited. Listens on /run/occulite/helper.sock, which
+# only the occulite group may open, and performs the enumerated privileged operations the
+# daemon asks for (internal/priv: the firmware's scripts, writes under /etc/config, staging an
+# update, addon users). Everything else is refused and logged.
+[Unit]
+StartLimitIntervalSec=0
+Description=openccu-lite privilege helper (occulited helper)
+Documentation=https://github.com/hobbyquaker/openccu-lite
+Before=occulited.service
+# after the userfs is final: on the first boot the firmware formats it (factory reset), and
+# S06InitSystem's twin creates /usr/local/etc from the templates - the state dir comes after
+RequiresMountsFor=/usr/local
+After=local-fs.target occu-factory-reset.service occu-backup-restore.service occu-init-system.service
+
+[Service]
+Type=simple
+ExecStartPre=/bin/mkdir -p /run/occulite /usr/local/etc/occulite
+# the unprivileged daemon's state directory (in every backup): owned by occulite, 0711 so the
+# local token inside stays reachable for addons without listing the rest
+ExecStartPre=/bin/chown -R occulite:occulite /usr/local/etc/occulite
+ExecStartPre=/bin/chmod 0711 /usr/local/etc/occulite
+ExecStart=/usr/bin/occulited helper --socket /run/occulite/helper.sock --group occulite
+# essential: always back, with backoff instead of a tight loop: 2 s doubling to 5 min,
+# never giving up
+Restart=always
+RestartSec=2
+RestartSteps=8
+RestartMaxDelaySec=300
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=occulited-helper
+Environment=SYSTEMD_COLORS=0 SYSTEMD_PAGER=
+ProtectHome=yes
+PrivateTmp=no
+# Root by design, and so is most of what it runs: install_addon, the backup scripts, the rc.d
+# scripts, systemctl, modprobe (the LED pattern trigger), hwclock, ip, reboot. What can go
+# anyway, because no operation and none of the scripts needs it: realtime scheduling, a
+# personality change, new namespaces, the debugging, CPU-emulation, obsolete and swap syscall
+# groups, a writable cgroup tree, and the capabilities below. Not SystemCallArchitectures=native:
+# the helper starts addon programs, and an addon may ship 32-bit binaries (the image carries
+# /lib32 for them). Not RestrictSUIDSGID=: an installer may set a mode the helper does not know.
+RestrictRealtime=yes
+LockPersonality=yes
+RestrictNamespaces=yes
+SystemCallFilter=~@cpu-emulation @debug @obsolete @swap
+# ... all but pidfd_getfd, which an allow line after the deny line takes out of the set again:
+# a callback listener that takes rfd's or hmipserver's call and never answers holds that daemon
+# for every client until the connection ends, and the kernel has no
+# SOCK_DESTROY - so the helper's `occulited rpc-drop` child takes a duplicate of the daemon's own
+# socket to that listener and shuts it down. Only that one call of @debug: no ptrace, no reading
+# another process's memory.
+SystemCallFilter=pidfd_getfd
+ProtectControlGroups=yes
+CapabilityBoundingSet=~CAP_BPF CAP_PERFMON CAP_AUDIT_CONTROL CAP_AUDIT_READ CAP_AUDIT_WRITE CAP_MAC_ADMIN CAP_MAC_OVERRIDE CAP_SYS_PACCT CAP_WAKE_ALARM CAP_BLOCK_SUSPEND CAP_LINUX_IMMUTABLE CAP_SYS_TTY_CONFIG CAP_LEASE CAP_CHECKPOINT_RESTORE
+
+[Install]
+WantedBy=multi-user.target

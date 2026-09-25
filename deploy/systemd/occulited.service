@@ -1,0 +1,93 @@
+# openccu-lite: the system service under systemd. Installed by the fork's
+# package/occulited; every product is systemd, the busybox init script is gone.
+# Runs as the occulite user; root work goes through occulited-helper.service.
+[Unit]
+StartLimitIntervalSec=0
+Description=openccu-lite system service (occulited)
+Documentation=https://github.com/hobbyquaker/openccu-lite
+# occu-etc-writable makes /etc/passwd and /etc/group writable, which the confined-addon
+# policy switch needs before it can call adduser through the helper. After= but not Requires=:
+# a box whose addons all run as root has no use for it, and the admin interface must come up
+# either way - a daemon that refuses to start because a user could not be created is worse than
+# one that reports the failure on the page.
+#
+# Not Before=lighttpd: lighttpd starts right after the network beside this daemon, and answers with
+# its waiting page until this one listens.
+After=network.target occulited-helper.service occu-etc-writable.service
+Requires=occulited-helper.service
+Before=addons.target
+Wants=lighttpd.service
+
+[Service]
+Type=simple
+User=occulite
+Group=occulite
+# the journal for the Log page, the addon users' files for the policy switch
+SupplementaryGroups=systemd-journal
+# The directories the unprivileged daemon owns exist before the sandbox is built: the session
+# mirror and the legacy alias mirror through RuntimeDirectory= (0711: the gate and
+# addon CGIs open a sid they hold, nobody lists), the state dir through tmpfiles.d/occulited.conf
+# (in every backup). An ExecStartPre cannot do it - ProtectSystem=strict needs ReadWritePaths= to
+# exist first. occulite/wpa is the daemon's end of wpa_supplicant's control protocol.
+RuntimeDirectory=occulite/sessions occulite/legacy-sessions occulite/wpa
+RuntimeDirectoryMode=0711
+RuntimeDirectoryPreserve=yes
+ExecStart=/usr/bin/occulited --config /usr/local/etc/occulite/occulited.json --session-dir /run/occulite/sessions
+# essential: always back, with backoff instead of a tight loop: 2 s doubling to 5 min,
+# never giving up
+Restart=always
+RestartSec=2
+RestartSteps=8
+RestartMaxDelaySec=300
+# stdout/stderr go to the journal. occulited sees that ($JOURNAL_STREAM) and writes its own lines over
+# journald's native protocol: the message alone, the real priority, the area as a field.
+# stderr keeps what the runtime prints itself (a panic).
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=occulited
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/usr/local/etc/occulite /run/occulite/sessions /run/occulite/legacy-sessions
+PrivateTmp=yes
+# The sandbox. Everything root does for the daemon goes through occulited-helper.service, so
+# this process and the programs it starts (journalctl, systemctl's read-only verbs,
+# systemd-analyze, chronyc, dmesg, busybox mkpasswd and uname) need no capability, no device
+# node beyond the pseudo ones, no syscall outside systemd's @system-service set and no socket
+# family beyond unix, IPv4/IPv6 and netlink (net.Interfaces for the Network page and the
+# discovery responders). The seccomp-backed lines are enforced since systemd is built with
+# libseccomp; a blocked syscall kills the process with SIGSYS ("Bad system call" in the
+# journal) rather than failing quietly, which is what makes a gap visible. syslog(2) is allowed
+# by name so that dmesg keeps failing with EPERM as it does today (no CAP_SYSLOG, dmesg_restrict)
+# instead of a signal; the Log page's kernel source reads the journal then. No ~@privileged
+# line: it would take @setuid away again, and busybox, setuid root, drops that privilege with
+# setresuid/setresgid at every applet's start (mkpasswd, uname). No ~@resources line: Go raises
+# RLIMIT_NOFILE with prlimit64 at start.
+# Left out on purpose: ProtectHostname= (a private UTS namespace never sees the hostname the
+# helper sets later), ProtectProc=/ProcSubset= (the Services page lists the addons' processes,
+# the Status page reads /proc/sys, meminfo and loadavg), PrivateDevices= (the radio and storage
+# pages stat the device nodes), PrivateUsers= (the journal's group would map to nobody),
+# ProtectKernelLogs= (its seccomp rule on syslog(2) would kill dmesg), and IPAddressDeny= (the
+# catalogue, the update feed, the MQTT broker and the metadata import are LAN and internet by
+# design).
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service syslog
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+DevicePolicy=closed
+RemoveIPC=yes
+# Files the daemon creates are private unless the code says otherwise: the session mirror and
+# the local token set their world-readable mode explicitly.
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
