@@ -1,0 +1,97 @@
+package httpapi
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+
+	"github.com/hobbyquaker/occulited/internal/radio"
+	"github.com/hobbyquaker/occulited/internal/system"
+)
+
+// The radio connections (task 129 phase 3): which local module each interface process uses.
+
+func (a *SystemAPI) radioConnectionsReady(w http.ResponseWriter) bool {
+	if a.RadioConnections == nil {
+		writeJSON(w, http.StatusNotImplemented, apiError{Error: "unsupported", Message: "no radio connection service"})
+		return false
+	}
+	return true
+}
+
+func (a *SystemAPI) radioConnections(w http.ResponseWriter, r *http.Request) {
+	if !a.radioConnectionsReady(w) {
+		return
+	}
+	writeJSON(w, 200, a.RadioConnections.Status())
+}
+
+type radioConnBody struct {
+	HmIP     string `json:"hmip"`
+	BidCos   string `json:"bidcos"`
+	HmIPPath string `json:"hmip_path"`
+	Confirm  bool   `json:"confirm"`
+}
+
+func (b radioConnBody) choices() radio.Choices {
+	c := radio.Choices{HmIP: b.HmIP, BidCos: b.BidCos, HmIPPath: b.HmIPPath}
+	if c.HmIPPath == "auto" {
+		c.HmIPPath = radio.ChoiceAuto
+	}
+	if c.HmIP == "auto" {
+		c.HmIP = radio.ChoiceAuto
+	}
+	if c.BidCos == "auto" {
+		c.BidCos = radio.ChoiceAuto
+	}
+	return c
+}
+
+func radioConnError(w http.ResponseWriter, err error) {
+	var confirm *system.ConfirmRequired
+	switch {
+	case errors.As(err, &confirm):
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "confirm-required", "message": err.Error(), "devices": confirm.Devices})
+	case errors.Is(err, system.ErrConnApplyRunning):
+		writeJSON(w, http.StatusConflict, apiError{Error: "busy", Message: err.Error()})
+	case errors.Is(err, system.ErrConnUnavailable):
+		writeJSON(w, http.StatusServiceUnavailable, apiError{Error: "unavailable", Message: err.Error()})
+	default:
+		writeJSON(w, http.StatusUnprocessableEntity, apiError{Error: "invalid", Message: err.Error()})
+	}
+}
+
+// radioConnectionsPreview answers what the choices would give, without changing anything.
+func (a *SystemAPI) radioConnectionsPreview(w http.ResponseWriter, r *http.Request) {
+	if !a.radioConnectionsReady(w) {
+		return
+	}
+	var b radioConnBody
+	if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
+		badBody(w, err)
+		return
+	}
+	pv, err := a.RadioConnections.Preview(r.Context(), b.choices())
+	if err != nil {
+		radioConnError(w, err)
+		return
+	}
+	writeJSON(w, 200, pv)
+}
+
+// putRadioConnections writes the choices and starts the change; the page polls GET.
+func (a *SystemAPI) putRadioConnections(w http.ResponseWriter, r *http.Request) {
+	if !a.radioConnectionsReady(w) {
+		return
+	}
+	var b radioConnBody
+	if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
+		badBody(w, err)
+		return
+	}
+	if _, err := a.RadioConnections.Apply(r.Context(), b.choices(), b.Confirm); err != nil {
+		radioConnError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, a.RadioConnections.Status())
+}
