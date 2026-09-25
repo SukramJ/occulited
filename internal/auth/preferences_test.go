@@ -1,0 +1,102 @@
+package auth
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestPreferences(t *testing.T) {
+	s, dir := open(t)
+	if err := s.Setup("admin", "secret123"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateUser("bob", "secret123", RoleUser, false); err != nil {
+		t.Fatal(err)
+	}
+
+	// nothing yet: the empty set, never a nil list
+	p, ok := s.Preferences("bob")
+	if !ok || p.Addons == nil || len(p.Addons) != 0 {
+		t.Fatalf("fresh account: %+v %v", p, ok)
+	}
+	// no such account: the empty set and false
+	if p, ok := s.Preferences("anonymous"); ok || len(p.Addons) != 0 {
+		t.Fatalf("no account: %+v %v", p, ok)
+	}
+	if err := s.SetPreferences("anonymous", Preferences{}); !errors.Is(err, ErrUnknownUser) {
+		t.Fatalf("no account: %v", err)
+	}
+
+	want := Preferences{Addons: []AddonPreference{{ID: "redmatic", Pinned: true}, {ID: "mh"}, {ID: "jp-hb-devices-addon", Pinned: true}}}
+	if err := s.SetPreferences("bob", want); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := s.Preferences("bob")
+	if !ok || len(got.Addons) != 3 || got.Addons[0] != want.Addons[0] || got.Addons[1] != want.Addons[1] || got.Addons[2] != want.Addons[2] {
+		t.Fatalf("stored: %+v", got)
+	}
+	// the other account is untouched
+	if p, _ := s.Preferences("admin"); len(p.Addons) != 0 {
+		t.Fatalf("admin: %+v", p)
+	}
+
+	// refused: a malformed id, a duplicate, too many
+	for _, bad := range []Preferences{
+		{Addons: []AddonPreference{{ID: ""}}},
+		{Addons: []AddonPreference{{ID: "../x"}}},
+		{Addons: []AddonPreference{{ID: "a b"}}},
+		{Addons: []AddonPreference{{ID: "mh"}, {ID: "mh", Pinned: true}}},
+		{Addons: make([]AddonPreference, maxPreferenceAddons+1)},
+	} {
+		if err := s.SetPreferences("bob", bad); !errors.Is(err, ErrBadPreferences) {
+			t.Fatalf("%+v: %v", bad, err)
+		}
+	}
+	// a refusal leaves the stored set as it was
+	if p, _ := s.Preferences("bob"); len(p.Addons) != 3 {
+		t.Fatalf("after refusals: %+v", p)
+	}
+
+	// kept in users.json with the account, and read back by a fresh store
+	b, err := os.ReadFile(filepath.Join(dir, "users.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"preferences"`) || !strings.Contains(string(b), `"redmatic"`) {
+		t.Fatalf("users.json: %s", b)
+	}
+	s2, err := Open(dir, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := s2.Preferences("bob"); len(p.Addons) != 3 || !p.Addons[0].Pinned || p.Addons[1].Pinned {
+		t.Fatalf("reopened: %+v", p)
+	}
+	// the account list never carries them
+	for _, u := range s2.Users() {
+		if u.Preferences != nil {
+			t.Fatalf("Users() carries preferences: %+v", u)
+		}
+	}
+	// the password survives beside them, and they survive a password change
+	if err := s2.SetPassword("bob", "another123", nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s2.Login("bob", "another123", "127.0.0.1", ""); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := s2.Preferences("bob"); len(p.Addons) != 3 {
+		t.Fatalf("after a password change: %+v", p)
+	}
+
+	// an empty list clears the field, so the account reads as it did before
+	if err := s2.SetPreferences("bob", Preferences{}); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "users.json")); strings.Contains(string(b), `"preferences"`) {
+		t.Fatalf("cleared set still in users.json: %s", b)
+	}
+}
