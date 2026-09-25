@@ -1,0 +1,541 @@
+{
+ "bomFormat": "CycloneDX",
+ "specVersion": "1.6",
+ "version": 1,
+ "metadata": {
+  "timestamp": "2026-09-19T12:00:00Z",
+  "component": {
+   "type": "firmware",
+   "name": "openccu-lite",
+   "version": "1.0.0-dev.14"
+  }
+ },
+ "components": [
+  {
+   "type": "library",
+   "bom-ref": "busybox@1.37.0",
+   "name": "busybox",
+   "version": "1.37.0",
+   "licenses": [
+    {
+     "license": {
+      "id": "GPL-2.0-only",
+      "text": {
+       "contentType": "text/plain",
+       "content": "GNU GENERAL PUBLIC LICENSE\nVersion 2, June 1991\n\nCopyright (C) 1989, 1991 Free Software Foundation, Inc.\n\nEveryone is permitted to copy and distribute verbatim copies of this license document, but changing it is not allowed.\n\n(fixture: the full text is in the real SBOM)"
+      },
+      "bom-ref": "lic-gpl2"
+     }
+    }
+   ],
+   "properties": [
+    {
+     "name": "openccu-lite:origin",
+     "value": "buildroot"
+    },
+    {
+     "name": "openccu-lite:origin-url",
+     "value": "https://github.com/buildroot/buildroot"
+    }
+   ],
+   "copyright": "Copyright (C) 1998-2011 Erik Andersen, Rob Landley, Denys Vlasenko and others",
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://busybox.net"
+    }
+   ],
+   "purl": "pkg:generic/busybox@1.37.0"
+  },
+  {
+   "type": "operating-system",
+   "bom-ref": "linux@6.18.51",
+   "name": "linux",
+   "version": "6.18.51",
+   "licenses": [
+    {
+     "license": {
+      "id": "GPL-2.0-only",
+      "properties": [
+       {
+        "name": "openccu-lite:text-ref",
+        "value": "lic-gpl2"
+       }
+      ]
+     }
+    }
+   ],
+   "properties": [
+    {
+     "name": "openccu-lite:origin",
+     "value": "buildroot"
+    },
+    {
+     "name": "openccu-lite:origin-url",
+     "value": "https://github.com/buildroot/buildroot"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "bom-ref": "zlib@1.3.1",
+   "name": "zlib",
+   "version": "1.3.1",
+   "licenses": [
+    {
+     "license": {
+      "id": "Zlib",
+      "text": {
+       "contentType": "text/plain",
+       "content": "This software is provided 'as-is', without any express or implied warranty.\n\n(fixture)"
+      }
+     }
+    }
+   ],
+   "properties": [
+    {
+     "name": "openccu-lite:origin",
+     "value": "buildroot"
+    },
+    {
+     "name": "openccu-lite:origin-url",
+     "value": "https://github.com/buildroot/buildroot"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "bom-ref": "rfd@3.89.9",
+   "name": "rfd",
+   "version": "3.89.9",
+   "licenses": [
+    {
+     "license": {
+      "name": "HMSL-2.0",
+      "text": {
+       "contentType": "text/plain",
+       "content": "HomeMatic Software License Agreement\n\nVersion 2.0\n\n(fixture: eQ-3's licence text)"
+      },
+      "bom-ref": "lic-hmsl"
+     }
+    }
+   ],
+   "properties": [
+    {
+     "name": "openccu-lite:origin",
+     "value": "OpenCCU-Base"
+    },
+    {
+     "name": "openccu-lite:origin-url",
+     "value": "https://github.com/OpenCCU/OpenCCU-Base"
+    }
+   ],
+   "supplier": {
+    "name": "eQ-3 AG"
+   },
+   "description": "BidCos-RF interface process"
+  },
+  {
+   "type": "library",
+   "bom-ref": "HMIPServer.jar@3.89.9",
+   "name": "HMIPServer.jar",
+   "version": "3.89.9",
+   "licenses": [
+    {
+     "license": {
+      "name": "HMSL-2.0",
+      "properties": [
+       {
+        "name": "openccu-lite:text-ref",
+        "value": "lic-hmsl"
+       }
+      ]
+     }
+    }
+   ],
+   "properties": [
+    {
+     "name": "openccu-lite:origin",
+     "value": "OpenCCU-Base"
+    },
+    {
+     "name": "openccu-lite:origin-url",
+     "value": "https://github.com/OpenCCU/OpenCCU-Base"
+    }
+   ],
+   "supplier": {
+    "name": "eQ-3 AG"
+   },
+   "components": [
+    {
+     "type": "library",
+     "bom-ref": "netty-codec@4.1.118.Final",
+     "name": "netty-codec",
+     "version": "4.1.118.Final",
+     "licenses": [
+      {
+       "license": {
+        "id": "Apache-2.0",
+        "text": {
+         "contentType": "text/plain",
+         "content": "Apache License\nVersion 2.0, January 2004\nhttp://www.apache.org/licenses/\n\n(fixture)"
+        },
+        "bom-ref": "lic-apache"
+       }
+      }
+     ],
+     "group": "io.netty",
+     "purl": "pkg:maven/io.netty/netty-codec@4.1.118.Final"
+    },
+    {
+     "type": "library",
+     "bom-ref": "gson@2.11.0",
+     "name": "gson",
+     "version": "2.11.0",
+     "licenses": [
+      {
+       "license": {
+        "id": "Apache-2.0",
+        "properties": [
+         {
+          "name": "openccu-lite:text-ref",
+          "value": "lic-apache"
+         }
+        ]
+       }
+      }
+     ],
+     "group": "com.google.code.gson",
+     "purl": "pkg:maven/com.google.code.gson/gson@2.11.0"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "bom-ref": "generic_raw_uart@1.37",
+   "name": "generic_raw_uart",
+   "version": "1.37",
+   "licenses": [
+    {
+     "license": {
+      "id": "GPL-2.0-or-later",
+      "properties": [
+       {
+        "name": "openccu-lite:text-ref",
+        "value": "lic-gpl2"
+       }
+      ]
+     }
+    }
+   ],
+   "properties": [
+    {
+     "name": "openccu-lite:origin",
+     "value": "piVCCU"
+    },
+    {
+     "name": "openccu-lite:origin-url",
+     "value": "https://github.com/alexreinert/piVCCU"
+    }
+   ],
+   "authors": [
+    {
+     "name": "Alexander Reinert"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "vcs",
+     "url": "https://github.com/alexreinert/piVCCU"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "bom-ref": "detect_radio_module@1.37",
+   "name": "detect_radio_module",
+   "version": "1.37",
+   "licenses": [
+    {
+     "license": {
+      "id": "Apache-2.0",
+      "properties": [
+       {
+        "name": "openccu-lite:text-ref",
+        "value": "lic-apache"
+       }
+      ]
+     }
+    }
+   ],
+   "properties": [
+    {
+     "name": "openccu-lite:origin",
+     "value": "piVCCU"
+    },
+    {
+     "name": "openccu-lite:origin-url",
+     "value": "https://github.com/alexreinert/piVCCU"
+    }
+   ],
+   "authors": [
+    {
+     "name": "Alexander Reinert"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "bom-ref": "hmcfgusb@0.103",
+   "name": "hmcfgusb",
+   "version": "0.103",
+   "licenses": [
+    {
+     "license": {
+      "id": "MIT",
+      "text": {
+       "contentType": "text/plain",
+       "content": "Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the \"Software\"), to deal in the Software without restriction.\n\n(fixture)"
+      },
+      "bom-ref": "lic-mit"
+     }
+    }
+   ],
+   "properties": [
+    {
+     "name": "openccu-lite:origin",
+     "value": "git.zerfleddert.de"
+    },
+    {
+     "name": "openccu-lite:origin-url",
+     "value": "https://git.zerfleddert.de/cgi-bin/gitweb.cgi/hmcfgusb"
+    }
+   ],
+   "supplier": {
+    "name": "Michael Gernoth"
+   },
+   "copyright": "Copyright (c) 2013-16 Michael Gernoth <michael@gernoth.net>",
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://git.zerfleddert.de/cgi-bin/gitweb.cgi/hmcfgusb"
+    }
+   ]
+  },
+  {
+   "type": "application",
+   "bom-ref": "occulited@cff2bbf",
+   "name": "occulited",
+   "version": "cff2bbf",
+   "licenses": [
+    {
+     "license": {
+      "id": "GPL-3.0-only"
+     }
+    }
+   ],
+   "properties": [
+    {
+     "name": "openccu-lite:origin",
+     "value": "openccu-lite"
+    }
+   ],
+   "components": [
+    {
+     "type": "library",
+     "bom-ref": "pkg:golang/github.com/mdzio/go-hmccu@v1.5.7",
+     "name": "github.com/mdzio/go-hmccu",
+     "version": "v1.5.7",
+     "licenses": [
+      {
+       "license": {
+        "id": "GPL-3.0-only"
+       }
+      }
+     ],
+     "purl": "pkg:golang/github.com/mdzio/go-hmccu@v1.5.7",
+     "authors": [
+      {
+       "name": "Mathias Dzionsko"
+      }
+     ]
+    },
+    {
+     "type": "library",
+     "bom-ref": "golang.org/x/crypto@v0.42.0",
+     "name": "golang.org/x/crypto",
+     "version": "v0.42.0",
+     "licenses": [
+      {
+       "license": {
+        "id": "BSD-3-Clause",
+        "text": {
+         "contentType": "text/plain",
+         "content": "Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met.\n\n(fixture)"
+        }
+       }
+      }
+     ],
+     "purl": "pkg:golang/golang.org/x/crypto@v0.42.0"
+    },
+    {
+     "type": "library",
+     "bom-ref": "svelte@5.39.0",
+     "name": "svelte",
+     "version": "5.39.0",
+     "licenses": [
+      {
+       "license": {
+        "id": "MIT",
+        "properties": [
+         {
+          "name": "openccu-lite:text-ref",
+          "value": "lic-mit"
+         }
+        ]
+       }
+      }
+     ],
+     "properties": [
+      {
+       "name": "openccu-lite:origin",
+       "value": "occulited UI bundle"
+      }
+     ],
+     "purl": "pkg:npm/svelte@5.39.0"
+    }
+   ],
+   "authors": [
+    {
+     "name": "Sebastian Raff"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "bom-ref": "lighttpd@1.4.82",
+   "name": "lighttpd",
+   "version": "1.4.82",
+   "licenses": [
+    {
+     "license": {
+      "id": "BSD-3-Clause"
+     }
+    }
+   ],
+   "properties": [
+    {
+     "name": "openccu-lite:origin",
+     "value": "buildroot"
+    },
+    {
+     "name": "openccu-lite:origin-url",
+     "value": "https://github.com/buildroot/buildroot"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "bom-ref": "recovery-system@1.24.1",
+   "name": "recovery-system",
+   "version": "1.24.1",
+   "licenses": [
+    {
+     "license": {
+      "id": "Apache-2.0"
+     }
+    }
+   ],
+   "properties": [
+    {
+     "name": "openccu-lite:origin",
+     "value": "OpenCCU"
+    },
+    {
+     "name": "openccu-lite:origin-url",
+     "value": "https://github.com/OpenCCU/OpenCCU"
+    }
+   ],
+   "components": [
+    {
+     "type": "library",
+     "bom-ref": "recovery-system/busybox@1.37.0",
+     "name": "busybox",
+     "version": "1.37.0",
+     "licenses": [
+      {
+       "license": {
+        "id": "GPL-2.0-only",
+        "properties": [
+         {
+          "name": "openccu-lite:text-ref",
+          "value": "lic-gpl2"
+         }
+        ]
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "bom-ref": "hmlangw@1.1.1",
+   "name": "hmlangw",
+   "version": "1.1.1",
+   "licenses": [
+    {
+     "license": {
+      "id": "MIT"
+     }
+    }
+   ],
+   "copyright": "Copyright (c) 2015-2023 Oliver Kastl, Jens Maus",
+   "properties": [
+    {
+     "name": "openccu-lite:origin",
+     "value": "OpenCCU"
+    },
+    {
+     "name": "openccu-lite:origin-url",
+     "value": "https://github.com/OpenCCU/OpenCCU"
+    }
+   ]
+  },
+  {
+   "type": "application",
+   "bom-ref": "openccu@3.89.9.20260914",
+   "name": "OpenCCU",
+   "version": "3.89.9.20260914",
+   "description": "the firmware build openccu-lite is a fork of: its overlay, scripts, patches and packages",
+   "authors": [
+    {
+     "name": "Jens Maus"
+    }
+   ],
+   "licenses": [
+    {
+     "license": {
+      "id": "Apache-2.0",
+      "properties": [
+       {
+        "name": "openccu-lite:text-ref",
+        "value": "lic-apache"
+       }
+      ]
+     }
+    }
+   ],
+   "properties": [
+    {
+     "name": "openccu-lite:origin",
+     "value": "OpenCCU"
+    },
+    {
+     "name": "openccu-lite:origin-url",
+     "value": "https://github.com/OpenCCU/OpenCCU"
+    }
+   ]
+  }
+ ]
+}

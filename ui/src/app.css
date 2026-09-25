@@ -1,0 +1,1006 @@
+/*
+ * COPIED from homematic-manager packages/ui/src/app.css (D-21): the same tokens, the same names,
+ * so that the day the shared UI kit is extracted this file is replaced by an import and nothing
+ * else changes. Do not edit tokens here; edit them in homematic-manager and copy. Additions for
+ * this shell are at the end, below the marker.
+ *
+ * Original header follows.
+ */
+/*
+ * The theme - one file for both, light and dark (D-22, D-34).
+ *
+ * Until the first look at a dev build these tokens were the jQuery UI "smoothness" greys and blues
+ * of 2.7: vertical gradients on every bar, pale blue borders everywhere, a bold active tab. The
+ * maintainer's verdict was that it imitates 2.x and looks weird, so D-34 replaced the visual
+ * language with Svelte's own defaults and the one of `she` (github.com/hobbyquaker/she): flat
+ * surfaces, neutral greys, one accent, hairline separators, no gradient anywhere, and a control
+ * that marks its state with colour rather than with a weight that changes its width.
+ *
+ * The structure of 2.7 stays exactly where it was (D-3): the same tabs, the same grids with the
+ * same columns, the same dialogs, the same workflows. Only the paint is different.
+ *
+ * Dark is a blue-grey, not a neutral grey (maintainer, 2026-09-07: "too grey-in-grey"). The
+ * neutrals carry a slight blue cast - hue ~218 deg at low saturation - while their lightness is
+ * held, so contrast ratios are essentially unchanged and only the temperature differs. The
+ * semantic colours (ok, warn, error, rssi-*) are deliberately left alone: they have to stay
+ * distinguishable from the surface rather than harmonise with it.
+ *
+ * Light is the default and is defined on bare `:root`. Dark is defined twice - once under
+ * `prefers-color-scheme` (guarded so an explicit light choice wins) and once under
+ * `[data-theme='dark']` - so the manual switch works in both directions. Every colour in the app
+ * comes from a token here; `theme.test.ts` fails the build if a component spells one out.
+ */
+
+:root {
+    color-scheme: light;
+
+    /* Surfaces */
+    --hmm-bg: #ffffff;
+    --hmm-bg-sunken: #f8f8f8;
+    /* Bars: the header, the toolbars, the table head, a dialog's title bar. Flat, not a gradient. */
+    --hmm-header-bg: #f3f3f3;
+    --hmm-header-solid: #ececec;
+    /* Controls: a button's face, and the field an input is typed into. */
+    --hmm-control-bg: #f0f0f0;
+    --hmm-control-bg-hover: #e4e4e4;
+    --hmm-input-bg: #ffffff;
+    --hmm-row-odd: #ffffff;
+    /* `she` gives a table no zebra at all - the row separator does the work. Kept as a token so
+       the two row states stay addressable; both are the plain surface. */
+    --hmm-row-even: #ffffff;
+    --hmm-row-hover: #f0f4f8;
+    --hmm-row-selected: #cfe4f7;
+    --hmm-row-selected-text: #12314d;
+    --hmm-overlay: rgba(255, 255, 255, 0.72);
+    --hmm-backdrop: rgba(0, 0, 0, 0.35);
+    --hmm-shadow-menu: 0 4px 12px rgb(0 0 0 / 18%);
+    --hmm-shadow-toast: 0 2px 10px rgb(0 0 0 / 16%);
+
+    /* Lines */
+    --hmm-border: #cecece;
+    --hmm-border-muted: #e6e6e6;
+    --hmm-border-strong: #b0b0b0;
+
+    /* Text */
+    --hmm-fg: #3b3b3b;
+    --hmm-fg-muted: #6d6d6d;
+    --hmm-fg-faint: #9a9a9a;
+    --hmm-link: #0070c1;
+
+    /* Accents */
+    --hmm-accent: #0070c1;
+    --hmm-accent-bg: #e2eefa;
+    --hmm-ok: #008000;
+    --hmm-warn: #a06800;
+    --hmm-error: #cd3131;
+    --hmm-focus: #0070c1;
+
+    /* The RSSI scale of the radio tab. The 2.x gradient was computed per cell and looked the same
+       in both themes; these are the three classes core's `rssiClass()` produces, as tokens. */
+    --hmm-rssi-good: #c9e6c9;
+    --hmm-rssi-medium: #f3e2ad;
+    --hmm-rssi-bad: #f0c0c0;
+    --hmm-rssi-text: #262626;
+
+    /* Metrics. 13 px is `she`'s reading size; the grids were 12 px and one line taller than they
+       needed to be at that size. */
+    --hmm-font: system-ui, -apple-system, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+    --hmm-font-mono: ui-monospace, 'Cascadia Mono', Consolas, Menlo, Monaco, monospace;
+    --hmm-font-size: 13px;
+    /* The grids stay a size below the chrome, as they do in `she`: 13 px in the bars and dialogs,
+       12 px in a table that has ten columns of addresses and flags. */
+    --hmm-font-size-grid: 12px;
+    --hmm-font-size-small: 11px;
+    --hmm-font-size-tiny: 9px;
+    --hmm-row-height: 26px;
+    --hmm-header-height: 36px;
+    --hmm-radius: 3px;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme='light']) {
+        color-scheme: dark;
+
+        --hmm-bg: #1b1f26;
+        --hmm-bg-sunken: #171a20;
+        --hmm-header-bg: #212630;
+        --hmm-header-solid: #282e39;
+        --hmm-control-bg: #2e3542;
+        --hmm-control-bg-hover: #39414f;
+        --hmm-input-bg: #353d4a;
+        --hmm-row-odd: #1b1f26;
+        --hmm-row-even: #1b1f26;
+        --hmm-row-hover: #252c38;
+        --hmm-row-selected: #264f78;
+        --hmm-row-selected-text: #e8f2fb;
+        --hmm-overlay: rgba(22, 25, 31, 0.72);
+        --hmm-backdrop: rgba(0, 0, 0, 0.6);
+        --hmm-shadow-menu: 0 4px 14px rgb(0 0 0 / 60%);
+        --hmm-shadow-toast: 0 2px 12px rgb(0 0 0 / 55%);
+
+        --hmm-border: #363e4b;
+        --hmm-border-muted: #2a313c;
+        --hmm-border-strong: #4e5769;
+
+        --hmm-fg: #ccd2dc;
+        --hmm-fg-muted: #8b94a3;
+        --hmm-fg-faint: #6b7383;
+        --hmm-link: #569cd6;
+
+        --hmm-accent: #569cd6;
+        --hmm-accent-bg: #253b52;
+        --hmm-ok: #4ec9b0;
+        --hmm-warn: #cca700;
+        --hmm-error: #f48771;
+        --hmm-focus: #569cd6;
+
+        --hmm-rssi-good: #2f5d3a;
+        --hmm-rssi-medium: #6d5a1c;
+        --hmm-rssi-bad: #6f2f2f;
+        --hmm-rssi-text: #f0f0f0;
+    }
+}
+
+:root[data-theme='dark'] {
+    color-scheme: dark;
+
+    --hmm-bg: #1b1f26;
+    --hmm-bg-sunken: #171a20;
+    --hmm-header-bg: #212630;
+    --hmm-header-solid: #282e39;
+    --hmm-control-bg: #2e3542;
+    --hmm-control-bg-hover: #39414f;
+    --hmm-input-bg: #353d4a;
+    --hmm-row-odd: #1b1f26;
+    --hmm-row-even: #1b1f26;
+    --hmm-row-hover: #252c38;
+    --hmm-row-selected: #264f78;
+    --hmm-row-selected-text: #e8f2fb;
+    --hmm-overlay: rgba(22, 25, 31, 0.72);
+    --hmm-backdrop: rgba(0, 0, 0, 0.6);
+    --hmm-shadow-menu: 0 4px 14px rgb(0 0 0 / 60%);
+    --hmm-shadow-toast: 0 2px 12px rgb(0 0 0 / 55%);
+
+    --hmm-border: #363e4b;
+    --hmm-border-muted: #2a313c;
+    --hmm-border-strong: #4e5769;
+
+    --hmm-fg: #ccd2dc;
+    --hmm-fg-muted: #8b94a3;
+    --hmm-fg-faint: #6b7383;
+    --hmm-link: #569cd6;
+
+    --hmm-accent: #569cd6;
+    --hmm-accent-bg: #253b52;
+    --hmm-ok: #4ec9b0;
+    --hmm-warn: #cca700;
+    --hmm-error: #f48771;
+    --hmm-focus: #569cd6;
+
+    --hmm-rssi-good: #2f5d3a;
+    --hmm-rssi-medium: #6d5a1c;
+    --hmm-rssi-bad: #6f2f2f;
+    --hmm-rssi-text: #f0f0f0;
+}
+
+html,
+body {
+    height: 100%;
+}
+
+body {
+    margin: 0;
+    padding: 0;
+    background: var(--hmm-bg);
+    color: var(--hmm-fg);
+    font-family: var(--hmm-font);
+    font-size: var(--hmm-font-size);
+}
+
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+}
+
+/* `she`'s thin scrollbars: a data grid has a lot of them, and the fat default ones were most of
+   what made the window look busy. */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: var(--hmm-border-strong) transparent;
+}
+
+:focus-visible {
+    outline: 2px solid var(--hmm-focus);
+    outline-offset: -1px;
+}
+
+.hmm-mono {
+    font-family: var(--hmm-font-mono);
+}
+
+button,
+input,
+select,
+textarea {
+    font-family: inherit;
+    font-size: inherit;
+    color: inherit;
+}
+
+/* The plain form controls of the toolbars and dialogs. */
+.hmm-input,
+.hmm-select {
+    height: 24px;
+    padding: 2px 6px;
+    border: 1px solid var(--hmm-border);
+    border-radius: var(--hmm-radius);
+    background: var(--hmm-input-bg);
+}
+
+.hmm-input:focus-visible,
+.hmm-select:focus-visible {
+    border-color: var(--hmm-accent);
+}
+
+.hmm-button {
+    min-height: 24px;
+    padding: 3px 10px;
+    border: 1px solid var(--hmm-border);
+    border-radius: var(--hmm-radius);
+    background: var(--hmm-control-bg);
+    cursor: pointer;
+}
+
+.hmm-button:hover:not(:disabled) {
+    background: var(--hmm-control-bg-hover);
+}
+
+/* A button with an icon before its label (openccu-lite task 239): the icon and the label stay on one
+   line - the magnifier wrapped away from "Suchen" at a narrow width. */
+.hmm-button.ol-icon-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+}
+
+.hmm-button:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+/* the one action a card is for: accent background (blue-ish in dark mode too) */
+.hmm-button.primary {
+    background: var(--hmm-accent);
+    border-color: var(--hmm-accent);
+    color: #fff;
+    font-weight: 600;
+}
+.hmm-button.primary:hover:not(:disabled) {
+    filter: brightness(1.12);
+    background: var(--hmm-accent);
+}
+
+
+/* ---- occulited shell additions (not in the copied file) ---- */
+
+/*
+ * B-110: the button of a dangerous action - the confirm button of a `danger` question (lib/dialog.svelte.ts:
+ * the firmware flash, Delete, Discard, Revoke, the power menu's questions), `hmm-button primary danger`. It
+ * was red when idle and turned blue on hover, because ConfirmDialog painted it red locally and
+ * `.hmm-button.primary:hover` above won on hover. The maintainer: "hover effect should be red instead and
+ * normal look should be standard". Idle it is a standard button, so red never sits on the screen waiting;
+ * pointed at or reached with the keyboard it is red - the error colour as background and border, the page's
+ * ground as text, readable in both themes like `.ol-badge.bad`. One rule for every danger button; the
+ * selectors name `.primary` too, to outrank `.hmm-button.primary` and its hover. Disabled stays the grey of
+ * `.hmm-button:disabled`.
+ */
+.hmm-button.danger,
+.hmm-button.primary.danger {
+    background: var(--hmm-control-bg);
+    border-color: var(--hmm-border);
+    color: var(--hmm-fg);
+    font-weight: normal;
+    filter: none;
+}
+.hmm-button.danger:hover:not(:disabled),
+.hmm-button.primary.danger:hover:not(:disabled),
+.hmm-button.danger:focus-visible:not(:disabled),
+.hmm-button.primary.danger:focus-visible:not(:disabled) {
+    background: var(--hmm-error);
+    border-color: var(--hmm-error);
+    color: var(--hmm-bg);
+    filter: none;
+}
+
+/*
+ * Task 53: the cards stand off the page. The tokens of this shell's own, the colour ones defined
+ * the same three times as the copied ones (theme.test.ts checks that): the page ground, the card
+ * surface a step off it, the card's shadow and the raised one a link card takes on hover, the
+ * tinted circle behind a card's icon; the card radius is one value for both themes.
+ *
+ * Light: a very light grey ground and white cards. Both variants of the task were built and
+ * screenshotted on the Status and Catalogue pages (2026-09-11): white cards on grey read as
+ * panels with a body; faintly tinted cards on white went dull and grey, clashed with the white
+ * notices and inputs, and barely lifted off the page. Dark: the cards are a step *lighter* than
+ * the ground - a shadow alone is invisible on a dark page - and the shadow is deeper, because
+ * that is what dark surfaces need to read as stacked at all. The ink keeps AA on both surfaces:
+ * muted text 5.4:1 on white and 4.8:1 on #232830, the link 5.0:1 on #232830.
+ */
+:root {
+    --hmm-page-bg: #f2f3f5;
+    --hmm-card-bg: #ffffff;
+    --hmm-card-icon-bg: #e2eefa;
+    --hmm-shadow-card: 0 1px 2px rgb(16 24 40 / 6%), 0 4px 12px rgb(16 24 40 / 7%);
+    --hmm-shadow-card-hover: 0 2px 4px rgb(16 24 40 / 8%), 0 10px 24px rgb(16 24 40 / 12%);
+    --hmm-radius-card: 10px;
+}
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme='light']) {
+        --hmm-page-bg: #1b1f26;
+        --hmm-card-bg: #232830;
+        --hmm-card-icon-bg: #2d3f55;
+        --hmm-shadow-card: 0 1px 2px rgb(0 0 0 / 35%), 0 4px 14px rgb(0 0 0 / 40%);
+        --hmm-shadow-card-hover: 0 2px 4px rgb(0 0 0 / 40%), 0 10px 28px rgb(0 0 0 / 55%);
+    }
+}
+:root[data-theme='dark'] {
+    --hmm-page-bg: #1b1f26;
+    --hmm-card-bg: #232830;
+    --hmm-card-icon-bg: #2d3f55;
+    --hmm-shadow-card: 0 1px 2px rgb(0 0 0 / 35%), 0 4px 14px rgb(0 0 0 / 40%);
+    --hmm-shadow-card-hover: 0 2px 4px rgb(0 0 0 / 40%), 0 10px 28px rgb(0 0 0 / 55%);
+}
+/* the page ground is the shell's token; --hmm-bg stays the surface of the popups and the bars */
+body { background: var(--hmm-page-bg); }
+
+/*
+ * B-129: the shell is a fixed-height layout, and the page's scroll bar begins under the top bar.
+ *
+ * Task 99 made the bar `position: sticky` with the *document* as the scrolling element, so the
+ * browser's page scroll bar ran the full window height beside the bar and the bar's right end sat
+ * left of it ("when page gets a scroller it spans over top bar. but top bar should be fixed position
+ * and scroller should begin underneath it", maintainer, 2026-09-13). Now `.ol-shell` is exactly one
+ * viewport tall, the top bar is a row of it that does not scroll, and `.ol-scrollport` - the box
+ * around `main` - is what scrolls. So the scroll bar starts at the bar's lower edge, and the bar
+ * spans the whole window width on every page, scrolling or not.
+ *
+ * `.ol-scrollport` rather than `main` itself: `main` keeps its centred 1200 px column and every page
+ * class it had (`ol-full`, `ol-wide`, `ol-fill`), and the scroll bar still belongs to the window's
+ * right edge rather than to the column's.
+ *
+ * What moved with it:
+ * - `scroll-padding-top` is the port's and is 8 px: an anchor lands below the bar because the port
+ *   already begins there (it was the bar's height plus 8 px on the root).
+ * - a page's sticky table head is `top: 0` inside the port, not `--ol-header-h` (below).
+ * - lib/ModalDialog.svelte locks the port, not the root, and pads it by the width its scroll bar had.
+ * - the top bar needs no reach-through for that padding any more (B-100): it is outside the port.
+ * - the Log page (task 104) and an addon's frame keep their own layouts - the port does not scroll
+ *   there, the page or the frame fills it (`.ol-scrollport.ol-fill`, `.ol-scrollport.ol-wide`).
+ * - `dvh` before `vh`, as on the Log page: on a phone the collapsing address bar must not leave a
+ *   gap under the shell nor cut it off, and `overscroll-behavior` keeps a rubber band inside the port.
+ * - App.svelte hands Page Up/Down, Space, Home, End and the arrows to the port while nothing on the
+ *   page holds the focus, so the keyboard scrolls without a click into the page first.
+ *
+ * The bar's layer: above the page and the page's own menus and popovers (.ol-menupop, 40), below the
+ * boot timeline's unit panel (50) and its tips (60), the dialogs (90, 100) and the full-page states of
+ * the power menu and the boot (200). App.svelte still names its measured height --ol-header-h - the
+ * boot timeline's fixed panel hangs below the bar by it.
+ */
+.ol-shell { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
+.ol-header {
+    position: relative; z-index: 45; flex: 0 0 auto;
+    display: flex; align-items: center; gap: 12px; min-height: var(--hmm-header-height);
+    padding: 0 12px;
+    background: var(--hmm-header-bg); border-bottom: 1px solid var(--hmm-border);
+}
+.ol-scrollport {
+    flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column;
+    overflow-y: auto; overscroll-behavior: contain; scroll-padding-top: 8px;
+}
+/* The header wordmark. Two images, one per background, swapped here rather than by a CSS filter:
+   the wordmark is black and the glyph is cyan, so any filter dark enough to whiten the first
+   wrecks the second. Doing it in CSS rather than from the theme store means the "system" setting
+   works without JavaScript deciding anything. */
+.ol-brand { display: inline-flex; align-items: center; flex: 0 0 auto; text-decoration: none; }
+.ol-logo { display: block; height: 22px; width: auto; }
+.ol-logo-dark { display: none; }
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme='light']) .ol-logo-light { display: none; }
+    :root:not([data-theme='light']) .ol-logo-dark { display: block; }
+}
+:root[data-theme='dark'] .ol-logo-light { display: none; }
+:root[data-theme='dark'] .ol-logo-dark { display: block; }
+/* No `overflow-x: auto` here: a used overflow-x of `auto` forces overflow-y to `auto` too, and a
+   scroll container 29 px tall clips the dropdowns that hang out of it. The bar is short enough
+   since task 26 that it fits; where it does not - a narrow window, many nav.d entries - it wraps
+   and the header grows with it. */
+/* task 191: the nav's row. It is nothing at all above 700 px - `display: contents` leaves the nav
+   itself in the header's flex row; on a phone it becomes the second row and carries the edge fades. */
+.ol-navrow { display: contents; }
+.ol-nav { display: flex; flex-wrap: wrap; gap: 2px; margin-left: 8px; }
+.ol-nav a {
+    display: inline-block; padding: 6px 10px; border-radius: var(--hmm-radius); color: var(--hmm-fg);
+    text-decoration: none; white-space: nowrap;
+}
+.ol-nav a:hover { background: var(--hmm-control-bg-hover); }
+.ol-nav a.active { color: var(--hmm-accent); background: var(--hmm-accent-bg); }
+/* Task 26: the dropdowns of the tab bar - the addons, first, and *System*.
+   The button holds two spans in ONE grid cell: an invisible sizer carrying the widest label the
+   control can ever produce, and the live label on top of it. The button is therefore as wide as it
+   will ever need to be from the first paint, so selecting an entry - which turns "Addons" into
+   "Addons — Homematic-Manager" - cannot make the tab bar hop.
+
+   Task 27.7: and it is capped. Reserving the widest label unconditionally asked for 323 px in
+   German - enough for "Zusatzsoftware — Installierte Zusatzsoftware" - which is a quarter of a
+   1280 px header spent on one control and left the caret stranded ~190 px from the word
+   "Zusatzsoftware" that is usually all the button says. The cap is a max-width on the sizers,
+   which clamps their max-content contribution and so the grid track itself: the control is still
+   exactly as wide on every page, it just stops growing at a sensible width, and the live label
+   ellipsises inside it ("Zusatzsoftware — Homematic-Man…"). The truncation is only in the bar -
+   the popup and the page both still name the addon in full, and the button carries the whole
+   breadcrumb as its tooltip. */
+.ol-menu { position: relative; display: inline-block; --ol-menubtn-cap: 184px; }
+.ol-menubtn {
+    display: inline-grid; grid-template-columns: minmax(0, auto); align-items: center;
+    padding: 6px 10px; border: 0; border-radius: var(--hmm-radius); background: none;
+    color: var(--hmm-fg); font: inherit; cursor: pointer; white-space: nowrap;
+}
+.ol-menubtn:hover { background: var(--hmm-control-bg-hover); }
+.ol-menubtn.active { color: var(--hmm-accent); background: var(--hmm-accent-bg); }
+/* One grid cell holds every sizer and the live label, so the track is the widest of them - and
+   max-width clamps each item's max-content contribution, so it is the widest of them *or the cap*.
+   The sizers pay for the caret with padding rather than a column of its own; the caret sits at the
+   right edge of the reserved width (the maintainer's call, 2026-09-09, reversing 27.7's "behind
+   the label"), and the button keeps its reserved width either way, so the bar cannot hop when the
+   selection changes. */
+.ol-menubtn-sizer, .ol-menubtn-live {
+    grid-area: 1 / 1; min-width: 0; max-width: var(--ol-menubtn-cap); overflow: hidden;
+}
+.ol-menubtn-sizer { visibility: hidden; pointer-events: none; padding-right: 20px; }
+/* the caret is bigger and always at the right edge of the reserved width (maintainer, 2026-09-09) */
+.ol-menubtn-live { display: flex; align-items: center; gap: 6px; width: 100%; }
+.ol-menubtn-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; text-align: left; }
+.ol-caret { flex: 0 0 auto; margin-left: auto; font-size: 14px; line-height: 1; opacity: 0.8; }
+
+.ol-menupop {
+    position: absolute; top: calc(100% + 4px); left: 0; z-index: 40; min-width: 100%;
+    max-height: min(60vh, 420px); overflow-y: auto; padding: 4px;
+    background: var(--hmm-bg); border: 1px solid var(--hmm-border);
+    border-radius: var(--hmm-radius); box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
+}
+/* task 31: the Log page's time range - a labelled button, the popover under it */
+.ol-range { position: relative; display: inline-block; }
+.ol-range-btn { display: inline-flex; align-items: center; gap: 8px; }
+.ol-range-pop { min-width: 300px; max-width: min(92vw, 380px); padding: 10px; display: flex; flex-direction: column; gap: 8px; overflow: visible; }
+.ol-range-presets { display: flex; flex-wrap: wrap; gap: 6px; }
+.ol-range-field { display: flex; flex-direction: column; gap: 3px; }
+.ol-range-field > span { font-weight: 600; font-size: var(--hmm-font-size-small, 0.92em); }
+.ol-range-field input { width: 100%; box-sizing: border-box; }
+.ol-range-actions { display: flex; gap: 6px; justify-content: flex-end; }
+/* task 40: the filterable select (lib/Select.svelte, homematic-manager's MultiSelect in its
+   single-value mode) - a labelled trigger sized like .hmm-select, the popover with the filter
+   input at the top and the option list under it; the list scrolls, the popover does not */
+.ol-select { position: relative; display: inline-block; max-width: 100%; }
+.ol-select-btn { display: inline-flex; align-items: center; gap: 8px; height: 24px; padding: 2px 8px; max-width: min(100%, 280px); }
+.ol-select-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ol-select-pop { min-width: max(100%, 220px); max-width: min(92vw, 360px); padding: 4px; overflow: hidden; display: flex; flex-direction: column; gap: 4px; }
+.ol-select-filter { width: 100%; box-sizing: border-box; }
+.ol-select-list { list-style: none; margin: 0; padding: 0; max-height: min(50vh, 320px); overflow: auto; }
+.ol-select-opt {
+    display: block; padding: 4px 8px; border-radius: var(--hmm-radius); color: var(--hmm-fg); cursor: pointer;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ol-select-opt.hl { background: var(--hmm-control-bg-hover); }
+.ol-select-opt[aria-selected="true"] { color: var(--hmm-accent); font-weight: 600; }
+.ol-select-opt[aria-disabled="true"] { opacity: 0.45; cursor: default; }
+.ol-select-empty { padding: 4px 8px; color: var(--hmm-fg-muted); }
+/* the line's copy control and a collapsed long message are 24.3's; the order lives in the toolbar */
+.ol-menuitem {
+    display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px;
+    border: 0; border-radius: var(--hmm-radius); background: none; color: var(--hmm-fg);
+    font: inherit; text-align: left; cursor: pointer; white-space: nowrap;
+}
+/* an item that is a link, not a button: `.ol-nav a` is the more specific selector, so the popup
+   has to say it again or the entries lay themselves out as inline tabs */
+.ol-menupop a.ol-menuitem { display: flex; width: 100%; padding: 6px 8px; }
+.ol-menusep { height: 1px; margin: 4px 6px; background: var(--hmm-border-muted); }
+.ol-menuitem:hover { background: var(--hmm-control-bg-hover); }
+.ol-menuitem.active { color: var(--hmm-accent); background: var(--hmm-accent-bg); }
+/* Task 55: a row's icon is its frontend's favicon (lib/favicon.ts) or, without one, the first
+   letter - a square cell, no longer the 64 px strip task 26 needed for the wordmarks of the
+   addons' Info: lines (RedMatic ships 1020×199, mosquitto 556×112). A favicon is drawn for 16 to
+   32 px squares, so 18 px with `contain` shows it whole whatever it really measures, and the
+   letter takes the same 20 px cell, so the names stay in one column. */
+.ol-addonicon {
+    flex: 0 0 auto; display: flex; align-items: center; justify-content: center;
+    width: 20px; height: 20px;
+}
+.ol-addonicon img { width: 18px; height: 18px; object-fit: contain; }
+.ol-addonmono {
+    display: flex; align-items: center; justify-content: center; width: 20px; height: 20px;
+    border-radius: var(--hmm-radius); background: var(--hmm-control-bg-hover);
+    color: var(--hmm-fg-muted); font-size: 11px; font-weight: 600;
+}
+.ol-addonname { overflow: hidden; text-overflow: ellipsis; }
+
+.ol-spacer { flex: 1; }
+/* Task 26: *Account* is no longer a tab - the logged-in user's name in the corner is the link to
+   it, which is where a reader looks for their own account anyway. */
+.ol-iconlink { display: inline-flex; align-items: center; padding: 6px; border-radius: var(--hmm-radius); color: var(--hmm-fg-muted); }
+.ol-iconlink:hover { color: var(--hmm-fg); background: var(--hmm-control-bg-hover); }
+.ol-iconlink.active { color: var(--hmm-accent); background: var(--hmm-accent-bg); }
+.ol-iconlink.ol-authoff { color: var(--hmm-warn, #c8791c); }
+/* the right-hand icons (Licenses, GitHub, account, settings, power) sit closer than the
+   bar's 12 px gap: 6 px between two icons; below 480 px the bar's own 4 px gap applies */
+.ol-header > .ol-iconlink, .ol-header > .ol-power { margin-left: -6px; }
+.ol-user { padding: 4px 8px; border-radius: var(--hmm-radius); color: var(--hmm-fg-muted); text-decoration: none; white-space: nowrap; }
+.ol-user:hover { background: var(--hmm-control-bg-hover); }
+.ol-user.active { color: var(--hmm-accent); background: var(--hmm-accent-bg); }
+.ol-main { flex: 1; padding: 14px 16px; max-width: 1200px; width: 100%; margin: 0 auto; }
+.ol-main.ol-wide { max-width: none; padding: 0; display: flex; flex-direction: column; }
+.ol-main.ol-full { max-width: none; } /* 28.2: Log and Services use the whole width */
+/* B-129: an addon's frame fills the port exactly instead of asking for 70 vh and pushing the shell
+   past the window - the port is the height the bar leaves, and the frame takes it */
+.ol-scrollport.ol-wide { overflow: hidden; }
+.ol-scrollport.ol-wide .ol-frame, .ol-scrollport.ol-wide .ol-kept.ol-kept-on { min-height: 0; }
+/* task 44: on /log the shell is exactly one viewport tall and the page a flex column, so the
+   height left below the header, the heading and the filter bar reaches the journal box (which
+   takes it with flex: 1, LogPage.svelte). `dvh` is the viewport as it is at the moment - on a
+   phone the collapsing address bar neither leaves a gap under the box nor cuts its last line off;
+   `vh` stays as the fallback for a browser without it. The page keeps its automatic minimum
+   height: the journal box is size-contained (LogPage.svelte), so that minimum is the heading, the
+   disclosures, the filter bar and the box's floor, and the page outgrows the window - padding
+   included - only when those do. Only Log: Services, the other ol-full page, flows with the page
+   by design.
+   B-129: every page is one viewport tall now, so `.ol-shell.ol-fill` has nothing left to set; what
+   the Log page still needs is that its port does not scroll - the journal box inside it does, and a
+   page element that ran wider than the window must still show up on the document, as it did. */
+.ol-scrollport.ol-fill { overflow: visible; }
+/* task 104: no padding - the Log page gives its heading and filter panel the page's side margin itself,
+   and its log runs from the window's left edge to its right edge and down to its bottom */
+.ol-main.ol-fill { display: flex; flex-direction: column; padding: 0; }
+/* 28.4: an addon row in the dropdown - the entry, and a small new-tab link at its end;
+   task 55: and the settings link after that, the gear the size of the arrow */
+.ol-menurow { display: flex; align-items: stretch; }
+.ol-menurow .ol-menuitem { flex: 1; min-width: 0; }
+/* the addon whose frontend is open: marked like every other active entry of the shell's menus
+   (.ol-menuitem.active). --hmm-bg-active, --hmm-bg-muted and --hmm-bg-hover, named here before,
+   were never defined, so the row had no background in either theme. */
+.ol-menurow.active .ol-menuitem { color: var(--hmm-accent); background: var(--hmm-accent-bg); }
+.ol-newtab { display: flex; align-items: center; padding: 0 8px; color: var(--hmm-fg-muted); text-decoration: none; font-size: 13px; border-radius: var(--hmm-radius); }
+.ol-newtab:hover { color: var(--hmm-fg); background: var(--hmm-control-bg-hover); }
+/* task 55: `.ol-nav a` is the more specific selector, and it laid ↗ out as an inline tab in the
+   tab bar's own colour and padding; the popup says again what the two small links are */
+.ol-menupop a.ol-newtab { display: flex; padding: 0 8px; color: var(--hmm-fg-muted); }
+.ol-menupop a.ol-newtab:hover { color: var(--hmm-fg); }
+.ol-menupop a.ol-newtab.active { color: var(--hmm-accent); background: var(--hmm-accent-bg); }
+/* task 55: an addon without a frontend, or switched off - listed, so the box shows what it has
+   installed, but its name and ↗ lead nowhere: muted, no hover, the plain cursor. ⚙ stays live. */
+.ol-menurow-off > .ol-menuitem, .ol-menurow-off > .ol-menuitem:hover { color: var(--hmm-fg-muted); background: none; cursor: default; }
+.ol-menurow-off > span.ol-newtab, .ol-menurow-off > span.ol-newtab:hover { color: var(--hmm-fg-faint); background: none; cursor: default; }
+.ol-menurow-off .ol-addonicon { opacity: 0.6; }
+/* a switched-off addon says so after its name */
+.ol-addonnote { flex: 0 0 auto; color: var(--hmm-fg-faint); }
+h1 { font-size: 17px; font-weight: 600; margin: 0 0 12px; }
+h2 { font-size: 12px; font-weight: 600; margin: 18px 0 8px; color: var(--hmm-fg-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+h3 { font-size: 13px; font-weight: 600; margin: 14px 0 6px; }
+.ol-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; align-items: stretch; }
+/* Task 53: the card. Its own surface a step off the page, a soft two-layer shadow, a radius
+   and a padding a step up from the flat hairline box it was. Every card in a grid stretches to
+   its row and lays its content out as a column, so a head sits at the top and a foot (a graph,
+   an action row) at the bottom with `margin-top: auto` - a card without a foot has air at the
+   bottom instead of a shorter box (the maintainer's word, reversing the old `align-items:
+   start` of the gauge row). */
+.ol-card { border: 1px solid var(--hmm-border-muted); border-radius: var(--hmm-radius-card); padding: 14px 16px; background: var(--hmm-card-bg); box-shadow: var(--hmm-shadow-card); min-width: 0; }
+.ol-cards > .ol-card { display: flex; flex-direction: column; }
+/* a control straight in such a card keeps its own width instead of stretching across the column
+   (the language and theme selects of Settings) */
+.ol-cards > .ol-card > :is(select, button) { align-self: flex-start; }
+/* a card that is a link: the whole surface, lifted a pixel on hover, the text in the page's ink
+   and the value in the link colour, so it still reads as the way somewhere */
+a.ol-card { color: inherit; text-decoration: none; transition: box-shadow 0.15s ease, transform 0.15s ease; }
+a.ol-card:hover { box-shadow: var(--hmm-shadow-card-hover); transform: translateY(-1px); }
+a.ol-card .ol-card-body { color: var(--hmm-link); }
+/* the gauge tiles of the Status and Interfaces pages (task 53/54): a ring and its figures need a
+   wider track than a label over a value; the min() keeps a phone from overflowing it */
+.ol-cards.ol-gauges { grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr)); }
+/* the warning state is a coloured left edge, not a coloured hairline all around */
+/* A section's heading and its own actions (lib/SectionHead.svelte). Task 199 put the one action
+   beside the heading; the maintainer, 2026-09-24 (openccu-lite tasks 221-223): "move the
+   usb-devices, add gateway and search again buttons below the area headings". So the actions are
+   one toolbar row directly under the heading, left-aligned with it, with the same spacing under
+   every heading on every page: the heading's own 8 px, then the row, then 10 px to the section's
+   content. The row wraps on a phone like any toolbar. */
+/* a block, not a flex box: the heading's top margin then collapses with the one above, as a bare
+   heading's does, and a section with actions starts at the same distance as one without */
+.ol-headrow { margin-bottom: 10px; }
+.ol-headrow-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+
+/* the maintainer, 2026-09-19: a section in a panel of its own over the page's width - the Keys
+   page's three keys, the Remote access page's authentication, SSH and tokens */
+.ol-panel { border: 1px solid var(--hmm-border-muted); border-radius: var(--hmm-radius-card); padding: 2px 16px 14px; background: var(--hmm-card-bg); box-shadow: var(--hmm-shadow-card); margin: 0 0 14px; min-width: 0; }
+.ol-panel > :first-child { margin-top: 12px; }
+
+/* the state of a card, a panel or a notice is the same 4 px left edge, said once here so the three
+   cannot drift apart (task 203). A panel's other three borders stay the 1 px hairline; its left
+   padding gives the three extra pixels back, so the text of a panel with an edge starts at the same
+   x as the text of one without (box-sizing is border-box). */
+.ol-card.warn, .ol-panel.warn { border-left: 4px solid var(--hmm-warn); }
+.ol-card.err, .ol-panel.err { border-left: 4px solid var(--hmm-error); }
+.ol-panel.warn, .ol-panel.err { padding-left: 13px; }
+
+/* task 203, the maintainer: the Status page's warnings are panels like the rest of the UI, not
+   sunken boxes with a coloured line all round (lib/Notice.svelte). A notice is one sentence with
+   its buttons, not a section with a heading, so it pads evenly top and bottom. */
+.ol-panel.ol-notice-panel { padding: 12px 16px; }
+.ol-panel.ol-notice-panel.warn, .ol-panel.ol-notice-panel.err { padding-left: 13px; }
+.ol-panel.ol-notice-panel > :first-child { margin-top: 0; }
+.ol-panel.ol-notice-panel.ol-notice-link { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; }
+/* the head row: the icon in a small accent-tinted circle, the title in regular ink at normal
+   size, whatever the page puts at the right end (a dot, a badge) after it */
+.ol-card-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ol-card-icon { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 50%; background: var(--hmm-card-icon-bg); color: var(--hmm-accent); }
+.ol-card-titles { flex: 1 1 auto; min-width: 0; }
+.ol-card-title { font-size: var(--hmm-font-size); font-weight: 600; color: var(--hmm-fg); min-width: 0; overflow-wrap: anywhere; }
+/* the code under the title - a serial, an SGTIN, a radio address - in the address font, small,
+   on its own line so it can never wrap through the name; `anywhere` only as the last resort */
+.ol-card-sub { font-family: var(--hmm-font-mono); font-size: var(--hmm-font-size-small); color: var(--hmm-fg-muted); margin-top: 3px; overflow-wrap: anywhere; }
+.ol-card-body { font-size: 15px; margin-top: 8px; overflow-wrap: anywhere; }
+.ol-card-detail { color: var(--hmm-fg-muted); font-size: var(--hmm-font-size-small); margin-top: 4px; overflow-wrap: anywhere; }
+.ol-card-foot { margin-top: auto; padding-top: 10px; }
+.ol-card .k { color: var(--hmm-fg-muted); font-size: var(--hmm-font-size-small); }
+.ol-card .v { font-size: 15px; margin-top: 2px; overflow-wrap: anywhere; }
+/* B-58: a value that can be long - a CA's DN, a SAN list, a SHA-256 fingerprint - in a card: much
+   smaller, wrapped at the card's edge, and cut with an ellipsis only past five lines (the full
+   text is the title). `min-width: 0` on the card is what lets a grid cell shrink below its
+   content in the first place; without it the DN walked across the neighbouring cards. */
+.ol-card .v.ol-clamp { font-size: var(--hmm-font-size-small); line-height: 1.35; margin-top: 4px; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 5; line-clamp: 5; overflow: hidden; }
+.ol-card .ol-muted.ol-clamp { font-size: var(--hmm-font-size-small); line-height: 1.35; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; line-clamp: 4; overflow: hidden; }
+.ol-table { width: 100%; border-collapse: collapse; font-size: var(--hmm-font-size-grid); }
+/* task 99: a page's table head sticks directly under the top bar. B-129: `top: 0` - the head's scroll
+   container is the port, which already begins at the bar's lower edge, so the `--ol-header-h` offset
+   task 99 needed while the document scrolled would push the head down over the rows. A table in a box
+   that scrolls on its own sticks to that box, at the same `top: 0`. */
+.ol-table th { text-align: left; font-weight: 600; color: var(--hmm-fg-muted); padding: 6px 8px; border-bottom: 1px solid var(--hmm-border); background: var(--hmm-header-bg); position: sticky; top: 0; }
+.ol-table td { padding: 5px 8px; border-bottom: 1px solid var(--hmm-border-muted); vertical-align: top; }
+.ol-table tr:hover td { background: var(--hmm-row-hover); }
+.ol-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; background: var(--hmm-fg-faint); }
+.ol-dot.ok { background: var(--hmm-ok); }
+/* 30.1: a one-shot that ran and ended - a ring, not a dot */
+.ol-dot.once { background: transparent; border: 2px solid var(--hmm-ok); box-sizing: border-box; }
+.ol-dot.once.failed { border-color: var(--hmm-error); }
+/* 30.3: the pills, readable in both themes - every colour a token */
+.ol-badge { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 3px; font-size: 0.8em; line-height: 1.6; background: var(--hmm-bg-sunken); color: var(--hmm-fg-muted); border: 1px solid var(--hmm-border-muted); white-space: nowrap; }
+/* the maintainer, 2026-09-20: an accented pill that leads somewhere - the Interfaces page's
+   "update available" beside a module's firmware version, linking to the Updates page */
+.ol-badge-accent { background: var(--hmm-accent-bg); color: var(--hmm-accent); border-color: var(--hmm-accent); text-decoration: none; }
+a.ol-badge-accent:hover { background: var(--hmm-accent); color: var(--hmm-bg); }
+.ol-badge.good { background: var(--hmm-accent-bg); color: var(--hmm-accent); border-color: transparent; }
+.ol-badge.warn { background: var(--hmm-warn); color: var(--hmm-bg); border-color: transparent; }
+.ol-badge.bad { background: var(--hmm-error); color: var(--hmm-bg); border-color: transparent; }
+/* 30.2: the catalogue's one bar */
+.ol-progress { height: 8px; border-radius: 4px; background: var(--hmm-bg-sunken); border: 1px solid var(--hmm-border-muted); overflow: hidden; margin: 6px 0 2px; }
+.ol-progress > div { height: 100%; background: var(--hmm-accent); transition: width 0.4s linear; }
+.ol-progress.failed > div { background: var(--hmm-error); } .ol-dot.err { background: var(--hmm-error); } .ol-dot.warn { background: var(--hmm-warn); }
+/* task 94: starting - systemd is bringing the unit up (hmipserver's JVM at boot). The accent, not a
+   warning colour, breathing slowly; still for a reader who asked for less motion */
+.ol-dot.starting { background: var(--hmm-accent); animation: ol-starting 1.6s ease-in-out infinite; }
+/* a unit a condition kept off (the Services page, the Interfaces page's connection panels, task 183) */
+.ol-dot.skipped { background: transparent; border: 2px solid var(--hmm-fg-faint); box-sizing: border-box; }
+@keyframes ol-starting { 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { .ol-dot.starting { animation: none; } }
+.ol-muted { color: var(--hmm-fg-muted); }
+.ol-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 0 0 10px; }
+/* B-115: a toolbar's text may be one run without a break - the release check's error carried GitHub's
+   raw answer, 536 px on a 412 px phone. It takes a line of its own, shrinks to the row and breaks
+   anywhere; a flex item's automatic minimum would be that whole run. */
+.ol-toolbar > span { min-width: 0; overflow-wrap: anywhere; }
+/* task 93: a segmented switch - the tabs of the Log page's settings sheet. Links or buttons in one
+   rounded border, the chosen one in the accent colour. */
+.ol-seg { display: inline-flex; align-items: stretch; border: 1px solid var(--hmm-border); border-radius: var(--hmm-radius); overflow: hidden; background: var(--hmm-control-bg); }
+.ol-seg > :is(a, button) {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 24px; padding: 3px 14px;
+    border: 0; border-left: 1px solid var(--hmm-border); background: transparent; color: var(--hmm-fg);
+    font: inherit; text-decoration: none; white-space: nowrap; cursor: pointer;
+}
+.ol-seg > :first-child { border-left: 0; }
+.ol-seg > :is(a, button):hover { background: var(--hmm-control-bg-hover); }
+.ol-seg > :is([aria-current='page'], [aria-selected='true']) { color: var(--hmm-accent); background: var(--hmm-accent-bg); font-weight: 600; }
+.ol-seg > :is(a, button):focus-visible { outline: 2px solid var(--hmm-focus); outline-offset: -2px; }
+.ol-actions { display: inline-flex; gap: 4px; }
+/* …but not on a table cell: `inline-flex` there takes the cell out of the table's own layout, the
+   browser wraps it in an anonymous cell of its own, and the row's hairline and hover background
+   then stop where the last real cell ends while the buttons float beside them at a height of their
+   own. Every grid with an action column - Services, Addons, the LAN gateways, the users - showed it
+   as a stray rule under the buttons. A cell stays a cell; the whitespace between the buttons does
+   what the flex gap did. */
+td.ol-actions { display: table-cell; }
+.ol-notice { padding: 8px 10px; border-radius: var(--hmm-radius); border: 1px solid var(--hmm-border); background: var(--hmm-bg-sunken); margin-bottom: 10px; }
+.ol-notice.error { border-color: var(--hmm-error); }
+/* task 53: a notice with a link button to the page where the matter is handled
+   (lib/Notice.svelte) - the text takes the width, the button sits at the right end on a wide
+   screen and wraps under the text on a phone */
+.ol-notice.ol-notice-link { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; }
+.ol-notice-text { flex: 1 1 260px; min-width: 0; }
+.ol-notice-link a.hmm-button { flex: 0 0 auto; text-decoration: none; color: var(--hmm-fg); white-space: nowrap; }
+.ol-log { font-family: var(--hmm-font-mono); font-size: var(--hmm-font-size-grid); white-space: pre-wrap; word-break: break-word; }
+.ol-log .sev-err, .ol-log .sev-crit, .ol-log .sev-alert, .ol-log .sev-emerg { color: var(--hmm-error); }
+.ol-log .sev-warning, .ol-log .sev-warn { color: var(--hmm-warn); }
+.ol-log .sev-debug { color: var(--hmm-fg-faint); }
+.ol-frame-head { display: flex; align-items: center; gap: 10px; padding: 6px 12px; background: var(--hmm-header-solid); border-bottom: 1px solid var(--hmm-border); }
+.ol-frame { flex: 1; border: 0; width: 100%; min-height: 70vh; background: #fff; }
+/* B-115: the value column shrinks below its longest word (a 1fr track's minimum is its content), and a
+   file name breaks anywhere - the radio firmware card in German was 8 px wider than a phone in Firefox */
+.ol-kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 14px; }
+.ol-kv dt { color: var(--hmm-fg-muted); } .ol-kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+a { color: var(--hmm-link); }
+@media (max-width: 700px) {
+    /* task 191: the bar is two rows on a phone, and which is which is said here rather than left to
+       where the widths happen to wrap - the wordmark and the icons in the first row, the whole nav in
+       the second. The nav's 100 % basis is what breaks the line; `order` puts the spacer between the
+       wordmark and the icon group, so the group ends flush at the right edge. */
+    .ol-header { flex-wrap: wrap; height: auto; padding: 4px 6px; row-gap: 2px; column-gap: 4px; }
+    .ol-brand { order: 1; }
+    .ol-spacer { order: 2; }
+    .ol-header > .ol-iconlink, .ol-header > .ol-power { order: 3; margin-left: 0; }
+    /* the second row: one line that scrolls sideways when it does not fit, with no scrollbar of its
+       own. The edge that still has something to show is faded by the row's own box (App.svelte sets
+       the flags while it scrolls) - not by a mask on the scroller: a mask makes the element the
+       containing block of everything fixed inside it and clips it, and the Addons dropdown, which
+       hangs from a button in this row, would be trapped in it. */
+    .ol-navrow { display: block; position: relative; order: 4; flex: 1 0 100%; min-width: 0; }
+    .ol-navrow::before, .ol-navrow::after {
+        content: ''; position: absolute; top: 0; bottom: 0; width: 16px; z-index: 1;
+        pointer-events: none; opacity: 0;
+    }
+    .ol-navrow::before { left: 0; background: linear-gradient(90deg, var(--hmm-header-bg), transparent); }
+    .ol-navrow::after { right: 0; background: linear-gradient(270deg, var(--hmm-header-bg), transparent); }
+    .ol-navrow[data-more-left]::before { opacity: 1; }
+    .ol-navrow[data-more-right]::after { opacity: 1; }
+    .ol-nav {
+        width: 100%; min-width: 0; margin-left: 0;
+        flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain;
+        scrollbar-width: none; -ms-overflow-style: none;
+    }
+    .ol-nav::-webkit-scrollbar { display: none; }
+    .ol-nav > * { flex: 0 0 auto; }
+    .ol-main { padding: 10px; }
+    /* a narrow window has no 184 px to spare on a breadcrumb either (task 27.7) */
+    .ol-menu { --ol-menubtn-cap: 120px; }
+}
+/* task 99: on a phone the sticky bar must leave the page most of the screen - at most a fifth of it. At
+   360×640 it was 174 px, 27 %, wrapped into four rows; task 191 made it two. Below 480 px the tabs,
+   menus and icons are tighter still (the version left the bar above, in the 700 px block). */
+@media (max-width: 480px) {
+    .ol-header { gap: 2px 4px; padding: 3px 4px 3px 6px; }
+    .ol-nav { margin-left: 0; gap: 0; }
+    .ol-nav a, .ol-menubtn { padding: 5px 7px; }
+    .ol-iconlink { padding: 5px; }
+    .ol-menu { --ol-menubtn-cap: 100px; }
+}
+
+/* journal view (task 20): timestamp, level, source, message as columns */
+.ol-journal .ol-line { display: flex; gap: 8px; }
+.ol-journal .ol-ts { flex-shrink: 0; }
+.ol-journal .ol-lvl { width: 4.4em; flex-shrink: 0; font-weight: 600; white-space: nowrap; }
+.ol-journal .ol-src { flex-shrink: 0; color: var(--hmm-fg-muted); max-width: 14em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ol-journal .ol-msg { min-width: 0; }
+.ol-journal .sev-info .ol-lvl { color: var(--hmm-accent); }
+
+/* catalogue cards (task 56): a wider track than the shared 220 px - two columns on a laptop,
+   three on a wide screen, one on a phone (the min() keeps a narrow window from overflowing) -
+   and the action row always at the lower right */
+.ol-card.ol-card-catalog .ol-card-foot { display: flex; gap: 6px; align-items: center; justify-content: flex-end; }
+
+.ol-warn { color: var(--hmm-warn); font-weight: 600; }
+
+.ol-sort { cursor: pointer; user-select: none; white-space: nowrap; }
+
+/* The forms of the pages: the column of labelled controls that Network, Backup and Radio each
+   spelled out in their own <style> - Radio's not at all, so its gateway form had no layout. One
+   definition here; a page with a reason to differ still overrides it in its own scoped block. */
+.ol-form { display: flex; flex-direction: column; gap: 8px; max-width: 640px; margin-bottom: 8px; }
+.ol-form label { display: grid; grid-template-columns: 150px 1fr auto; align-items: center; gap: 8px; }
+/* B-105: a field may be narrower than its content. A grid item's automatic minimum is its content,
+   so the firewall's policy select (its longest option) and the clock's date field held their 1fr
+   track open and pushed the Network page to 646 px on a 412 px phone (718 px in German). */
+.ol-form label > :is(input, select, textarea) { min-width: 0; }
+/* openccu-lite tasks 221-223: a form's buttons (and a line that belongs to its fields, a hint or a
+   mismatch) start where the fields start - under the inputs, not under the labels */
+.ol-form > .ol-form-buttons { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: calc(150px + 8px); }
+/* B-115: WebKit shrinks the select, but its longest option still counts toward the page's width - the
+   policy select widened the Network page to 497 px (520 px in German) on a 412 px phone although its
+   box fit. Paint containment keeps what is inside the control inside it; its own border and focus ring
+   are not content and stay as they are. */
+.ol-form label > select { contain: paint; }
+/* openccu-lite task 221 (the maintainer, 2026-09-24, on the Network page's name resolution and time
+   panels: "labels, infos, input fields are not aligned, looks ugly ... the spacings between info
+   texts and inputs are too low"): a panel's labelled rows on one grid. One label column as wide as
+   the panel's longest label, one value column where every read-only value, input and button starts
+   at the same x; a row's input takes the column's width and its button stands at the row's end, so
+   the buttons of a panel line up too. An explanation sits under its field in the value column,
+   6 px below it; 12 px between one row and the next. On a phone the label stands above its value. */
+.ol-fields { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: baseline; gap: 12px 16px; margin: 12px 0 0; }
+.ol-fields > .ol-field-label { color: var(--hmm-fg-muted); white-space: nowrap; }
+.ol-fields > :is(dt, dd) { margin: 0; }
+.ol-fields > .ol-field-value { display: flex; flex-direction: column; align-items: stretch; gap: 6px; min-width: 0; overflow-wrap: anywhere; }
+.ol-field-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ol-field-row > :is(input, select) { flex: 1 1 auto; min-width: 0; }
+.ol-field-row > .hmm-button { flex: 0 0 auto; }
+.ol-field-value > .hmm-button, .ol-field-value > .ol-field-buttons { align-self: flex-start; }
+.ol-field-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+.ol-field-hint { margin: 0; color: var(--hmm-fg-muted); font-size: var(--hmm-font-size-small); line-height: 1.4; }
+.ol-fields + .ol-fields { margin-top: 12px; }
+@media (max-width: 480px) {
+    .ol-fields { grid-template-columns: minmax(0, 1fr); gap: 4px 0; }
+    .ol-fields > .ol-field-value { margin-bottom: 10px; }
+    .ol-fields > .ol-field-label { white-space: normal; }
+}
+/* a panel's title as a heading in its head row (h3 for the outline, the card title's look) */
+.ol-card-head > h3.ol-card-title, .ol-card-titles > h3.ol-card-title { margin: 0; }
+
+/* B-112: a label whose text stands above its field - the login's fields, the dialogs' text field, the
+   log settings' fields, the Security form on a narrow window - keeps its text a few pixels off the
+   field, one value for all of them. On the login page a line break was the only separation. */
+:root { --ol-label-gap: 6px; }
+.ol-labelled { display: flex; flex-direction: column; gap: var(--ol-label-gap); }
+
+/* Task 38 / task 235: a field for pasted PEM - a certificate, a chain, a key - tall enough for a whole
+   certificate (a PEM is ~30 lines of 64 characters; give it rows="30"), monospace, the line breaks
+   kept, resizable. The Certificate page's fields and the OIDC trust field share it, so the two look
+   the same (the maintainer, task 235). */
+textarea.ol-pem { min-height: 30lh; font-size: var(--hmm-font-size-small); line-height: 1.3; resize: vertical; white-space: pre; overflow: auto; }
+
+/* B-105: a table whose rows stack on a phone. At 412 px the Services, timers, Installed addons and
+   sessions tables were wider than the screen, so the whole page scrolled sideways and the phone's
+   browser zoomed it out under the reader's taps. Below 700 px a row of an `.ol-stack` table is a
+   wrapping line of its cells: a cell marked `ol-stack-line` takes a line of its own, a cell with a
+   `data-label` names itself, because no column header stands above it any more, and an empty cell
+   leaves no gap. The head is hidden; a page whose head sorts shows it itself (Services). */
+@media (max-width: 700px) {
+    .ol-table.ol-stack, .ol-table.ol-stack > tbody { display: block; }
+    .ol-table.ol-stack > thead { display: none; }
+    .ol-table.ol-stack > tbody > tr { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 12px; padding: 7px 6px; border-bottom: 1px solid var(--hmm-border-muted); }
+    .ol-table.ol-stack > tbody > tr > td { padding: 0; border-bottom: 0; min-width: 0; }
+    .ol-table.ol-stack > tbody > tr:hover { background: var(--hmm-row-hover); }
+    .ol-table.ol-stack > tbody > tr:hover > td { background: none; }
+    .ol-table.ol-stack > tbody > tr > td.ol-stack-line { flex: 1 1 100%; }
+    .ol-table.ol-stack > tbody > tr > td:empty { display: none; }
+    .ol-table.ol-stack > tbody > tr > td[data-label]::before { content: attr(data-label) ': '; color: var(--hmm-fg-muted); font-family: var(--hmm-font); }
+}
+
+/* Disclosure (maintainer, 2026-09-07): a block of inputs for an occasional *add* is not shown
+   before the user asked for it. `lib/Disclosure.svelte` renders the button and this panel; what is
+   inside is the page's ordinary `ol-form` or `ol-toolbar`.
+   Task 98: the open panel is a card lying on the page, not a hole in it - the card's surface, radius,
+   hairline and shadow (`.ol-card`), in both themes. It was the sunken box of a notice: in dark
+   #171a20 on the #1b1f26 ground, a step *below* the page; the card is #232830 with the deeper dark
+   shadow, a step above it like every other panel. The focus lands on the panel itself only as a
+   starting point while it has no field yet (Disclosure.svelte); a ring around the whole card would
+   read as a selection, so it has none.
+   Task 98, refined: the button grows into the panel (Disclosure.svelte, lib/morph.ts). The slot around
+   the button and the panel is what the page below rests on; its height and margins move with the
+   morph. It is a flow-root, so the margins it moves are its own and no child's margin collapses
+   through its edge half-way; its open margins are the panel's old ones and still collapse with the
+   page's headings around it. A closing panel leaves the flow and shrinks onto the button, which holds
+   its place unseen until the panel has become it. */
+.ol-disclosure-slot { display: flow-root; }
+.ol-disclosure-slot.ol-disclosure-open { position: relative; margin: 8px 0 12px; }
+.ol-disclosure { position: relative; max-width: 720px; padding: 14px 16px; border: 1px solid var(--hmm-border-muted); border-radius: var(--hmm-radius-card); background: var(--hmm-card-bg); box-shadow: var(--hmm-shadow-card); }
+.ol-disclosure.ol-disclosure-leaving { position: absolute; top: 0; left: 0; }
+.ol-disclosure-waiting { visibility: hidden; }
+.ol-disclosure-ghost { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; white-space: nowrap; overflow: hidden; pointer-events: none; }
+.ol-disclosure:focus { outline: none; }
+.ol-disclosure-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.ol-disclosure-head h3 { margin: 0; }
+.ol-disclosure-body > .ol-form:last-child, .ol-disclosure-body > .ol-toolbar:last-child { margin-bottom: 0; }
+
+/* Task 57 (D-68): the System menu (lib/SystemMenu.svelte), the *System* tab and a system page's title
+   switcher (lib/SystemTitle.svelte). Every entry has a small square behind its icon. Task 210 (the
+   maintainer, 2026-09-23: "i dont like that it has so many different colors"): the fourteen iOS
+   colours - one per entry, a decoration without a meaning - are one pastel accent now, the shell's
+   own blue softened, the same for every entry. The icon's ink keeps WCAG AA (4.5:1) against the
+   square, the panel and a hovered row in both schemes. The tokens are the shell's (`--ol-`). */
+:root {
+    --ol-sys-tile-bg: #e1ebf7;
+    --ol-sys-tile-ink: #2a5f93;
+}
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme='light']) {
+        --ol-sys-tile-bg: #2f4258;
+        --ol-sys-tile-ink: #a8c7ea;
+    }
+}
+:root[data-theme='dark'] {
+    --ol-sys-tile-bg: #2f4258;
+    --ol-sys-tile-ink: #a8c7ea;
+}
+/* the warning dot of an entry whose page has an active warning (task 81's tracker), amber or red; the
+   tab carries the worst of them. Its aria-label names the severity. */
+.ol-sysdot { flex: 0 0 auto; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--hmm-warn); }
+.ol-sysdot.error { background: var(--hmm-error); }
+.ol-sysdot.ol-sysdot-none { visibility: hidden; }
+/* the System tab: a plain tab with a caret, no reserved width - its label never changes; task 248:
+   the Addons tab (.ol-dottab) the same, its dot's place reserved too */
+.ol-systab .ol-menubtn-live, .ol-dottab .ol-menubtn-live { gap: 6px; }
+.ol-systab .ol-sysdot, .ol-dottab .ol-sysdot { margin-left: 0; }
+.ol-systab .ol-caret, .ol-dottab .ol-caret { margin-left: 0; }
+
+/* task 177 (revised by the maintainer: no placeholders): every page switch covers the page area -
+   the page builds up underneath, its panels arriving unseen - and fades in at 250 ms (App.svelte,
+   COVER_MS). The menu is not covered. Under reduced motion the page appears at 250 ms, unfaded. */
+.ol-main { transition: opacity 200ms ease-out; }
+.ol-main.ol-entering { opacity: 0; transition: none; }
+@media (prefers-reduced-motion: reduce) { .ol-main { transition: none; } }
+
+/* task 177: the wait for a page's first visit, shown on the top bar's bottom edge - a soft light
+   that runs once from left to right in the cover's longest wait, gone as soon as the page is ready;
+   under reduced motion a faint, still line */
+.ol-loadbar {
+    position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; overflow: hidden; pointer-events: none;
+}
+.ol-loadbar::before {
+    content: ''; position: absolute; top: 0; bottom: 0; left: 0; width: 35%;
+    background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--hmm-accent) 70%, transparent), transparent);
+    transform: translateX(-100%);
+    animation: ol-loadbar var(--ol-loadbar-ms, 2000ms) linear forwards;
+}
+@keyframes ol-loadbar { to { transform: translateX(286%); } }
+@media (prefers-reduced-motion: reduce) {
+    .ol-loadbar::before { animation: none; transform: none; width: 100%; opacity: 0.35; background: var(--hmm-accent); }
+}
+
+/* task 177: a kept page's box adds nothing to the layout (the Log page fills main as before); one
+   that is not shown is gone */
+.ol-keptpage { display: contents; }
+.ol-keptpage[hidden] { display: none !important; }
+
+/* Task 154: the key sheet is paper - black on white in either theme, so it prints as it looks
+   (lib/KeySheet.svelte). */
+:root {
+    --ol-paper: #ffffff;
+    --ol-paper-ink: #000000;
+    --ol-paper-meta: #333333;
+    --ol-paper-label: #444444;
+    --ol-paper-rule: #999999;
+    --ol-paper-backdrop: rgba(0, 0, 0, 0.72);
+    --ol-paper-backdrop-ink: #eeeeee;
+}
+
+/* task 193: the channel sheet - the page behind it goes frosted (a blur plus the dim), on one
+   layer over the whole page; a browser without backdrop-filter keeps the dim */
+.ol-backdrop:has(> .app-sheet) { backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+/* the sheet's head is its own (the circle, the name, the state); the modal's titles stay for the
+   dialog's name only */
+.ol-modal.app-sheet .ol-modal-titles { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+/* the maintainer, 2026-09-22: the × sits in the upper right, top-aligned with the sheet's circle, and the
+   circle keeps the same distance to the left and to the top (the body's padding); the head's first row
+   leaves the × its room */
+.ol-modal.app-sheet { position: relative; }
+.ol-modal.app-sheet .ol-modal-head { position: absolute; top: 18px; right: 18px; padding: 0; z-index: 1; }
+.ol-modal.app-sheet .ol-modal-close { width: 32px; height: 32px; }
+.ol-modal.app-sheet .ol-modal-close svg { width: 16px; height: 16px; }
+.ol-modal.app-sheet .ol-modal-body { padding: 18px 18px 12px; }
+.ol-modal.app-sheet .ol-modal-body > :first-child { padding-right: 40px; }
+
+/* Task 162: the handle of a row that can be moved (lib/SortHandle.svelte), wherever a list or a
+   table is ordered by hand. Faint until the row is hovered or the handle has the focus - a finger
+   has no hover, so it is never hidden. touch-action: none keeps a drag from scrolling the page. */
+.ol-grip {
+    display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 18px; min-height: 28px;
+    padding: 0; border: 0; background: none; color: var(--hmm-fg-faint); cursor: grab; touch-action: none;
+    border-radius: var(--hmm-radius); vertical-align: middle;
+}
+.ol-sortrow:hover .ol-grip, .ol-grip:focus-visible { color: var(--hmm-fg-muted); }
+.ol-grip:hover { color: var(--hmm-fg); background: var(--hmm-control-bg-hover); }
+.ol-grip-none { cursor: default; }
+.ol-dragging { opacity: 0.5; }
+.ol-dragging .ol-grip { cursor: grabbing; }
+/* the drop line: a 2 px accent line above the row the dragged one would push down, or below the
+   last; on a table row it is drawn on the cells, which is where every engine paints a shadow */
+.ol-drop-before:not(tr), tr.ol-drop-before > td { box-shadow: inset 0 2px 0 var(--hmm-accent); }
+.ol-drop-after:not(tr), tr.ol-drop-after > td { box-shadow: inset 0 -2px 0 var(--hmm-accent); }
+/* read, not seen: the live region that says where a moved row went */
+.ol-sronly { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }

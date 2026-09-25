@@ -1,0 +1,71 @@
+// Task 179: what the UI bundle ships of npm - every package with code in an emitted chunk, with its
+// version, licence and licence text - for the image's SBOM (the fork's scripts/lite-sbom.py reads
+// internal/ui/bundle-licenses.json from occulited's source). The dev dependencies that only build
+// the bundle (Vite, the Svelte compiler's own tooling) are not in it; the Svelte runtime is.
+import {existsSync, readdirSync, readFileSync, writeFileSync} from 'node:fs';
+import {dirname, join, sep} from 'node:path';
+import type {Plugin} from 'vite';
+
+export interface BundledPackage {
+    name: string;
+    version: string;
+    license: string;
+    author?: string;
+    homepage?: string;
+    repository?: string;
+    /** the package's LICENSE (or LICENCE, COPYING) file, as it is */
+    text?: string;
+    /** the chunks it is in: index (the page) or a lazily loaded one (jsQR) */
+    chunks: string[];
+}
+
+/** the package directory of a module under node_modules, or undefined for our own code */
+export function packageDir(id: string): string | undefined {
+    const clean = id.replace(/^\0/, '').split('?')[0] ?? '';
+    const at = clean.lastIndexOf(`${sep}node_modules${sep}`);
+    if (at < 0) return undefined;
+    const rest = clean.slice(at + `${sep}node_modules${sep}`.length).split(sep);
+    const n = rest[0]?.startsWith('@') ? 2 : 1;
+    return join(clean.slice(0, at), 'node_modules', ...rest.slice(0, n));
+}
+
+function text(dir: string): string | undefined {
+    const f = readdirSync(dir).find((x) => /^(licen[cs]e|copying)(\.(md|txt))?$/i.test(x));
+    return f ? readFileSync(join(dir, f), 'utf8') : undefined;
+}
+
+function field(v: unknown): string | undefined {
+    if (typeof v === 'string') return v;
+    if (v && typeof v === 'object' && 'name' in v) return String((v as {name: unknown}).name);
+    if (v && typeof v === 'object' && 'url' in v) return String((v as {url: unknown}).url);
+    return undefined;
+}
+
+export function bundleLicenses(out: string): Plugin {
+    return {
+        name: 'occulited-bundle-licenses',
+        apply: 'build',
+        generateBundle(_options, bundle) {
+            const found = new Map<string, BundledPackage>();
+            for (const chunk of Object.values(bundle)) {
+                if (chunk.type !== 'chunk') continue;
+                for (const [id, m] of Object.entries(chunk.modules)) {
+                    if (!m.renderedLength) continue;
+                    const dir = packageDir(id);
+                    if (!dir || !existsSync(join(dir, 'package.json'))) continue;
+                    const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as Record<string, unknown>;
+                    const name = String(pkg.name);
+                    const e = found.get(name) ?? {name, version: String(pkg.version), license: field(pkg.license) ?? '', author: field(pkg.author), homepage: field(pkg.homepage), repository: field(pkg.repository), text: text(dir), chunks: []};
+                    const chunkName = chunk.name;
+                    if (!e.chunks.includes(chunkName)) e.chunks.push(chunkName);
+                    found.set(name, e);
+                }
+            }
+            const list = [...found.values()].sort((a, b) => a.name.localeCompare(b.name));
+            writeFileSync(out, JSON.stringify({packages: list}, null, 1) + '\n');
+            this.info(`bundle licences: ${list.map((p) => `${p.name}@${p.version} (${p.license})`).join(', ')} -> ${out}`);
+        },
+    };
+}
+
+export const BUNDLE_LICENSES = join(dirname(new URL(import.meta.url).pathname), '..', '..', 'internal', 'ui', 'bundle-licenses.json');

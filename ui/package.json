@@ -1,0 +1,30 @@
+{
+  "name": "occulited-ui",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "The web UI of occulited: the shell of an openccu-lite box",
+  "license": "GPL-3.0-only",
+  "scripts": {
+    "dev": "vite",
+    "build": "rm -rf ../internal/ui/dist/assets && vite build && node scripts/starting-page.mjs",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@sveltejs/vite-plugin-svelte": "^6.2.4",
+    "@tsconfig/svelte": "^5.0.4",
+    "@types/node": "24.13.6",
+    "svelte": "^5.57.0",
+    "svelte-check": "^4.3.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.6",
+    "vitest": "^5.0.0"
+  },
+  "dependencies": {
+    "jsqr": "1.4.0"
+  }
+}
