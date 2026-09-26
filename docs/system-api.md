@@ -758,9 +758,18 @@ A running request — the streams, the log follow, lite-rpc's events, an upload 
 
 ## Addon CGIs
 
-lighttpd proxies `/addons/<name>/*.cgi` and `*.ccc` to occulited (static files under `/addons`
-stay lighttpd's). occulited checks the session (any role, like the gate; browsers without one
-are sent to `/login`), builds the CGI environment mod_cgi built (`REQUEST_METHOD`, `QUERY_STRING`,
+lighttpd proxies all of `/addons/` to occulited, behind its session gate, and serves nothing
+there itself. occulited checks the session (any role, like the gate; browsers without one
+are sent to `/login`) for every request under `/addons/`.
+
+**Static files** (B-120): everything that is not a CGI is served by occulited as `occulite`, through
+`os.Root` on the addon's own directory (the parent of its `www`, wherever the `www` link leads), so a
+link out of that tree answers 404, as do dotfiles, anything that is neither a regular file nor a
+directory, and a `.cgi`/`.ccc` path segment; only `GET` and `HEAD` are allowed. A directory answers
+its `index.htm`, `index.html`, `index.xhtml` or `default.htm`.
+
+**CGIs**: a `*.cgi` or `*.ccc` (or a directory whose index is `index.cgi`) is run: occulited builds
+the CGI environment mod_cgi built (`REQUEST_METHOD`, `QUERY_STRING`,
 `SCRIPT_NAME`, `PATH_INFO`, `REMOTE_ADDR` from the last element of `X-Forwarded-For` (lighttpd's; B-230), `HTTP_*`, `CONTENT_*`), runs
 `/bin/tclsh <script>` (or the `.ccc` directly) through the privilege helper **as the addon's user
 when the addon is confined**, root otherwise, feeds the body on stdin (64 MB cap, 5 min),
@@ -774,8 +783,8 @@ and open its file (the shim does) and nobody can list them.
 The shell shows an addon's settings page (its `Config-Url`, from the Addons page, at the shell path
 `/addon-settings/<id>`), an addon's own web frontend (from the addon dropdown) and every `nav.d`
 entry in an iframe of the same origin. `/addons/<id>` is kept as an in-app alias
-that the router replaces with `/addon-settings/<id>`; typed or reloaded, `/addons/…` belongs to
-lighttpd and the addons' www directories.
+that the router replaces with `/addon-settings/<id>`; typed or reloaded, `/addons/…` is the addons'
+own files and CGIs (see *Addon CGIs*).
 
 **Kept pages**: an addon's frontend and settings page stay loaded while other pages
 show — hidden with `visibility: hidden` at their last size, never moved in the DOM (a moved iframe
