@@ -35,6 +35,31 @@ func TestNoUnboundedBody(t *testing.T) {
 	}
 }
 
+// B-255: no handler stages an upload in os.CreateTemp("") - that is /tmp, a tmpfs (RAM) on every
+// product; big uploads belong on the userfs (system.StageUpload). A CreateTemp with a real
+// directory as its first argument is fine, but the httpapi package should not name one at all.
+func TestNoTmpfsUpload(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		b, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, line := range strings.Split(string(b), "\n") {
+			if strings.Contains(line, "os.CreateTemp(") {
+				t.Errorf("%s:%d stages a file with os.CreateTemp; use system.StageUpload on the userfs: %s", name, i+1, strings.TrimSpace(line))
+			}
+		}
+	}
+}
+
 // a body over its limit is 413 too-large with the limit, through decodeSmall and readJSON alike
 func TestBodyTooLarge(t *testing.T) {
 	h := func(read func(http.ResponseWriter, *http.Request, any) error) http.HandlerFunc {

@@ -3,8 +3,10 @@ package httpapi
 import (
 	"encoding/json"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,6 +15,71 @@ import (
 	"github.com/hobbyquaker/occulited/internal/meta"
 	"github.com/hobbyquaker/occulited/internal/radio"
 )
+
+// zeroReader yields an endless stream of NUL bytes, for a large upload body a test streams rather
+// than allocates.
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = 0
+	}
+	return len(p), nil
+}
+
+// B-255: the regadom import stages an upload on the userfs with a cap, refuses one over the cap
+// with 413, and leaves no staged file behind on any path.
+func TestImportRegadomStaging(t *testing.T) {
+	root := t.TempDir()
+	s, err := meta.New(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	(&MetaAPI{Store: s, Root: root}).Register(mux)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	staging := filepath.Join(root, "usr/local/etc/occulite/staging")
+
+	post := func(filename string, size int64) int {
+		pr, pw := io.Pipe()
+		mw := multipart.NewWriter(pw)
+		go func() {
+			fw, _ := mw.CreateFormFile("file", filename)
+			_, _ = io.CopyN(fw, zeroReader{}, size)
+			_ = mw.Close()
+			_ = pw.Close()
+		}()
+		req, _ := http.NewRequest("POST", srv.URL+"/api/meta/v1/import/regadom?dry_run=true", pr)
+		req.Header.Set("Content-Type", mw.FormDataContentType())
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		_, _ = io.Copy(io.Discard, res.Body)
+		return res.StatusCode
+	}
+	stagedFiles := func() int {
+		e, _ := os.ReadDir(staging)
+		return len(e)
+	}
+
+	// over the 64 MiB regadom cap: 413, nothing left staged
+	if code := post("big.regadom", 65<<20); code != http.StatusRequestEntityTooLarge {
+		t.Errorf("65 MiB upload: got %d, want 413", code)
+	}
+	if n := stagedFiles(); n != 0 {
+		t.Errorf("a staged file was left after the refused upload: %d", n)
+	}
+	// a small body that is not a regadom: 422 from the parser, still nothing left staged
+	if code := post("small.regadom", 1024); code != http.StatusUnprocessableEntity {
+		t.Errorf("small non-regadom upload: got %d, want 422", code)
+	}
+	if n := stagedFiles(); n != 0 {
+		t.Errorf("a staged file was left after the parse failure: %d", n)
+	}
+}
 
 func newServer(t *testing.T) (*httptest.Server, *meta.Store) {
 	t.Helper()

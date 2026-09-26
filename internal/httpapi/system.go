@@ -1685,19 +1685,18 @@ func (a *SystemAPI) firmwareUpload(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	tmp, err := os.CreateTemp("", "occulite-fw-upload-*.tgz")
-	if err != nil {
-		writeErr(w, err)
+	// B-255/B-256: stage on the userfs, not /tmp (a tmpfs), and refuse a bundle over the cap with
+	// 413 instead of truncating it silently and failing later as "not a gzip".
+	path, _, serr := system.StageUpload(a.Root, "firmware-upload", src, system.MaxFirmwareUpload)
+	if errors.Is(serr, system.ErrUploadTooLarge) {
+		writeJSON(w, http.StatusRequestEntityTooLarge, apiError{Error: "too-large", Message: fmt.Sprintf("the firmware bundle is larger than %d MiB", int64(system.MaxFirmwareUpload)>>20)})
+		return
+	} else if serr != nil {
+		writeErr(w, serr)
 		return
 	}
-	defer os.Remove(tmp.Name())
-	if _, err := io.Copy(tmp, io.LimitReader(src, 64<<20)); err != nil {
-		tmp.Close()
-		writeErr(w, err)
-		return
-	}
-	tmp.Close()
-	b, err := a.Firmware.DeployUpload(filepath.Clean(tmp.Name()))
+	defer os.Remove(path)
+	b, err := a.Firmware.DeployUpload(filepath.Clean(path))
 	if err != nil {
 		writeJSON(w, http.StatusUnprocessableEntity, apiError{Error: "bundle-rejected", Message: err.Error()})
 		return

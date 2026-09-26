@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -667,29 +668,46 @@ func (a *MetaAPI) importRegadom(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		mode, dryRun = r.URL.Query().Get("mode"), r.URL.Query().Get("dry_run") == "true"
-		tmp, terr := os.CreateTemp("", "regadom-*")
-		if terr != nil {
-			writeErr(w, terr)
-			return
-		}
-		defer os.Remove(tmp.Name())
-		var name string
+		var (
+			part *multipart.Part
+			name string
+		)
 		for {
-			part, perr := mr.NextPart()
+			p, perr := mr.NextPart()
 			if perr != nil {
 				break
 			}
-			if part.FormName() == "file" {
-				name = part.FileName()
-				_, _ = io.Copy(tmp, io.LimitReader(part, 2<<30))
+			if p.FormName() == "file" {
+				part, name = p, p.FileName()
 				break
 			}
 		}
-		tmp.Close()
-		if strings.HasSuffix(strings.ToLower(name), ".sbk") {
-			dump, err = regaimport.RegadomFromSBK(tmp.Name())
+		if part == nil {
+			writeJSON(w, http.StatusBadRequest, apiError{Error: "invalid", Message: "no file part"})
+			return
+		}
+		// B-255: stage the upload on the userfs, not /tmp (a tmpfs = RAM), with a cap - a regadom is
+		// a few tens of MB, an .sbk up to a backup's 2 GiB - so a caller cannot fill the RAM until
+		// the OOM killer takes hmipserver's JVM. The copy error is not swallowed, and a body over
+		// the cap is refused with 413 instead of parsed as if it were whole.
+		isSBK := strings.HasSuffix(strings.ToLower(name), ".sbk")
+		limit := int64(system.MaxRegadomUpload)
+		if isSBK {
+			limit = system.MaxSBKUpload
+		}
+		path, _, serr := system.StageUpload(system.Root(a.Root), "regadom", part, limit)
+		if errors.Is(serr, system.ErrUploadTooLarge) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, apiError{Error: "too-large", Message: fmt.Sprintf("the upload is larger than %d MiB", limit>>20)})
+			return
+		} else if serr != nil {
+			writeErr(w, serr)
+			return
+		}
+		defer os.Remove(path)
+		if isSBK {
+			dump, err = regaimport.RegadomFromSBK(path)
 		} else {
-			dump, err = regaimport.ParseRegadomFile(tmp.Name())
+			dump, err = regaimport.ParseRegadomFile(path)
 		}
 	} else {
 		var body struct {
