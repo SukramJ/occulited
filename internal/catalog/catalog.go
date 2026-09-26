@@ -6,8 +6,10 @@
 //
 // Nothing here is fetched in the background: the catalogue file, the manifests, the star counts
 // and the latest releases are loaded when the user runs a check (Refresh) and cached on disk
-// (D-90); a page load answers from the cache. The bundled copy the image carries stands in for
-// the published file, and the adapter manifests beside it are known without any fetch.
+// (D-90); a page load, the start of the service and an install answer from the cache - the last
+// fetched copy of each published catalogue file is part of it (B-240) - and from the bundled copy
+// the image carries, whose adapter manifests beside it are known without any fetch. The one
+// scheduled fetch, Run's daily refresh, goes out only while the user's *Check daily* is on.
 package catalog
 
 import (
@@ -156,6 +158,10 @@ type cacheFile struct {
 	StarsETag map[string]string `json:"stars_etag,omitempty"`
 	Latest    map[string]Latest `json:"latest,omitempty"`
 	Checked   *time.Time        `json:"checked,omitempty"`
+	// Catalogs is the last fetched copy of each published catalogue file, by URL (B-240): what a
+	// page load and the start of the service read instead of the network. file:// URLs are read
+	// from disk every time and are not kept here.
+	Catalogs map[string]*Catalog `json:"catalogs,omitempty"`
 }
 
 // Service loads the catalogue, fetches manifests and installs from them.
@@ -180,17 +186,16 @@ type Service struct {
 
 	refreshing sync.Mutex // one refresh at a time
 
-	mu        sync.Mutex
-	catalog   *Catalog // the merged catalogue file, with the source URL per entry
-	sources   map[string]string
-	catalogAt time.Time
-	cache     cacheFile
-	loaded    bool
-	adapters  map[string]*manifest.Manifest // the bundled adapter manifests by id
-	releases  map[string]releaseCache
-	timings   map[string]float64 // addon id -> install seconds
-	phaseAt   time.Time          // when the current phase began
-	progress  *Progress
+	mu       sync.Mutex
+	catalog  *Catalog // the merged catalogue file, with the source URL per entry
+	sources  map[string]string
+	cache    cacheFile
+	loaded   bool
+	adapters map[string]*manifest.Manifest // the bundled adapter manifests by id
+	releases map[string]releaseCache
+	timings  map[string]float64 // addon id -> install seconds
+	phaseAt  time.Time          // when the current phase began
+	progress *Progress
 }
 
 // New returns a service for the catalogue URLs.
@@ -274,22 +279,28 @@ func (s *Service) saveLocked() {
 	}
 }
 
-// Fetch loads and merges the configured catalogue files (first wins per repository), cached for
-// ten minutes unless force, and answers the view: the entries joined with the cached manifests,
-// the bundled adapters, the star counts and the latest releases. It fetches no manifest: that is
-// Refresh's, on the user's request. An error only when no catalogue file could be loaded.
+// Fetch merges the configured catalogue files and answers the view: the entries joined with the
+// cached manifests, the bundled adapters, the star counts and the latest releases. Without force
+// nothing goes out (B-240, D-90): a published file is taken from the copy the last check left in
+// the cache (none = the file is skipped), a file:// URL is read from disk, and a catalogue already
+// in memory is answered as it is. With force - the user's check, Run's daily refresh - every
+// published file is fetched again and the copy kept. It fetches no manifest: that is Refresh's.
+// An error only when no catalogue file could be loaded.
 func (s *Service) Fetch(ctx context.Context, force bool) (*View, error) {
 	s.mu.Lock()
 	s.loadLocked()
-	fresh := !force && s.catalog != nil && time.Since(s.catalogAt) < 10*time.Minute
+	have := s.catalog != nil
 	s.mu.Unlock()
-	if !fresh {
-		cat, sources, err := s.loadCatalog(ctx)
+	if force || !have {
+		cat, sources, err := s.loadCatalog(ctx, force)
 		if err != nil {
 			return nil, err
 		}
 		s.mu.Lock()
-		s.catalog, s.sources, s.catalogAt = cat, sources, time.Now()
+		s.catalog, s.sources = cat, sources
+		if force {
+			s.saveLocked() // the fetched copies, for the next start
+		}
 		s.mu.Unlock()
 	}
 	return s.view(), nil
@@ -309,20 +320,25 @@ func (s *Service) Cached() *View {
 	return s.view()
 }
 
-// loadCatalog reads every configured URL and merges the entries, the first per repository winning.
-func (s *Service) loadCatalog(ctx context.Context) (*Catalog, map[string]string, error) {
+// loadCatalog merges every configured URL, the first entry per repository winning. A file:// URL
+// is read from disk; a published one is fetched only with network and its copy kept in the cache,
+// else the kept copy stands in - also when the fetch fails - and a URL without one is skipped.
+func (s *Service) loadCatalog(ctx context.Context, network bool) (*Catalog, map[string]string, error) {
 	merged := &Catalog{Format: Format}
 	sources := map[string]string{}
 	seen := map[string]bool{}
 	var firstErr error
 	loaded := 0
 	for _, u := range s.URLs {
-		cat, err := s.fetchCatalog(ctx, u)
+		cat, err := s.loadOne(ctx, u, network)
 		if err != nil {
 			if firstErr == nil {
 				firstErr = fmt.Errorf("%s: %w", u, err)
 			}
 			continue
+		}
+		if cat == nil {
+			continue // a published file no check has fetched yet
 		}
 		loaded++
 		for _, e := range cat.Addons {
@@ -344,6 +360,35 @@ func (s *Service) loadCatalog(ctx context.Context) (*Catalog, map[string]string,
 		return nil, nil, firstErr
 	}
 	return merged, sources, nil
+}
+
+// loadOne is one catalogue URL under loadCatalog's rule; nil without an error is a published file
+// without a kept copy.
+func (s *Service) loadOne(ctx context.Context, u string, network bool) (*Catalog, error) {
+	if strings.HasPrefix(u, "file://") {
+		return s.fetchCatalog(ctx, u)
+	}
+	s.mu.Lock()
+	kept := s.cache.Catalogs[u]
+	s.mu.Unlock()
+	if !network {
+		return kept, nil
+	}
+	cat, err := s.fetchCatalog(ctx, u)
+	if err != nil {
+		if kept != nil {
+			slog.Warn("catalog: the catalogue file could not be fetched, the last copy stands in", "catalog", u, "err", err)
+			return kept, nil
+		}
+		return nil, err
+	}
+	s.mu.Lock()
+	if s.cache.Catalogs == nil {
+		s.cache.Catalogs = map[string]*Catalog{}
+	}
+	s.cache.Catalogs[u] = cat
+	s.mu.Unlock()
+	return cat, nil
 }
 
 // entryKey is how two catalogue files name the same repository: the URL lower-cased, without a
@@ -711,11 +756,12 @@ func (s *Service) RefreshReleases(ctx context.Context) {
 	}
 }
 
-// Run refreshes the latest releases of the manifests the box already knows shortly after start
-// and then once a day, with jitter: conditional GitHub calls, no manifest and no star fetch -
-// those are the user's check (D-90).
+// Run refreshes the catalogue files and the latest releases of the manifests the box already
+// knows shortly after start and then once a day, with jitter: conditional GitHub calls, no
+// manifest and no star fetch - those are the user's check (D-90).
 //
-// Task 244: only while Daily says so (the Addons page's *Check daily*); nil = always.
+// Task 244: only while Daily says so (the Addons page's *Check daily*); nil = always. Nothing
+// else in this package goes out on its own (B-240).
 func (s *Service) Run(ctx context.Context) {
 	daily := func() bool { return s.Daily == nil || s.Daily() }
 	first := time.After(3*time.Minute + time.Duration(rand.Int64N(int64(5*time.Minute))))
@@ -727,21 +773,22 @@ func (s *Service) Run(ctx context.Context) {
 			if !daily() {
 				continue
 			}
-			if _, err := s.Fetch(ctx, false); err == nil {
+			if _, err := s.Fetch(ctx, true); err == nil {
 				s.RefreshReleases(ctx)
 			}
 		case <-time.After(24*time.Hour + time.Duration(rand.Int64N(int64(2*time.Hour)))):
 			if !daily() {
 				continue
 			}
-			if _, err := s.Fetch(ctx, false); err == nil {
+			if _, err := s.Fetch(ctx, true); err == nil {
 				s.RefreshReleases(ctx)
 			}
 		}
 	}
 }
 
-// Item finds an addon by its manifest id in the view; nil when none is known.
+// Item finds an addon by its manifest id in the view - what the system holds, nothing fetched;
+// nil when none is known.
 func (s *Service) Item(ctx context.Context, id string) *Item {
 	v, err := s.Fetch(ctx, false)
 	if err != nil {
@@ -757,12 +804,10 @@ func (s *Service) Item(ctx context.Context, id string) *Item {
 
 // Manifest is the catalogue's manifest for an addon id - the fetched one, or the bundled adapter -
 // or nil: what stands in for a package without a manifest (system.SystemdAddons.FallbackManifest).
-// It never fetches a manifest; loading the catalogue itself is bounded, so a policy write never
-// hangs on it, and the bundled copy answers when the network does not.
+// Nothing is fetched (B-240): the catalogue comes from the cache and the bundled copy, so the
+// start of the service and a policy write never wait on the network.
 func (s *Service) Manifest(id string) *manifest.Manifest {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	if it := s.Item(ctx, id); it != nil {
+	if it := s.Item(context.Background(), id); it != nil {
 		return it.Manifest
 	}
 	s.mu.Lock()

@@ -25,8 +25,8 @@ type Config struct {
 	// LogDebugAreas are the parts of occulited that log at debug while LogLevel is above it:
 	// acme, radio-firmware, addons, metadata, http, auth, led (logctl.Areas).
 	LogDebugAreas []string `json:"log_debug_areas,omitempty"`
-	// Firmware is the device-firmware fetcher (D-27): on by default, an outbound call to eQ-3's
-	// update service once a day for the paired device types only.
+	// Firmware is the device-firmware fetcher (D-27, opt-in since D-90 / B-241): off by default;
+	// on, an outbound call to eQ-3's update service once a day for the paired device types only.
 	Firmware FirmwareConfig `json:"firmware"`
 	// Catalog is the addon catalogue (task 10): index URLs, fetched on demand only.
 	Catalog CatalogConfig `json:"catalog"`
@@ -47,6 +47,9 @@ type Config struct {
 	// (Load fills it, Save leaves them out): a line in the log at start, so nobody relies on a key
 	// that does nothing.
 	Stale []string `json:"-"`
+	// OutboundUnset names the outbound switches the file does not carry (Load fills it):
+	// firmware.enabled, system_update.enabled, catalog.daily. SettleOutbound writes them once.
+	OutboundUnset []string `json:"-"`
 }
 
 // StoreConfig is the storage mode of occulited's database file (task 214, with task 194's
@@ -96,15 +99,21 @@ func (a AddonsConfig) EarlyStartOn() bool {
 	return a.EarlyStart == nil || *a.EarlyStart
 }
 
-// SystemUpdateConfig configures the release feed check: one outbound call a day to a GitHub
-// "releases/latest" URL; the download itself only ever happens on request.
+// SystemUpdateConfig configures the release feed check: when enabled, one outbound call a day to
+// a GitHub release list (off by default, D-90); the download itself only ever happens on request.
 type SystemUpdateConfig struct {
 	Enabled bool   `json:"enabled"`
 	Feed    string `json:"feed"`
 }
 
-// DefaultSystemUpdateFeed is where openccu-lite's releases are published.
-const DefaultSystemUpdateFeed = "https://api.github.com/repos/hobbyquaker/openccu-lite/releases/latest"
+// DefaultSystemUpdateFeed is where openccu-lite's releases are published: the release list, not
+// releases/latest, which never returns a prerelease (task 258) - a system on 1.0.0-dev.N or a beta
+// follows the prereleases published after it.
+const DefaultSystemUpdateFeed = "https://api.github.com/repos/hobbyquaker/openccu-lite/releases?per_page=20"
+
+// oldDefaultSystemUpdateFeed is the default before task 258; a stored configuration that still
+// names it follows the new one.
+const oldDefaultSystemUpdateFeed = "https://api.github.com/repos/hobbyquaker/openccu-lite/releases/latest"
 
 // MQTTConfig is the optional publication of the metadata store.
 // RPCConfig: CallbackListen is the second loopback socket the interface daemons call the
@@ -220,12 +229,13 @@ type CatalogConfig struct {
 	Enabled bool     `json:"enabled"`
 	URLs    []string `json:"urls"`
 	// Daily is the daily check of the catalogue's releases and the installed addons' updates
-	// (task 244: *Check daily* on the Addons page); absent = on, as before.
+	// (task 244: *Check daily* on the Addons page); absent = off (D-90, B-241; it meant on until
+	// then - SettleOutbound keeps that for a system that ran before).
 	Daily *bool `json:"daily,omitempty"`
 }
 
 // DailyOn is Daily with its default.
-func (c CatalogConfig) DailyOn() bool { return c.Daily == nil || *c.Daily }
+func (c CatalogConfig) DailyOn() bool { return c.Daily != nil && *c.Daily }
 
 // DefaultCatalogURL is where the catalogue file is published: occulited's own repository on GitHub
 // (catalog/catalog.json on master, D-119). The raw file, not a release asset: the adapter manifests
@@ -285,15 +295,79 @@ const DefaultListen = "127.0.0.1:8183"
 // so an untouched system follows, while a listener someone chose on purpose stays.
 const oldDefaultListen = "127.0.0.1:2121"
 
-// Default is what a fresh box runs with.
+// Default is what a fresh box runs with. The three outbound switches - the device firmware
+// check, the release check, the catalogue's daily check - are off (D-90, B-241): the welcome page
+// asks once, naming each destination, and each has its switch on its page.
 func Default() Config {
-	return Config{Listen: DefaultListen, StateDir: "/usr/local/etc/occulite", LogLevel: "info", Firmware: FirmwareConfig{Enabled: true, Dir: "/etc/config/firmware"}, Catalog: CatalogConfig{Enabled: true, URLs: []string{DefaultCatalogURL, BundledCatalog}}, SystemUpdate: SystemUpdateConfig{Enabled: true, Feed: DefaultSystemUpdateFeed}, Addons: AddonsConfig{DefaultMode: "confined"},
+	return Config{Listen: DefaultListen, StateDir: "/usr/local/etc/occulite", LogLevel: "info", Firmware: FirmwareConfig{Enabled: false, Dir: "/etc/config/firmware"}, Catalog: CatalogConfig{Enabled: true, URLs: []string{DefaultCatalogURL, BundledCatalog}}, SystemUpdate: SystemUpdateConfig{Enabled: false, Feed: DefaultSystemUpdateFeed}, Addons: AddonsConfig{DefaultMode: "confined"},
 		Auth: AuthConfig{OIDC: OIDCConfig{PasswordLogin: true}}}
+}
+
+// OutboundSwitches are the keys SettleOutbound decides once per system, in the file's order.
+var OutboundSwitches = []string{"firmware.enabled", "system_update.enabled", "catalog.daily"}
+
+// outboundUnset lists the outbound switches the file does not carry. A missing file lacks all
+// three; a file the daemon saved before B-241 carries the two booleans (never omitted) and lacks
+// catalog.daily unless the user switched it.
+func outboundUnset(b []byte) []string {
+	var raw struct {
+		Firmware struct {
+			Enabled *bool `json:"enabled"`
+		} `json:"firmware"`
+		SystemUpdate struct {
+			Enabled *bool `json:"enabled"`
+		} `json:"system_update"`
+		Catalog struct {
+			Daily *bool `json:"daily"`
+		} `json:"catalog"`
+	}
+	_ = json.Unmarshal(b, &raw)
+	var out []string
+	if raw.Firmware.Enabled == nil {
+		out = append(out, "firmware.enabled")
+	}
+	if raw.SystemUpdate.Enabled == nil {
+		out = append(out, "system_update.enabled")
+	}
+	if raw.Catalog.Daily == nil {
+		out = append(out, "catalog.daily")
+	}
+	return out
+}
+
+// SettleOutbound writes the outbound switches the file lacks, once (B-241, D-90): on a system
+// whose setup is done the values it has been running with - on, the defaults before B-241 - so
+// nothing changes under a user who chose or accepted them; on a fresh system (no administrator
+// yet) the new defaults, off, so a restart after the setup cannot turn them on. The file then
+// carries all three explicitly, whatever version wrote it, and the decision is never taken again.
+// It returns the keys it wrote; nothing is written when the file carries them all.
+func SettleOutbound(path string, c *Config, setupDone bool) ([]string, error) {
+	if len(c.OutboundUnset) == 0 {
+		return nil, nil
+	}
+	for _, k := range c.OutboundUnset {
+		switch k {
+		case "firmware.enabled":
+			c.Firmware.Enabled = setupDone
+		case "system_update.enabled":
+			c.SystemUpdate.Enabled = setupDone
+		case "catalog.daily":
+			on := setupDone
+			c.Catalog.Daily = &on
+		}
+	}
+	if err := Save(path, *c); err != nil {
+		return nil, err
+	}
+	wrote := c.OutboundUnset
+	c.OutboundUnset = nil
+	return wrote, nil
 }
 
 // Load reads path over the defaults; a missing file is not an error.
 func Load(path string) (Config, error) {
 	c := Default()
+	c.OutboundUnset = OutboundSwitches
 	b, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return c, nil
@@ -317,7 +391,12 @@ func Load(path string) (Config, error) {
 			c.Catalog.URLs[i] = DefaultCatalogURL
 		}
 	}
+	// task 258: the feed moved from releases/latest to the release list; only that exact value.
+	if c.SystemUpdate.Feed == oldDefaultSystemUpdateFeed {
+		c.SystemUpdate.Feed = DefaultSystemUpdateFeed
+	}
 	c.Stale = stale(b)
+	c.OutboundUnset = outboundUnset(b)
 	return c, nil
 }
 

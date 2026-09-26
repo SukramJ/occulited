@@ -196,6 +196,11 @@ test("openccu-lite's license and author, and the disclaimer in the panel", async
     await expect(lines).toHaveText(/License\s*Apache License 2\.0\s*Author\s*Sebastian Raff \(hobbyquaker\)/);
     const link = lines.locator('[data-own-license]');
     await expect(link).toHaveAttribute('href', '/openccu-lite-LICENSE.txt');
+    // task 266: the privacy statement, under license and author
+    const privacy = lines.locator('[data-own-privacy]');
+    await expect(privacy).toHaveText('What the system sends to outside sources');
+    await expect(privacy).toHaveAttribute('href', 'https://github.com/hobbyquaker/openccu-lite/blob/main/docs/privacy.md');
+    await expect(privacy).toHaveAttribute('target', '_blank');
     const text = await (await request.get('/openccu-lite-LICENSE.txt')).text();
     expect(text).toContain('Apache License');
     expect(text).toContain('Version 2.0, January 2004');
@@ -253,7 +258,7 @@ test("openccu-lite's license and author, and the disclaimer in the panel", async
 test('the license and the disclaimer panel in German', async ({page}) => {
     await page.addInitScript(() => localStorage.setItem('ol.language', 'de'));
     await page.goto('/licenses');
-    await expect(page.locator('[data-own-lines]')).toHaveText(/Lizenz\s*Apache License 2\.0\s*Autor\s*Sebastian Raff \(hobbyquaker\)/);
+    await expect(page.locator('[data-own-lines]')).toHaveText(/Lizenz\s*Apache License 2\.0\s*Autor\s*Sebastian Raff \(hobbyquaker\)\s*Datenschutz\s*Was das System nach außen sendet/);
     const panel = page.locator('[data-own-panel]');
     await expect(panel.locator('> h3')).toHaveText('Haftungsausschluss');
     await expect(panel).not.toContainText('Sebastian Raff');

@@ -5,11 +5,19 @@
     import {navigate} from '../lib/router.svelte';
 
     interface FwState { enabled: boolean }
+    interface FeedState { feed?: {enabled: boolean} | null }
+    interface CatalogState { daily?: boolean }
     interface FirstBoot { objects: number; devices: number; channels: number; rooms: number; functions: number; unnamed: number; error?: string }
     let firstBoot = $state<FirstBoot | null>(null);
     interface ImportResult { devices: number; channels: number; rooms: number; functions: number; unnamed: number }
 
-    let fwEnabled = $state(true);
+    // B-241 (D-90): the daily checks are off on a fresh system; the page asks once, one checkbox
+    // per destination. GitHub is two settings behind one box: the release check and the
+    // catalogue's daily check (which carries the installed addons' update checks).
+    let fwEnabled = $state(false);
+    let relEnabled = $state(false);
+    let catDaily = $state(false);
+    const ghOn = $derived(relEnabled && catDaily);
     let ccuHost = $state('');
     let preview = $state<{result: ImportResult; objects: number} | null>(null);
     let msg = $state('');
@@ -25,12 +33,26 @@
     onMount(async () => {
         try { lk = await api.get<LocalKeyView>('/api/system/v1/radio/hmip/local-key?devices=1'); } catch { /* no HmIP, or not an administrator */ }
         try { fwEnabled = (await api.get<FwState>('/api/system/v1/firmware')).enabled; } catch { /* no fetcher */ }
+        try { relEnabled = (await api.get<FeedState>('/api/system/v1/system-update')).feed?.enabled ?? false; } catch { /* no feed */ }
+        try { catDaily = (await api.get<CatalogState>('/api/system/v1/catalog')).daily ?? false; } catch { /* no catalogue */ }
         try { firstBoot = (await api.get<{first_boot_import?: FirstBoot}>('/api/system/v1/status')).first_boot_import ?? null; } catch { /* none */ }
     });
 
     async function setFw(on: boolean) {
         busy = 'fw';
         try { fwEnabled = (await api.put<FwState>('/api/system/v1/firmware/settings', {enabled: on})).enabled; } catch (e) { msg = (e as Error).message; } finally { busy = ''; }
+    }
+
+    async function setGitHub(on: boolean) {
+        busy = 'gh';
+        try {
+            relEnabled = (await api.put<{enabled: boolean}>('/api/system/v1/system-update/settings', {enabled: on})).enabled;
+            catDaily = (await api.put<{daily: boolean}>('/api/system/v1/catalog/settings', {daily: on})).daily;
+        } catch (e) {
+            msg = (e as Error).message;
+        } finally {
+            busy = '';
+        }
     }
 
     async function ccu(dryRun: boolean) {
@@ -67,11 +89,11 @@
 <h1>{t('Welcome')}</h1>
 <p>{lkStep ? t('The administrator exists. Four things worth deciding now; each can be changed later on its page.') : t('The administrator exists. Three things worth deciding now; each can be changed later on its page.')}</p>
 
-<h2>1 · {t('Device firmware')}</h2>
-<p>{t('This system can download firmware for the device types that are paired from eQ-3\'s update server once a day — the same server a CCU talks to, and the only thing it calls out for. Installing stays your decision.')}</p>
-<div class="ol-actions">
-    <label><input type="radio" name="fw" checked={fwEnabled} onchange={() => setFw(true)} disabled={busy !== ''} /> {t('Download automatically')}</label>
-    <label><input type="radio" name="fw" checked={!fwEnabled} onchange={() => setFw(false)} disabled={busy !== ''} /> {t('Off — I upload firmware by hand')}</label>
+<h2>1 · {t('Automatic checks')}</h2>
+<p>{t('This system connects to the internet only when you ask it to. Two checks can run daily instead; each is named here with where it connects, each is off, and each can be changed later on its page.')}</p>
+<div class="ol-actions outbound" data-welcome-outbound>
+    <label><input type="checkbox" checked={ghOn} onchange={(e) => setGitHub((e.currentTarget as HTMLInputElement).checked)} disabled={busy !== ''} data-outbound="github" /> {t('GitHub (api.github.com, raw.githubusercontent.com): check daily for a new system release and refresh the addon catalogue; the installed addons\' own update checks run with it.')}</label>
+    <label><input type="checkbox" checked={fwEnabled} onchange={(e) => setFw((e.currentTarget as HTMLInputElement).checked)} disabled={busy !== ''} data-outbound="eq3" /> {t('eQ-3 (ccu3-update.homematic.com): check daily for new firmware of the paired device types and download it — the same server a CCU asks. Installing stays your decision.')}</label>
 </div>
 
 <h2>2 · {t('Names from an old CCU')}</h2>
@@ -113,4 +135,7 @@
 
 <style>
     label { margin-right: 16px; }
+    .outbound { flex-direction: column; align-items: flex-start; gap: 8px; }
+    .outbound label { margin-right: 0; display: flex; gap: 8px; align-items: baseline; }
+    .outbound input { flex: none; }
 </style>

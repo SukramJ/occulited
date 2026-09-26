@@ -238,3 +238,90 @@ func TestSemverNewer(t *testing.T) {
 		t.Errorf("upstream pattern: %q %q %v", p, s, err)
 	}
 }
+
+// task 258: the check reads the release list, because releases/latest never returns a
+// prerelease. A system on a prerelease follows prereleases, one on a release sees releases only;
+// the newest by semver wins whatever the list's order, and drafts never count.
+func TestReleaseListFollowsPrereleases(t *testing.T) {
+	asset := func(v string) string {
+		return fmt.Sprintf(`{"name":"openccu-lite-x86_64-ova-%s.zip","browser_download_url":"https://example.org/%s","size":1},{"name":"openccu-lite-x86_64-ova-%s.zip.sha256","browser_download_url":"https://example.org/%s.sha256","size":1}`, v, v, v, v)
+	}
+	rel := func(tag string, pre, draft bool, v string) string {
+		return fmt.Sprintf(`{"tag_name":"%s","prerelease":%t,"draft":%t,"html_url":"https://example.org/%s","assets":[%s]}`, tag, pre, draft, tag, asset(v))
+	}
+	list := "[" + strings.Join([]string{
+		rel("v1.0.0-dev.30", true, true, "1.0.0-dev.30"), // a draft: never
+		rel("v1.0.0-dev.26", true, false, "1.0.0-dev.26"),
+		rel("v0.9.0", false, false, "0.9.0"),
+		rel("v1.0.0-dev.27", true, false, "1.0.0-dev.27"), // out of order on purpose
+		rel("v0.9.1", false, false, "0.9.1"),
+		`{"tag_name":"v2-other","prerelease":false,"assets":[{"name":"openccu-lite-aarch64-rpi4-2.0.0.zip","browser_download_url":"x","size":1}]}`,
+	}, ",") + "]"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/releases":
+			fmt.Fprint(w, list)
+		case "/empty":
+			fmt.Fprint(w, " [ ]\n")
+		case "/unflagged":
+			// a prerelease version the publisher forgot to flag is still a prerelease
+			fmt.Fprint(w, "["+rel("v1.1.0-beta.1", false, false, "1.1.0-beta.1")+","+rel("v1.0.1", false, false, "1.0.1")+"]")
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	for _, c := range []struct {
+		name, running, feed, want, tag string
+		newer                          bool
+	}{
+		{"a dev system follows the newest prerelease", "1.0.0-dev.25", "/releases", "1.0.0-dev.27", "v1.0.0-dev.27", true},
+		{"the newest prerelease is not newer than itself", "1.0.0-dev.27", "/releases", "1.0.0-dev.27", "v1.0.0-dev.27", false},
+		{"a released system sees releases only", "0.9.0", "/releases", "0.9.1", "v0.9.1", true},
+		{"an unflagged prerelease version is skipped by a released system", "1.0.0", "/unflagged", "1.0.1", "v1.0.1", true},
+		{"a beta system takes the beta over an older release", "1.1.0-alpha.2", "/unflagged", "1.1.0-beta.1", "v1.1.0-beta.1", true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := fakeRoot(t, "VERSION=3.89.11.20260919\nPRODUCT=ova\nPLATFORM=ova\nVARIANT=lite\nLITE="+c.running+"\n")
+			s := New(r, srv.URL+c.feed+"?per_page=20", true, nil)
+			if err := s.Check(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			av := s.State().Available
+			if av == nil || av.Version != c.want || av.Tag != c.tag || av.Newer != c.newer || av.SHA256URL != "https://example.org/"+c.want+".sha256" {
+				t.Fatalf("%+v", av)
+			}
+		})
+	}
+	// the list of a repository with nothing published reads as "nothing yet", not as an error
+	r := fakeRoot(t, "VERSION=1\nPRODUCT=ova\nPLATFORM=ova\nVARIANT=lite\nLITE=1.0.0-dev.25\n")
+	if err := New(r, srv.URL+"/empty", true, nil).Check(context.Background()); err == nil || !strings.Contains(err.Error(), "no release published yet") {
+		t.Errorf("empty list: %v", err)
+	}
+	// a released system with nothing but prereleases in the list is offered nothing
+	r = fakeRoot(t, "VERSION=1\nPRODUCT=ova\nPLATFORM=ova\nVARIANT=lite\nLITE=1.0.0\n")
+	onlyPre := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, "["+rel("v1.1.0-dev.1", true, false, "1.1.0-dev.1")+"]")
+	}))
+	t.Cleanup(onlyPre.Close)
+	if err := New(r, onlyPre.URL, true, nil).Check(context.Background()); err == nil || !strings.Contains(err.Error(), "carries no") {
+		t.Errorf("prereleases only: %v", err)
+	}
+	// an upstream (OpenCCU) system takes the first matching release of the list
+	up := fakeRoot(t, "VERSION=3.89.11.20260919\nPRODUCT=rpi4\nPLATFORM=rpi4\n")
+	upSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `[{"tag_name":"b","assets":[{"name":"OpenCCU-3.90.1.1-rpi4.zip","browser_download_url":"x","size":1}]},{"tag_name":"a","assets":[{"name":"OpenCCU-3.90.0.1-rpi4.zip","browser_download_url":"y","size":1}]}]`)
+	}))
+	t.Cleanup(upSrv.Close)
+	s := New(up, upSrv.URL, true, nil)
+	if err := s.Check(context.Background()); err != nil || s.State().Available.Version != "3.90.1.1" {
+		t.Fatalf("%v %+v", err, s.State().Available)
+	}
+	// a feed that is neither shape
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, "[{") }))
+	t.Cleanup(bad.Close)
+	bs := New(r, bad.URL, true, nil)
+	if err := bs.Check(context.Background()); err == nil || !strings.HasPrefix(bs.State().Error, "feed:") {
+		t.Errorf("broken list: %v %q", err, bs.State().Error)
+	}
+}

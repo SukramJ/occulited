@@ -66,6 +66,8 @@
     const OWN_LICENCE = 'Apache License 2.0';
     const OWN_LICENCE_URL = '/openccu-lite-LICENSE.txt';
     const OWN_AUTHOR = 'Sebastian Raff (hobbyquaker)';
+    // task 266: the privacy statement - every call the system makes to an outside source, field by field
+    const PRIVACY_URL = 'https://github.com/hobbyquaker/openccu-lite/blob/main/docs/privacy.md';
     // an unknown ref (a stale link) goes to the list
     $effect(() => {
         if (ref && licences.data && !row) navigate('/licenses');
@@ -142,6 +144,7 @@
                 <dl class="lic-own" data-own-lines>
                     <dt>{t('License')}</dt><dd><a href={OWN_LICENCE_URL} target="_blank" rel="noopener" data-own-license>{OWN_LICENCE}</a></dd>
                     <dt>{t('Author')}</dt><dd data-own-author>{OWN_AUTHOR}</dd>
+                    <dt>{t('Privacy')}</dt><dd><a href={PRIVACY_URL} target="_blank" rel="noopener" data-own-privacy>{t('What the system sends to outside sources')}</a></dd>
                 </dl>
                 <div class="lic-search">
                     <input class="hmm-input" type="search" placeholder={t('Search name, version, license, author, origin')} aria-label={t('Search the licenses')} bind:value={licences.query} />

@@ -1741,8 +1741,10 @@ func (a *SystemAPI) catalogIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// ?refresh=1 is the user's check (D-90): the catalogue files again, every manifest at its latest
-	// release tag, the star counts and the latest releases; without it the page answers from the
-	// cache and nothing leaves the box
+	// release tag, the star counts and the latest releases. Without it the page answers from what
+	// the system holds - the last check's copy of the catalogue files, the bundled copy, the cached
+	// manifests and releases - and nothing leaves the system: Fetch without force goes nowhere
+	// (B-240; catalog.TestNothingGoesOutWithoutTheUsersCheck pins it), whatever *Check daily* says.
 	if r.URL.Query().Get("refresh") == "1" {
 		ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 		err := a.Catalog.Refresh(ctx)

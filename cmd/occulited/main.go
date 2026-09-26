@@ -266,6 +266,14 @@ func run(opts daemonOptions) error {
 	if users.SetupRequired() {
 		log.Warn("no users yet: the web UI asks for the administrator password on first visit")
 	}
+	// B-241 (D-90): the outbound switches the file lacks are written once - on for a system that
+	// ran before this version (its setup is done, or it was configured to run without a login),
+	// off for a fresh one, whose welcome page asks
+	if wrote, err := config.SettleOutbound(*cfgPath, &cfg, !users.SetupRequired() || cfg.Auth.EffectiveMode() == "off"); err != nil {
+		log.Warn("config: the outbound switches could not be written; their values hold for this run and are written at the next start", "keys", strings.Join(cfg.OutboundUnset, ", "), "err", err)
+	} else if len(wrote) > 0 {
+		log.Info("config: outbound switches written explicitly", "keys", strings.Join(wrote, ", "), "firmware", cfg.Firmware.Enabled, "system_update", cfg.SystemUpdate.Enabled, "catalog_daily", cfg.Catalog.DailyOn())
+	}
 	favSync := &favorites.Sync{Store: store, Log: area("metadata")}
 	syncFavorites = func() {
 		// read under the sync's lock: an older list must not re-create a deleted account's node

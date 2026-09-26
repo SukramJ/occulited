@@ -133,3 +133,115 @@ func TestOldCatalogDefaultsFollow(t *testing.T) {
 		t.Errorf("defaults: %v", d.Catalog.URLs)
 	}
 }
+
+// task 258: the release feed moved from releases/latest (which never returns a prerelease) to the
+// release list; a stored file with the old default follows, a feed of one's own stays.
+func TestOldSystemUpdateFeedFollows(t *testing.T) {
+	dir := t.TempDir()
+	for _, c := range []struct{ stored, want string }{
+		{"https://api.github.com/repos/hobbyquaker/openccu-lite/releases/latest", DefaultSystemUpdateFeed},
+		{"https://api.github.com/repos/someone/fork/releases/latest", "https://api.github.com/repos/someone/fork/releases/latest"},
+		{"https://example.org/feed.json", "https://example.org/feed.json"},
+	} {
+		path := filepath.Join(dir, "occulited.json")
+		if err := os.WriteFile(path, []byte(`{"system_update": {"enabled": true, "feed": "`+c.stored+`"}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got, err := Load(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.SystemUpdate.Feed != c.want {
+			t.Errorf("%s: %s", c.stored, got.SystemUpdate.Feed)
+		}
+	}
+	if d := Default().SystemUpdate.Feed; !strings.HasPrefix(d, "https://api.github.com/repos/hobbyquaker/openccu-lite/releases?") {
+		t.Errorf("default feed: %s", d)
+	}
+}
+
+// openccu-lite B-241 (D-90): the outbound switches are off on a fresh system; a file that lacks
+// them is settled once - on for a system whose setup is done (what it ran with before), off for
+// a fresh one - and then carries all three explicitly, so a later start decides nothing again.
+func TestOutboundSwitchesDefaultOffAndSettleOnce(t *testing.T) {
+	d := Default()
+	if d.Firmware.Enabled || d.SystemUpdate.Enabled || d.Catalog.DailyOn() {
+		t.Fatalf("a fresh system calls nothing daily: %+v %+v %v", d.Firmware, d.SystemUpdate, d.Catalog.Daily)
+	}
+	if (CatalogConfig{}).DailyOn() {
+		t.Fatal("catalog.daily absent must read as off")
+	}
+	dir := t.TempDir()
+
+	// no file, setup not done: the fresh defaults, written explicitly
+	path := filepath.Join(dir, "fresh.json")
+	c, err := Load(path)
+	if err != nil || strings.Join(c.OutboundUnset, ",") != "firmware.enabled,system_update.enabled,catalog.daily" {
+		t.Fatalf("no file: %v unset=%v", err, c.OutboundUnset)
+	}
+	wrote, err := SettleOutbound(path, &c, false)
+	if err != nil || len(wrote) != 3 || c.Firmware.Enabled || c.SystemUpdate.Enabled || c.Catalog.DailyOn() || len(c.OutboundUnset) != 0 {
+		t.Fatalf("fresh: %v wrote=%v %+v %+v daily=%v unset=%v", err, wrote, c.Firmware, c.SystemUpdate, c.Catalog.DailyOn(), c.OutboundUnset)
+	}
+	b, _ := os.ReadFile(path)
+	for _, want := range []string{`"firmware": {
+    "enabled": false`, `"daily": false`, `"system_update": {
+    "enabled": false`} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("the fresh file must carry %q:\n%s", want, b)
+		}
+	}
+	// the setup done afterwards: nothing flips, the file is not written again
+	c, _ = Load(path)
+	if len(c.OutboundUnset) != 0 {
+		t.Fatalf("after the settle every switch is explicit: %v", c.OutboundUnset)
+	}
+	before, _ := os.Stat(path)
+	if wrote, err := SettleOutbound(path, &c, true); err != nil || wrote != nil || c.Firmware.Enabled || c.SystemUpdate.Enabled || c.Catalog.DailyOn() {
+		t.Fatalf("settled file: %v wrote=%v %+v", err, wrote, c.Firmware)
+	}
+	if after, _ := os.Stat(path); !after.ModTime().Equal(before.ModTime()) || after.Size() != before.Size() {
+		t.Error("a settled file is left alone")
+	}
+
+	// a file the daemon saved before B-241 on a system in use: the booleans present (on), daily
+	// absent - the daily check it ran with is written as on; the present values stay
+	path = filepath.Join(dir, "existing.json")
+	if err := os.WriteFile(path, []byte(`{"firmware": {"enabled": true, "dir": "/etc/config/firmware"}, "catalog": {"enabled": true, "urls": ["file:///etc/occulite/catalog.json"]}, "system_update": {"enabled": false, "feed": "https://example.org/feed"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err = Load(path)
+	if err != nil || strings.Join(c.OutboundUnset, ",") != "catalog.daily" || !c.Firmware.Enabled || c.SystemUpdate.Enabled {
+		t.Fatalf("existing: %v unset=%v %+v %+v", err, c.OutboundUnset, c.Firmware, c.SystemUpdate)
+	}
+	if wrote, err := SettleOutbound(path, &c, true); err != nil || strings.Join(wrote, ",") != "catalog.daily" || !c.Catalog.DailyOn() || !c.Firmware.Enabled || c.SystemUpdate.Enabled {
+		t.Fatalf("existing settled: %v wrote=%v daily=%v %+v %+v", err, wrote, c.Catalog.DailyOn(), c.Firmware, c.SystemUpdate)
+	}
+	if b, _ := os.ReadFile(path); !strings.Contains(string(b), `"daily": true`) || !strings.Contains(string(b), `"feed": "https://example.org/feed"`) {
+		t.Errorf("existing file after: %s", b)
+	}
+	// a hand-written file without any of the three on a system in use: all three on, as it ran
+	path = filepath.Join(dir, "hand.json")
+	if err := os.WriteFile(path, []byte(`{"listen": "127.0.0.1:8183"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, _ = Load(path)
+	if wrote, err := SettleOutbound(path, &c, true); err != nil || len(wrote) != 3 || !c.Firmware.Enabled || !c.SystemUpdate.Enabled || !c.Catalog.DailyOn() {
+		t.Fatalf("hand-written on a system in use: %v wrote=%v %+v %+v %v", err, wrote, c.Firmware, c.SystemUpdate, c.Catalog.DailyOn())
+	}
+	// a file the user already switched is never touched: daily off stays off, whatever the setup
+	path = filepath.Join(dir, "chosen.json")
+	if err := os.WriteFile(path, []byte(`{"firmware": {"enabled": false}, "system_update": {"enabled": true}, "catalog": {"daily": false}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, _ = Load(path)
+	if wrote, err := SettleOutbound(path, &c, true); err != nil || wrote != nil || c.Firmware.Enabled || !c.SystemUpdate.Enabled || c.Catalog.DailyOn() {
+		t.Fatalf("chosen: %v wrote=%v %+v %+v %v", err, wrote, c.Firmware, c.SystemUpdate, c.Catalog.DailyOn())
+	}
+	// an unwritable path: the values hold in memory, the error is reported, the keys stay listed
+	path = filepath.Join(dir, "missing-dir", "occulited.json")
+	c, _ = Load(path)
+	if _, err := SettleOutbound(path, &c, true); err == nil || len(c.OutboundUnset) != 3 || !c.Firmware.Enabled {
+		t.Fatalf("unwritable: err=%v unset=%v %+v", err, c.OutboundUnset, c.Firmware)
+	}
+}

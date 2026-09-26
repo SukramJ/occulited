@@ -6,6 +6,7 @@ package sysupdate
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -75,7 +76,7 @@ type State struct {
 // Service checks the feed and downloads releases.
 type Service struct {
 	Root    system.Root
-	FeedURL string // a GitHub "releases/latest" URL (or any JSON of that shape)
+	FeedURL string // a GitHub release list URL, or a "releases/latest" one (or any JSON of those shapes)
 	HTTP    *http.Client
 	Log     *slog.Logger
 	Enabled bool
@@ -215,6 +216,89 @@ func comparePre(a, b string) int {
 	return len(as) - len(bs)
 }
 
+// release is the part of a GitHub release the check reads.
+type release struct {
+	Tag         string `json:"tag_name"`
+	Name        string `json:"name"`
+	HTMLURL     string `json:"html_url"`
+	PublishedAt string `json:"published_at"`
+	Draft       bool   `json:"draft"`
+	Prerelease  bool   `json:"prerelease"`
+	Assets      []struct {
+		Name string `json:"name"`
+		URL  string `json:"browser_download_url"`
+		Size int64  `json:"size"`
+	} `json:"assets"`
+}
+
+// decodeReleases reads a feed in either of GitHub's shapes: the release list
+// (…/releases?per_page=N, the default since the first public release, task 258) or one release
+// (…/releases/latest, the default before, and what a hand-made feed may still serve).
+func decodeReleases(body []byte) ([]release, error) {
+	t := bytes.TrimSpace(body)
+	if len(t) > 0 && t[0] == '[' {
+		var list []release
+		if err := json.Unmarshal(t, &list); err != nil {
+			return nil, err
+		}
+		return list, nil
+	}
+	var one release
+	if err := json.Unmarshal(t, &one); err != nil {
+		return nil, err
+	}
+	return []release{one}, nil
+}
+
+// isPrerelease says a version carries a prerelease part (1.0.0-dev.26, 1.0.0-beta.1).
+func isPrerelease(version string) bool {
+	p, ok := parseSemver(version)
+	return ok && p.pre != ""
+}
+
+// pick chooses the release to offer from the feed (task 258). releases/latest never returns a
+// prerelease, so a system running 1.0.0-dev.N or a beta would never have been offered the next
+// one: the check reads the release list instead. A system that runs a prerelease follows
+// prereleases; a system on a release sees releases only (GitHub's prerelease flag or a
+// prerelease version both count). Drafts are skipped. On openccu-lite the newest version by
+// semver wins, whatever order the list is in; on OpenCCU, whose versions are not semver, the
+// first one in the list (GitHub lists the newest first).
+func pick(rels []release, v system.Version, prefix, suffix string) *Available {
+	running := v.Full()
+	followPre := v.Variant == "lite" && isPrerelease(running)
+	var best *Available
+	for _, rel := range rels {
+		if rel.Draft {
+			continue
+		}
+		for _, a := range rel.Assets {
+			if !strings.HasSuffix(a.Name, suffix) || !strings.HasPrefix(a.Name, prefix) || len(a.Name) <= len(prefix)+len(suffix) {
+				continue
+			}
+			version := strings.TrimSuffix(strings.TrimPrefix(a.Name, prefix), suffix)
+			if (rel.Prerelease || isPrerelease(version)) && !followPre {
+				break
+			}
+			if best != nil && (v.Variant != "lite" || !semverNewer(version, best.Version)) {
+				break
+			}
+			newer := version != running
+			if v.Variant == "lite" {
+				newer = semverNewer(version, running)
+			}
+			av := &Available{Version: version, Tag: rel.Tag, Name: a.Name, URL: a.URL, Size: a.Size, Published: rel.PublishedAt, Notes: rel.HTMLURL, Newer: newer}
+			for _, b := range rel.Assets {
+				if b.Name == a.Name+".sha256" {
+					av.SHA256URL = b.URL
+				}
+			}
+			best = av
+			break
+		}
+	}
+	return best
+}
+
 // Check fetches the feed once (ETag-cached) and remembers the result.
 func (s *Service) Check(ctx context.Context) error {
 	v := s.Root.ReadVersion()
@@ -260,41 +344,29 @@ func (s *Service) Check(ctx context.Context) error {
 		s.remember(nil, err)
 		return err
 	}
-	var rel struct {
-		Tag         string `json:"tag_name"`
-		Name        string `json:"name"`
-		HTMLURL     string `json:"html_url"`
-		PublishedAt string `json:"published_at"`
-		Assets      []struct {
-			Name string `json:"name"`
-			URL  string `json:"browser_download_url"`
-			Size int64  `json:"size"`
-		} `json:"assets"`
-	}
-	if err := json.NewDecoder(io.LimitReader(res.Body, 4<<20)).Decode(&rel); err != nil {
+	body, err := io.ReadAll(io.LimitReader(res.Body, 8<<20))
+	if err != nil {
 		s.remember(nil, fmt.Errorf("feed: %w", err))
 		return err
 	}
-	var av *Available
-	for _, a := range rel.Assets {
-		if !strings.HasSuffix(a.Name, suffix) || !strings.HasPrefix(a.Name, prefix) || len(a.Name) <= len(prefix)+len(suffix) {
-			continue
-		}
-		version := strings.TrimSuffix(strings.TrimPrefix(a.Name, prefix), suffix)
-		newer := version != v.Full()
-		if v.Variant == "lite" {
-			newer = semverNewer(version, v.Full())
-		}
-		av = &Available{Version: version, Tag: rel.Tag, Name: a.Name, URL: a.URL, Size: a.Size, Published: rel.PublishedAt, Notes: rel.HTMLURL, Newer: newer}
-		for _, b := range rel.Assets {
-			if b.Name == a.Name+".sha256" {
-				av.SHA256URL = b.URL
-			}
-		}
-		break
+	rels, err := decodeReleases(body)
+	if err != nil {
+		err = fmt.Errorf("feed: %w", err)
+		s.remember(nil, err)
+		return err
 	}
+	if len(rels) == 0 {
+		// the release list of a repository with nothing published yet is an empty array
+		err := errors.New("no release published yet on the update feed")
+		s.remember(nil, err)
+		return err
+	}
+	av := pick(rels, v, prefix, suffix)
 	if av == nil {
-		err := fmt.Errorf("feed: release %s carries no %s*%s", rel.Tag, prefix, suffix)
+		err := fmt.Errorf("feed: release %s carries no %s*%s", rels[0].Tag, prefix, suffix)
+		if len(rels) > 1 {
+			err = fmt.Errorf("feed: no release carries %s*%s", prefix, suffix)
+		}
 		s.remember(nil, err)
 		return err
 	}
