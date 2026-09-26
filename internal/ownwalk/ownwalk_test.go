@@ -662,10 +662,17 @@ func TestOwnTightensModes(t *testing.T) {
 		}
 		return st.Mode().Perm()
 	}
-	// directories, private and www alike, become 0751 (traversable, not listable)
-	for _, d := range []string{"addon", "addon/var", "addon/var/sub", "addon/etc", "addon/www", "addon/www/css"} {
+	// private directories become 0751 (traversable, not listable)
+	for _, d := range []string{"addon/var", "addon/var/sub", "addon/etc"} {
 		if perm(d) != 0o751 {
 			t.Errorf("%s is %o, want 0751", d, perm(d))
+		}
+	}
+	// the addon's own directory (it holds www, and the web server opens it) and the www tree stay
+	// world-readable
+	for _, d := range []string{"addon", "addon/www", "addon/www/css"} {
+		if perm(d) != 0o755 {
+			t.Errorf("%s is %o, want 0755 (public)", d, perm(d))
 		}
 	}
 	// private files lose the world (and group-write) bits; the already-tight file is untouched
@@ -683,9 +690,10 @@ func TestOwnTightensModes(t *testing.T) {
 			t.Errorf("%s is %o, want the www file left 0644", ff, perm(ff))
 		}
 	}
-	// counted: 6 dirs + 3 private files (the already-tight file and the two www files are not)
-	if res.ModeTightened != 9 {
-		t.Errorf("ModeTightened %d, want 9", res.ModeTightened)
+	// counted: 3 private dirs (var, var/sub, etc) + 3 private files (addon, www, www/css and the two
+	// www files and the already-tight file are not)
+	if res.ModeTightened != 6 {
+		t.Errorf("ModeTightened %d, want 6", res.ModeTightened)
 	}
 	// a second walk over the settled tree (the same fake, so its owners are the addon's now) changes
 	// nothing

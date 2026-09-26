@@ -583,17 +583,25 @@ func (w *walker) wrong(st Stat, path string) bool {
 const tightenMask = 0o026
 
 // modeWant is the wanted permission of a directory or regular file under TightenModes, and whether it
-// differs from the current one. A regular file under a PublicDir (the addon's web content) keeps its
-// mode. Nothing to do for another kind, or when TightenModes is off.
+// differs from the current one. A regular file, or a directory, in a PublicDir (the addon's web tree)
+// keeps its mode, and so does the directory that holds a PublicDir - the web server opens that
+// directory to serve the tree below it, and opening a directory needs read, not only search. Nothing
+// to do for another kind, or when TightenModes is off.
 func (w *walker) modeWant(st Stat, path string) (os.FileMode, bool) {
 	if !w.opt.TightenModes {
 		return 0, false
 	}
 	typ := st.typ()
-	if typ != unix.S_IFDIR && typ != unix.S_IFREG {
-		return 0, false
-	}
-	if typ == unix.S_IFREG && w.publicFile(path) {
+	switch typ {
+	case unix.S_IFDIR:
+		if w.publicDir(path) {
+			return 0, false
+		}
+	case unix.S_IFREG:
+		if w.publicFile(path) {
+			return 0, false
+		}
+	default:
 		return 0, false
 	}
 	cur := os.FileMode(st.Mode & 0o7777)
@@ -608,6 +616,22 @@ func (w *walker) publicFile(path string) bool {
 	for _, d := range w.opt.PublicDirs {
 		d = filepath.Clean(d)
 		if clean == d || strings.HasPrefix(clean, d+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// publicDir reports whether a directory at path is a public one, is inside one, or holds one: the www
+// tree stays world-readable, and so does the directory the web server opens to reach it (the addon's
+// own directory, which holds www). Everything else is closed.
+func (w *walker) publicDir(path string) bool {
+	if w.publicFile(path) {
+		return true
+	}
+	clean := filepath.Clean(path)
+	for _, d := range w.opt.PublicDirs {
+		if clean == filepath.Dir(filepath.Clean(d)) {
 			return true
 		}
 	}
