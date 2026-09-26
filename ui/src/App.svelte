@@ -31,6 +31,7 @@
     import RemoteAccessPage from './pages/RemoteAccessPage.svelte';
     import FirmwarePage from './pages/FirmwarePage.svelte';
     import BackupPage from './pages/BackupPage.svelte';
+    import TrustPage from './pages/TrustPage.svelte';
     import WelcomePage from './pages/WelcomePage.svelte';
     import NavFrame from './pages/NavFrame.svelte';
     import FrameHost from './lib/FrameHost.svelte';
@@ -90,6 +91,7 @@
         {key: 'remote-access', match: (p) => onPage(p, '/system/remote-access'), component: RemoteAccessPage},
         {key: 'led', match: (p) => onPage(p, '/system/led'), component: LEDPage},
         {key: 'certificates', match: (p) => onPage(p, '/system/certificates'), component: CertificatePage},
+        {key: 'trust', match: (p) => onPage(p, '/system/trust'), component: TrustPage},
         {key: 'updates', match: (p) => onPage(p, '/system/updates'), component: FirmwarePage},
         {key: 'backup', match: (p) => onPage(p, '/system/backup'), component: BackupPage},
         {key: 'interfaces', match: (p) => onPage(p, '/system/interfaces'), component: RadioPage},

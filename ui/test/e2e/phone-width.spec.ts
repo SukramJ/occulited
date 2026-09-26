@@ -67,6 +67,8 @@ const PAGES: Check[] = [
         },
     },
     {path: '/system/certificates', ready: '.ol-card .v'},
+    // openccu-lite task 231: the four stores' tables, the system one with its filter
+    {path: '/system/trust', ready: '[data-trust-store="system"] table tbody tr'},
     {path: '/system/users#authentication', ready: '.ol-secform input'},
     {path: '/system/backup', ready: 'h2'},
     {path: '/addons', ready: '.ad-card'},

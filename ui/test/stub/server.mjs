@@ -369,7 +369,7 @@ const routes = {
     },
     // running is the /VERSION record in the API's shape (system.Version); the power menu words its
     // halt question by its platform
-    'GET /api/system/v1/system-update': {running: {version: '3.89.8.20260719', product: 'ova', platform: 'ova', variant: 'lite', lite: '1.0.0-alpha.0'}, container: '', staged: null, feed: {enabled: true, feed_url: 'https://api.github.com/repos/hobbyquaker/openccu-lite/releases/latest', checked: now, error: '', downloading: false, available: null}},
+    'GET /api/system/v1/system-update': {running: {version: '3.89.8.20260719', product: 'ova', platform: 'ova', variant: 'lite', lite: '1.0.0-alpha.0'}, container: '', staged: null, feed: {enabled: true, feed_url: 'https://api.github.com/repos/hobbyquaker/openccu-lite/releases?per_page=20', checked: now, error: '', downloading: false, available: null}},
     // task 56: stars and repositories as the index and the daily refresh give them - a count in
     // the thousands, a tie broken by name (Homematic-Manager before Mosquitto), an entry without a
     // count - listed out of star order, and two entries that are not installed (the letter tile,
@@ -1601,6 +1601,10 @@ function activeWarnings(jar, warn, st) {
         // the stub's default schedule is the backup on the box itself
         list.push({id: 'backup-userfs', variant: '/media/usb0/backup', severity: 'error', href: '/backup', params: {path: '/media/usb0/backup'}});
     }
+    // openccu-lite task 231: a server occulited's store could not verify (stub-trust-pending=1)
+    if (trustStateOf(jar).pending) {
+        list.push({id: 'trust-ca', variant: 'api.github.com', severity: 'error', href: '/system/trust#occulited', params: {store: 'occulited', hosts: ['api.github.com'], issuer: 'CN=DigiCert Global Root G2,O=DigiCert Inc', candidate: true}});
+    }
     const rep = STORAGE[jar['stub-storage'] || (warn ? 'watch' : 'good')] ?? STORAGE.good;
     if (rep.verdict !== 'good') {
         list.push({id: 'storage', variant: rep.verdict, severity: rep.verdict === 'replace' ? 'error' : 'warning', href: '#storage', params: {verdict: rep.verdict, reasons: rep.reasons, devices: rep.devices.map((d) => ({name: d.name, kind: d.kind, model: d.model}))}});
@@ -1978,6 +1982,129 @@ function oidcTrustRoute(req, u, res, jar) {
     return true;
 }
 
+// openccu-lite task 231: the four trust stores, per browser (stub-trust, shared with the OIDC
+// settings' list so both views agree); stub-trust-pending=1 plants a strict failure with the
+// System store's copy as its one-click fix. The stub parses nothing: a PEM block or a DER upload
+// is one certificate named by its position.
+const TRUST_STORES = new Map();
+const TRUST_IDS = ['system', 'occulited', 'oidc', 'acme'];
+const FP = (n) => `${n}${n}:` + '00:'.repeat(30) + `${n}${n}`;
+const trustCert = (id, cn, o, opts = {}) => ({id, purposes: [], subject: `CN=${cn},O=${o}`, issuer: `CN=${cn},O=${o}`, not_before: '2020-01-01T00:00:00Z', not_after: '2038-01-01T00:00:00Z', fingerprint: FP(id.slice(-1).toUpperCase()), ca: true, self_signed: true, source: 'image', removable: true, ...opts});
+function trustStateOf(jar) {
+    const id = jar['stub-trust'] ?? '';
+    let st = TRUST_STORES.get(id);
+    if (!st) {
+        st = {
+            system: [
+                trustCert('s000000000000001', 'ISRG Root X1', 'Internet Security Research Group'),
+                trustCert('s000000000000002', 'USERTrust ECC Certification Authority', 'The USERTRUST Network'),
+                trustCert('s000000000000003', 'USERTrust RSA Certification Authority', 'The USERTRUST Network'),
+                trustCert('s000000000000004', 'DigiCert Global Root G2', 'DigiCert Inc'),
+                trustCert('s000000000000005', 'GlobalSign Root CA', 'GlobalSign nv-sa'),
+                trustCert('s000000000000006', 'Baltimore CyberTrust Root', 'Baltimore', {distrusted: true, removable: false}),
+                trustCert('s000000000000007', 'DigiCert Global Root G3', 'DigiCert Inc'),
+                trustCert('s000000000000008', 'Amazon Root CA 1', 'Amazon'),
+                trustCert('s000000000000009', 'Lab CA', 'Lab', {source: 'added', origin: 'page', added: '2026-09-25T09:00:00Z', added_by: 'admin', not_after: '2027-01-01T00:00:00Z'}),
+            ],
+            occulited: [
+                trustCert('s000000000000001', 'ISRG Root X1', 'Internet Security Research Group'),
+                trustCert('s000000000000002', 'USERTrust ECC Certification Authority', 'The USERTRUST Network'),
+                trustCert('s000000000000003', 'USERTrust RSA Certification Authority', 'The USERTRUST Network'),
+            ],
+            acme: [],
+            pending: jar['stub-trust-pending'] === '1',
+            n: 0,
+        };
+        TRUST_STORES.set(id, st);
+    }
+    return st;
+}
+function trustOIDCList(jar) {
+    const id = jar['stub-trust'] ?? '';
+    if (!OIDC_TRUST.has(id)) OIDC_TRUST.set(id, []);
+    return OIDC_TRUST.get(id);
+}
+function trustView(jar) {
+    const st = trustStateOf(jar);
+    const oidc = trustOIDCList(jar).map(({pem, ...a}) => ({...a, source: 'added', origin: a.origin ?? 'oidc-settings', removable: true}));
+    const stores = [
+        {id: 'system', editable: true, certificates: st.system},
+        {id: 'occulited', editable: true, certificates: st.occulited},
+        {id: 'oidc', editable: true, certificates: oidc},
+        {id: 'acme', editable: true, certificates: st.acme},
+    ];
+    const pending = st.pending ? [{host: 'api.github.com', store: 'occulited', at: '2026-09-25T20:00:00Z', error: 'tls: failed to verify certificate: x509: certificate signed by unknown authority', issuer: 'CN=DigiCert Global Root G2,O=DigiCert Inc', chain: [], candidate: st.system.find((c) => c.id === 's000000000000004')}] : [];
+    return {stores, pending};
+}
+function trustRoute(req, u, res, jar) {
+    const st = trustStateOf(jar);
+    const listOf = (store) => (store === 'oidc' ? trustOIDCList(jar) : st[store]);
+    const parts = u.pathname.split('/').slice(4); // trust, {store}, {id}, {action}
+    const store = parts[1];
+    const cid = parts[2] ? decodeURIComponent(parts[2]) : '';
+    const action = parts[3];
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => {
+        const b = body ? JSON.parse(body) : {};
+        if (req.method === 'GET' && !store) return sendJSON(res, trustView(jar));
+        if (!TRUST_IDS.includes(store)) return sendJSON(res, {error: 'not_found', message: 'no such trust store'}, 404);
+        const storeView = (id) => trustView(jar).stores.find((s) => s.id === id);
+        const list = listOf(store);
+        if (req.method === 'POST' && !cid) {
+            const pem = String(b.pem ?? '');
+            if (pem.includes('PRIVATE KEY')) return sendJSON(res, {error: 'private_key', message: 'the text holds a private key: only certificates are accepted - never paste or upload a key here'}, 422);
+            const blocks = pem ? (pem.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) ?? []) : b.der ? ['der'] : [];
+            if (!blocks.length) return sendJSON(res, {error: 'no_certificate', message: 'no certificate found: paste a PEM block beginning with -----BEGIN CERTIFICATE-----'}, 422);
+            const added = [];
+            for (const block of blocks) {
+                st.n++;
+                const cn = block === 'der' ? `DER upload ${st.n}` : `Pasted ${st.n}`;
+                const a = trustCert(`p${String(st.n).padStart(15, '0')}`, cn, 'Lab', {source: 'added', origin: 'page', added: '2026-09-25T20:00:00Z', added_by: 'admin', fingerprint: `CC:${String(st.n).padStart(2, '0')}:` + '00:'.repeat(29) + 'FF'});
+                if (store === 'oidc') a.purposes = ['oidc'];
+                list.push(store === 'oidc' ? {...a, pem: block} : a);
+                added.push(a);
+            }
+            return sendJSON(res, {added, store: storeView(store)});
+        }
+        const k = list.findIndex((c) => c.id === cid);
+        if (k < 0) return sendJSON(res, {error: 'not_found', message: 'no such anchor'}, 404);
+        const c = list[k];
+        if (req.method === 'DELETE') {
+            if (c.distrusted) return sendJSON(res, {error: 'invalid', message: 'this certificate cannot be removed here'}, 422);
+            if (c.source === 'image') list[k] = {...c, distrusted: true, removable: false};
+            else list.splice(k, 1);
+            return sendJSON(res, {store: storeView(store)});
+        }
+        if (req.method === 'POST' && action === 'restore') {
+            if (!c.distrusted) return sendJSON(res, {error: 'not_found', message: 'no such anchor'}, 404);
+            list[k] = {...c, distrusted: false, removable: true};
+            return sendJSON(res, {store: storeView(store)});
+        }
+        if (req.method === 'POST' && action === 'copy') {
+            const to = String(b.to ?? '');
+            if (to === store) return sendJSON(res, {error: 'invalid', message: 'a certificate is copied into another store'}, 422);
+            if (!TRUST_IDS.includes(to)) return sendJSON(res, {error: 'not_found', message: 'no such trust store'}, 404);
+            const target = listOf(to);
+            const copy = {...c, source: 'added', origin: 'copy', added: '2026-09-25T20:00:00Z', added_by: 'admin', distrusted: false, removable: true, purposes: to === 'oidc' ? ['oidc'] : []};
+            if (to === 'oidc') copy.pem = FAKE_PEM(c.id);
+            const added = [];
+            if (!target.some((x) => x.id === c.id)) {
+                target.push(copy);
+                added.push(copy);
+            }
+            if (to === 'occulited' && st.pending && c.id === 's000000000000004') st.pending = false;
+            return sendJSON(res, {added, store: storeView(to)});
+        }
+        if (req.method === 'GET' && action === 'pem') {
+            res.writeHead(200, {'Content-Type': 'application/x-pem-file'});
+            return res.end(FAKE_PEM(c.id));
+        }
+        return sendJSON(res, {error: 'not_found', message: 'no such route'}, 404);
+    });
+    return true;
+}
+
 function variant(req, u, res) {
     const jar = cookieJar(req);
     const s = sessionOf(jar);
@@ -1993,6 +2120,19 @@ function variant(req, u, res) {
     if (u.pathname.startsWith('/api/system/v1/storage/usb')) return storageUSBRoute(req, u, res, jar);
     // openccu-lite task 228, phase 2: the network shares, per browser (stub-shares)
     if (u.pathname.startsWith('/api/system/v1/storage/shares')) return storageSharesRoute(req, u, res, jar);
+    // openccu-lite task 251: a checked backup's paired devices - the stub knows no backup, so it
+    // answers an empty one and a free system (the restore-devices spec mocks the real shapes)
+    if (key === 'GET /api/system/v1/restore/devices') {
+        sendJSON(res, {backup: {bidcos_rf: {devices: 0, has_key: false, gateways: 0}, hmip: {devices: 0, local_key: false, device_key_map: false}, bidcos_wired: {devices: 0, gateways: 0}, key_index: 0, files: []}, target: {paired: {}, devices: 0, unknown: [], user_key: false, importable: true}});
+        return true;
+    }
+    if (key === 'POST /api/system/v1/restore/import-devices') {
+        req.resume();
+        req.on('end', () => sendJSON(res, {error: 'nothing_to_import', message: 'the backup holds no paired device and no radio identity'}, 422));
+        return true;
+    }
+    // openccu-lite task 231: the Trust stores page, per browser (stub-trust)
+    if (u.pathname === '/api/system/v1/trust' || u.pathname.startsWith('/api/system/v1/trust/')) return trustRoute(req, u, res, jar);
     // phases 3-4: the location picker's list and the folders on a location
     if (key === 'GET /api/system/v1/storage/locations') {
         sendJSON(res, locationsView(u.searchParams.get('use'), jar));

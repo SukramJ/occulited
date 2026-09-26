@@ -231,6 +231,8 @@ func (a *SystemAPI) warningSources() []warnings.Source {
 		{IDs: []string{"firewall"}, Eval: a.firewallWarning},
 		{IDs: []string{"classic-rpc-open"}, Eval: a.classicRPCWarning},
 		{IDs: []string{"app-public"}, Eval: a.appPublicWarning},
+		// openccu-lite task 231: a server presents a CA occulited's store lacks (strict)
+		{IDs: []string{"trust-ca"}, Lists: true, Eval: a.trustWarnings},
 		{IDs: []string{"hmip-port-open"}, Eval: a.hmipPortWarning},
 		{IDs: []string{"hmip-local-key"}, Eval: a.hmipLocalKeyWarning},
 		{IDs: []string{"hmip-key-declined"}, Eval: a.hmipKeyDeclinedWarning},
@@ -764,7 +766,6 @@ func (a *SystemAPI) warningsUnsilence(w http.ResponseWriter, r *http.Request) {
 // addonOwnershipFix is POST /addons/{id}/ownership, administrators only (B-92): the confined
 // addon's directories are given back to its user, as an install through occulited does.
 func (a *SystemAPI) addonOwnershipFix(w http.ResponseWriter, r *http.Request) {
-	user, _ := caller(r)
 	if !SessionFrom(r).Has(auth.ScopeAddonsWrite) {
 		forbiddenScope(w, auth.ScopeAddonsWrite)
 		return
@@ -784,11 +785,11 @@ func (a *SystemAPI) addonOwnershipFix(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnprocessableEntity, apiError{Error: "ownership", Message: err.Error()})
 		return
 	}
-	slog.Info("addon ownership: the addon's files were given back to its user", "addon", id, "by", user, "root_owned_left", fix.RootOwned)
+	reqLog(r).Info("addon ownership: the addon's files were given back to its user", "addon", id, "root_owned_left", fix.RootOwned)
 	out := map[string]any{"id": id, "root_owned": fix.RootOwned, "started": fix.Started}
 	switch {
 	case fix.Started:
-		slog.Info("addon ownership: the addon's unit had failed and was started", "addon", id)
+		reqLog(r).Info("addon ownership: the addon's unit had failed and was started", "addon", id)
 	case fix.StartError != "":
 		slog.Warn("addon ownership: the addon's unit had failed and could not be started", "addon", id, "err", fix.StartError)
 		out["start_error"] = fix.StartError

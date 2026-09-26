@@ -13,6 +13,7 @@
     import {ask} from './dialog.svelte';
     import {t} from './i18n.svelte';
     import Help from './Help.svelte';
+    import {link} from './router.svelte';
 
     interface Anchor {
         id: string;
@@ -160,6 +161,8 @@
     <h3 id="oidc-trust">{t('Trusted certificates')}<Help>{t('A provider on the local network often has a certificate from a private CA or a self-signed one, which this system does not know. Add the CA, the chain or the provider\'s own certificate here: it is trusted for the login through the provider only, nothing else. Never a private key.')}</Help></h3>
     {#if error}<div class="ol-notice error" data-notice="oidc-trust-error">{error}</div>{/if}
     {#if notice}<div class="ol-notice" data-notice="oidc-trust">{notice}</div>{/if}
+    <!-- openccu-lite task 231: the same list is the OAuth / OIDC store of the Trust stores page -->
+    <p class="ol-muted ot-link">{t('The same list is the OAuth / OIDC store on')} <a href="/system/trust#oidc" use:link>{t('Trust stores')}</a>.</p>
     {#if anchors}
         {#if anchors.length === 0}
             <p class="ol-muted" data-oidc-trust-empty>{t('None: the provider\'s certificate must be one the system trusts by itself.')}</p>
@@ -240,5 +243,6 @@
     .ot-buttons { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
     .ot-buttons input[type='file'] { max-width: 100%; }
     .ot-chain { margin-top: 8px; }
+    .ot-link { margin: 0 0 8px; font-size: var(--hmm-font-size-small); }
     .ol-badge { margin-left: 8px; }
 </style>

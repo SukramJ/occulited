@@ -47,6 +47,7 @@ import (
 
 	"github.com/hobbyquaker/occulited/internal/system"
 	"github.com/hobbyquaker/occulited/internal/sysupdate"
+	"github.com/hobbyquaker/occulited/internal/trust"
 )
 
 // AddonLister lists installed addons: system.AddonScripts runs every rc.d script's info,
@@ -204,6 +205,8 @@ type SystemAPI struct {
 	Feed *sysupdate.Service
 	// Cert is the ACME certificate service (task 35); nil = the routes answer 501.
 	Cert *acme.Service
+	// Trust is the four trust stores (openccu-lite task 231); nil = the trust routes answer 501.
+	Trust *trust.Store
 	// RadioFirmware is the coprocessor firmware service (task 41); nil = the routes answer 501.
 	RadioFirmware *system.RadioFirmware
 	// RadioConnections: the connection per interface process (task 129 phase 3).
@@ -454,6 +457,7 @@ func (a *SystemAPI) Register(mux *http.ServeMux) {
 	// task 35: the box's TLS certificate
 	route(mux, auth.ScopeSystemRead, "GET "+p+"/certificate", a.certificate)
 	route(mux, auth.ScopeSystemWrite, "PUT "+p+"/certificate/settings", a.certificateSettingsPut)
+	a.registerTrust(mux, p) // openccu-lite task 231
 	route(mux, auth.ScopeSystemWrite, "POST "+p+"/certificate/test", a.certificateStart(acme.KindTest))
 	route(mux, auth.ScopeSystemWrite, "POST "+p+"/certificate/issue", a.certificateStart(acme.KindIssue))
 	route(mux, auth.ScopeSystemWrite, "POST "+p+"/certificate/renew", a.certificateStart(acme.KindRenew))

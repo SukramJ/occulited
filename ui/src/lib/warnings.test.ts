@@ -20,6 +20,15 @@ describe('the Status page warnings (task 81)', () => {
         expect(warningLink(w('legacy-session', 'mosquitto', {}, '/addons'), t)).toEqual({href: '/addons', label: 'Installed addons'});
     });
 
+    it('names the host and the missing authority of a strict TLS failure (openccu-lite task 231)', () => {
+        const plain = warningText(w('trust-ca', 'api.github.com', {hosts: ['api.github.com'], issuer: 'CN=DigiCert Global Root G2', store: 'occulited', candidate: false}), words);
+        expect(plain).toBe('api.github.com: the server presents a certificate from CN=DigiCert Global Root G2, which the occulited trust store does not hold. The call fails until the authority is added.');
+        const fix = warningText(w('trust-ca', 'a,b', {hosts: ['a', 'b'], issuer: 'X', store: 'occulited', candidate: true}), words);
+        expect(fix).toContain('a, b: the server presents');
+        expect(fix).toContain('one click on the Trust stores page copies it');
+        expect(warningLink(w('trust-ca', 'a', {}, '/system/trust#occulited'), t)).toEqual({href: '/system/trust#occulited', label: 'Trust stores'});
+    });
+
     it('names the addons and says disabled once', () => {
         const text = warningText(w('rega', 'email,hm-print', {addons: [{id: 'hm-print', name: 'Print', enabled: false}, {id: 'email', name: 'E-Mail', enabled: true}]}), words);
         expect(text).toBe('Disabled incompatible Addon: Print. Installed, not usable without ReGa, and still enabled: E-Mail.');

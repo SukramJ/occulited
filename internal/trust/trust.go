@@ -17,11 +17,13 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -52,7 +54,18 @@ type Anchor struct {
 	PEM      string    `json:"pem"`
 	Added    time.Time `json:"added"`
 	AddedBy  string    `json:"added_by,omitempty"`
+	// Origin is where the anchor was added (task 231): OriginOIDCSettings, OriginACMESettings,
+	// OriginPage or OriginCopy; "" for anchors from before the Trust stores page.
+	Origin string `json:"origin,omitempty"`
 }
+
+// The origins of an anchor, as the Trust stores page names them.
+const (
+	OriginOIDCSettings = "oidc-settings"
+	OriginACMESettings = "acme-settings"
+	OriginPage         = "page"
+	OriginCopy         = "copy"
+)
 
 // Info is what the page shows of an anchor.
 type Info struct {
@@ -71,7 +84,21 @@ type Info struct {
 	ExpiresSoon bool      `json:"expires_soon,omitempty"`
 	Added       time.Time `json:"added,omitzero"`
 	AddedBy     string    `json:"added_by,omitempty"`
+	// task 231: where the certificate comes from in its store - SourceImage (the image's bundle
+	// or occulited's base set) or SourceAdded (an administrator's) - and, for an added one, the
+	// origin (OriginOIDCSettings, ...). Distrusted marks an image certificate the administrator
+	// removed, still listed so it can be trusted again; Removable says whether Remove applies.
+	Source     string `json:"source,omitempty"`
+	Origin     string `json:"origin,omitempty"`
+	Distrusted bool   `json:"distrusted,omitempty"`
+	Removable  bool   `json:"removable,omitempty"`
 }
+
+// The sources of a certificate in a store.
+const (
+	SourceImage = "image"
+	SourceAdded = "added"
+)
 
 // Fingerprint is the SHA-256 of the certificate's DER, upper-case hex in colon-separated pairs,
 // as browsers and openssl show it.
@@ -153,15 +180,40 @@ type Store struct {
 	path string
 	now  func() time.Time
 	mu   sync.Mutex
+
+	// Paths are the system store's files (task 231): the bundle, the image's certificates, the
+	// administrator's additions and removals on the userfs, the rebuild script. Zero = no system
+	// store beyond Go's own roots.
+	Paths Paths
+	// Sys writes the system store's files and runs its rebuild as root; nil = the system store is
+	// read-only (ErrReadOnly).
+	Sys SystemWriter
+	// Base names occulited's own base set: files of the image's bundle (BaseNames by default).
+	Base []string
+	// Log is the store's logger; nil = slog's default.
+	Log *slog.Logger
+
+	bundleMu   sync.Mutex
+	bundle     *bundleCache
+	version    atomic.Uint64
+	onChangeMu sync.Mutex
+	onChange   []func()
 }
 
 // Open returns the store in dir (the state directory); the file need not exist.
 func Open(dir string) *Store {
-	return &Store{path: filepath.Join(dir, FileName), now: time.Now}
+	return &Store{path: filepath.Join(dir, FileName), now: time.Now, Base: BaseNames}
 }
 
 type file struct {
 	Anchors []Anchor `json:"anchors"`
+	// Removed lists, per store, the ids of base certificates the administrator removed (task
+	// 231): occulited's base set is the image's, so a removal is remembered here, not applied to
+	// the image.
+	Removed map[string][]string `json:"removed,omitempty"`
+	// Failures are the TLS handshakes occulited's own clients lost to a CA their store does not
+	// hold (task 231, strict): one per host, until the CA is added or the host answers again.
+	Failures []Failure `json:"failures,omitempty"`
 }
 
 func (s *Store) load() (file, error) {
@@ -224,9 +276,7 @@ func (s *Store) List(purpose string) ([]Info, error) {
 		if err != nil || len(cs) == 0 {
 			continue
 		}
-		i := Describe(cs[0], now)
-		i.Purposes, i.Added, i.AddedBy = a.Purposes, a.Added, a.AddedBy
-		out = append(out, i)
+		out = append(out, anchorInfo(a, cs[0], now))
 	}
 	return out, nil
 }
@@ -234,10 +284,15 @@ func (s *Store) List(purpose string) ([]Info, error) {
 // Add trusts every certificate of text for purpose. An expired certificate, or one not valid
 // yet, refuses the text; a certificate already stored gains the purpose. by is who added it.
 func (s *Store) Add(text []byte, purpose, by string) ([]Info, error) {
+	return s.addAnchors(text, purpose, by, "")
+}
+
+// addAnchors is Add with the origin recorded on a new anchor (task 231).
+func (s *Store) addAnchors(text []byte, purpose, by, origin string) ([]Info, error) {
 	if !validPurpose(purpose) {
 		return nil, ErrPurpose
 	}
-	certs, err := Parse(text)
+	certs, err := ParseAny(text)
 	if err != nil {
 		return nil, err
 	}
@@ -250,6 +305,19 @@ func (s *Store) Add(text []byte, purpose, by string) ([]Info, error) {
 			return nil, fmt.Errorf("%w: %s (from %s)", ErrNotYetValid, c.Subject, c.NotBefore.Format(time.DateOnly))
 		}
 	}
+	added, err := s.addAnchorsLocked(certs, purpose, by, origin, now)
+	if err != nil {
+		return nil, err
+	}
+	// after the lock is released: an OnChange callback reads the store (the OIDC client's roots
+	// through Pool), and a call under s.mu deadlocked the whole store - occulited's first start
+	// with an ACME CA root to move and OIDC configured never answered (openccu-lite B-248)
+	s.changed()
+	return added, nil
+}
+
+// addAnchorsLocked is addAnchors' change under s.mu.
+func (s *Store) addAnchorsLocked(certs []*x509.Certificate, purpose, by, origin string, now time.Time) ([]Info, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	f, err := s.load()
@@ -261,14 +329,12 @@ func (s *Store) Add(text []byte, purpose, by string) ([]Info, error) {
 		id := idOf(c)
 		k := slices.IndexFunc(f.Anchors, func(a Anchor) bool { return a.ID == id })
 		if k < 0 {
-			f.Anchors = append(f.Anchors, Anchor{ID: id, Purposes: []string{purpose}, PEM: encode(c), Added: now.UTC(), AddedBy: by})
+			f.Anchors = append(f.Anchors, Anchor{ID: id, Purposes: []string{purpose}, PEM: encode(c), Added: now.UTC(), AddedBy: by, Origin: origin})
 			k = len(f.Anchors) - 1
 		} else if !slices.Contains(f.Anchors[k].Purposes, purpose) {
 			f.Anchors[k].Purposes = append(f.Anchors[k].Purposes, purpose)
 		}
-		i := Describe(c, now)
-		i.Purposes, i.Added, i.AddedBy = f.Anchors[k].Purposes, f.Anchors[k].Added, f.Anchors[k].AddedBy
-		added = append(added, i)
+		added = append(added, anchorInfo(f.Anchors[k], c, now))
 	}
 	if err := s.save(f); err != nil {
 		return nil, err
@@ -276,8 +342,25 @@ func (s *Store) Add(text []byte, purpose, by string) ([]Info, error) {
 	return added, nil
 }
 
+// anchorInfo describes an anchor's certificate with what the store knows about it.
+func anchorInfo(a Anchor, c *x509.Certificate, now time.Time) Info {
+	i := Describe(c, now)
+	i.Purposes, i.Added, i.AddedBy, i.Origin = a.Purposes, a.Added, a.AddedBy, a.Origin
+	i.Source, i.Removable = SourceAdded, true
+	return i
+}
+
 // Remove takes purpose from the anchor id; an anchor left without a purpose is deleted.
 func (s *Store) Remove(id, purpose string) error {
+	if err := s.removeLocked(id, purpose); err != nil {
+		return err
+	}
+	s.changed() // after the lock is released, as in addAnchors (B-248)
+	return nil
+}
+
+// removeLocked is Remove's change under s.mu.
+func (s *Store) removeLocked(id, purpose string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	f, err := s.load()
@@ -323,7 +406,14 @@ func (s *Store) Pool(purpose string) (*x509.CertPool, error) {
 	if err != nil {
 		return nil, err
 	}
-	return PoolWith(extra), nil
+	if len(extra) == 0 && !s.hasBundle() {
+		return nil, nil
+	}
+	pool := s.systemPool()
+	for _, c := range extra {
+		pool.AddCert(c)
+	}
+	return pool, nil
 }
 
 // PoolWith is the system's pool plus extra.

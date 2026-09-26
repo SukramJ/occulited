@@ -14,6 +14,7 @@ const PAGES: {path: string; heading: string}[] = [
     {path: '/system/firewall', heading: 'Firewall'},
     {path: '/system/led', heading: 'Status LED'},
     {path: '/system/certificates', heading: 'Certificate'},
+    {path: '/system/trust', heading: 'Trust stores'},
     {path: '/system/backup', heading: 'Backup'},
     {path: '/addons', heading: 'Addons'},
     {path: '/catalog', heading: 'Addons'},

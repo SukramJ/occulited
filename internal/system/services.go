@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"net/http"
 	"os"
 	"sort"
 	"strings"
@@ -187,6 +188,9 @@ type AddonScripts struct {
 	// when the systemd manager confines it (openccu-lite B-119); nil, or nil for an id, = root, as
 	// the rc.d ABI always ran them.
 	Credential func(id string) *priv.Credential
+	// HTTP fetches an addon's own update URL when it is not box-relative (openccu-lite task 231:
+	// a client on occulited's trust store); nil = http.DefaultClient.
+	HTTP *http.Client
 }
 
 // credential is Credential's answer for id, nil where there is none.

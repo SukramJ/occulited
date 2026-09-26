@@ -9,7 +9,7 @@ const labels = (p: {label: string}) => [p.label, {Interfaces: 'Schnittstellen', 
 describe('the system pages', () => {
     it('are one flat list in the fixed order of D-68 with Firmware after Backup (D-80), Interfaces first (D-86), no Security (D-87), Keys after Interfaces (task 183), no Metadata (task 193)', () => {
         // openccu-lite task 222: LAN devices beside Interfaces
-        expect(SYSTEM_PAGES.map((p) => p.id)).toEqual(['interfaces', 'lan-devices', 'keys', 'network', 'firewall', 'remote-access', 'certificates', 'users', 'services', 'log', 'storage', 'backup', 'updates', 'led']);
+        expect(SYSTEM_PAGES.map((p) => p.id)).toEqual(['interfaces', 'lan-devices', 'keys', 'network', 'firewall', 'remote-access', 'trust', 'certificates', 'users', 'services', 'log', 'storage', 'backup', 'updates', 'led']);
     });
     it('each live under /system/<id>', () => {
         for (const p of SYSTEM_PAGES) expect(p.path).toBe(`/system/${p.id}`);
@@ -181,7 +181,8 @@ describe('the filter', () => {
     it('matches the label in either language, without regard to case', () => {
         expect(ids('fire')).toEqual(['firewall']);
         expect(ids('DIENSTE')).toEqual(['services']);
-        expect(ids('zerti')).toEqual(['certificates']);
+        // task 231: 'Zertifizierungsstelle' is a keyword of the Trust stores page
+        expect(ids('zerti')).toEqual(['trust', 'certificates']);
         // the radio interfaces by label, the network interfaces by Network's keyword
         expect(ids('schnitt')).toEqual(['interfaces', 'network']);
         expect(ids('metad')).toEqual([]);

@@ -252,7 +252,11 @@ func (b AddonScripts) CheckUpdate(ctx context.Context, a Addon, base string) Upd
 	if strings.HasPrefix(a.Update, "/") && b.UpdateToken != "" {
 		req.Header.Set("Authorization", "Bearer "+b.UpdateToken)
 	}
-	res, err := http.DefaultClient.Do(req)
+	hc := http.DefaultClient
+	if b.HTTP != nil && !strings.HasPrefix(a.Update, "/") {
+		hc = b.HTTP // task 231: an addon's own https URL trusts occulited's store
+	}
+	res, err := hc.Do(req)
 	if err != nil {
 		info.Error = err.Error()
 		return info

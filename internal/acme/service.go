@@ -2,6 +2,7 @@ package acme
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -139,6 +140,9 @@ type Service struct {
 	// followed them: what else keeps to the box's name (the HTTPS redirect's target) follows
 	// there too. nil = nothing.
 	Follow func(hostname, domain string)
+	// Roots is the pool every directory connection trusts (openccu-lite task 231: occulited's
+	// trust store plus the ACME anchors); nil = Go's own roots.
+	Roots func() *x509.CertPool
 
 	st       store
 	mu       sync.Mutex
@@ -224,6 +228,25 @@ func (s *Service) SetSettings(u Update) (Settings, error) {
 	s.settings = n
 	s.poke()
 	return n, nil
+}
+
+// TakeCARoot hands over a CA root stored in the settings before openccu-lite task 231 and forgets
+// it: the caller puts it into the ACME trust store, where the Trust stores page lists it. "" when
+// there is none.
+func (s *Service) TakeCARoot() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	pem := s.settings.CARoot
+	if pem == "" {
+		return ""
+	}
+	n := s.settings
+	n.CARoot = ""
+	if err := s.st.writeJSON(fileSettings, n); err != nil {
+		return ""
+	}
+	s.settings = n
+	return pem
 }
 
 func (s *Service) poke() {
@@ -436,8 +459,8 @@ func (s *Service) attempt(ctx context.Context, set Settings, a *Attempt) error {
 	req := Request{DirectoryURL: a.Directory, Email: set.Email, EABKID: set.EABKID, EABHMAC: set.EABHMAC, Names: a.Names, Challenge: set.Challenge,
 		DNSProvider: set.DNSProvider, DNSFields: set.DNSCredentials, AccountKey: key, Registration: regs[a.Directory], HTTP01: s.HTTP01, Log: logLine,
 		LibLog: func(l string) { a.run.Output("lego", l, legoPriority) }}
-	if set.Directory == DirCustom && set.CARoot != "" {
-		req.CARoot = []byte(set.CARoot)
+	if s.Roots != nil {
+		req.Roots = s.Roots()
 	}
 	logLine(fmt.Sprintf("%s: %s via %s", a.Kind, strings.Join(a.Names, ", "), set.Challenge))
 	res, err := s.Issuer.Issue(ctx, req)

@@ -3,20 +3,23 @@ package acme
 import (
 	"context"
 	"crypto/ecdsa"
+	"crypto/x509"
 	"encoding/json"
 )
 
 // Request is one run of the ACME flow, everything the issuer needs and nothing of the box.
 type Request struct {
 	DirectoryURL string
-	CARoot       []byte // PEM, trusted for the directory connection only; nil = the system roots
-	Email        string
-	EABKID       string
-	EABHMAC      string
-	Names        []string
-	Challenge    string
-	DNSProvider  string
-	DNSFields    map[string]string
+	// Roots is the pool the directory connection trusts (openccu-lite task 231: occulited's
+	// store plus the ACME anchors); nil = Go's own roots.
+	Roots       *x509.CertPool
+	Email       string
+	EABKID      string
+	EABHMAC     string
+	Names       []string
+	Challenge   string
+	DNSProvider string
+	DNSFields   map[string]string
 	// AccountKey is the ACME account's key; Registration what the directory answered for it
 	// before (nil = register, or find the account by its key).
 	AccountKey   *ecdsa.PrivateKey

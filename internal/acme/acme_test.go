@@ -2,6 +2,7 @@ package acme
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -430,8 +431,23 @@ func TestServiceTestValidatesAsACME(t *testing.T) {
 	}
 	a = wait(t, s)
 	iss := s.Issuer.(*fakeIssuer)
-	if r := iss.reqs[len(iss.reqs)-1]; a.Directory != "https://ca.lan:9000/acme/acme/directory" || string(r.CARoot) != strings.TrimSpace(string(ca)) {
+	// task 231: the pool the service is given travels with the request; the settings' CA root is
+	// what TakeCARoot hands to the trust store once
+	if r := iss.reqs[len(iss.reqs)-1]; a.Directory != "https://ca.lan:9000/acme/acme/directory" || r.Roots != nil {
 		t.Fatalf("%+v", r)
+	}
+	if got := s.TakeCARoot(); got != strings.TrimSpace(string(ca)) || s.Settings().CARoot != "" || s.TakeCARoot() != "" {
+		t.Fatalf("TakeCARoot: %q, settings %q", got, s.Settings().CARoot)
+	}
+	pool := x509.NewCertPool()
+	pool.AppendCertsFromPEM(ca)
+	s.Roots = func() *x509.CertPool { return pool }
+	if err := s.Start(KindTest); err != nil {
+		t.Fatal(err)
+	}
+	a = wait(t, s)
+	if r := iss.reqs[len(iss.reqs)-1]; !a.OK || r.Roots == nil || !r.Roots.Equal(pool) {
+		t.Fatalf("roots: %+v, attempt %+v", r, a)
 	}
 	// the DNS fields travel too, and the secrets are in the request but never in the status
 	u.Challenge, u.DNSProvider, u.DNSCredentials = ChallengeDNS01, "cloudflare", map[string]string{"api_token": "cf-secret"}

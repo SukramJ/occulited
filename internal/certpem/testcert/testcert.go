@@ -74,3 +74,21 @@ func Sign(csr *x509.CertificateRequest, notAfter time.Time) (certPEM, caPEM []by
 	der, _ := x509.CreateCertificate(rand.Reader, tpl, ca, csr.PublicKey, caKey)
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})
 }
+
+// CAEndingIn is the DER of a fresh self-signed CA whose last byte is last - re-signed until the
+// signature ends so (B-237: a DER whose last byte is whitespace). A test that asks for one gets
+// it in a few hundred signatures on average.
+func CAEndingIn(last byte, name string, notAfter time.Time) []byte {
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	tpl := template([]string{name}, nil, notAfter)
+	tpl.IsCA = true
+	tpl.Subject = pkix.Name{CommonName: name}
+	tpl.BasicConstraintsValid = true
+	tpl.KeyUsage |= x509.KeyUsageCertSign
+	for {
+		der, err := x509.CreateCertificate(rand.Reader, tpl, tpl, &key.PublicKey, key)
+		if err == nil && der[len(der)-1] == last {
+			return der
+		}
+	}
+}

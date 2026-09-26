@@ -6,6 +6,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -279,7 +280,17 @@ func run(opts daemonOptions) error {
 	if !users.SetupRequired() {
 		syncFavorites()
 	}
-	authAPI := &httpapi.AuthAPI{Store: users, ConfigFile: *cfgPath, Log: area("auth"), Trust: trust.Open(cfg.StateDir)}
+	// openccu-lite task 231: the four trust stores - the system's bundle on the box, occulited's
+	// own base set, the OIDC and ACME anchors - one store behind the Trust stores page, the OIDC
+	// settings and the ACME settings; occulited's own outbound clients trust its own store only
+	trustStore := trust.Open(cfg.StateDir)
+	trustStore.Paths, trustStore.Sys, trustStore.Log = trust.DefaultPaths(*rootDir), system.TrustWriter{}, area("trust")
+	authAPI := &httpapi.AuthAPI{Store: users, ConfigFile: *cfgPath, Log: area("auth"), Trust: trustStore}
+	trustStore.OnChange(func() {
+		if err := authAPI.ApplyOIDCTrust(); err != nil {
+			log.Warn("auth.oidc: the trust anchors could not be applied", "err", err)
+		}
+	})
 	// task 219: a program asks for access, an administrator approves it on Status
 	authAPI.Pairing = &pairing.Manager{Minter: users, Log: area("auth"), Local: pairingLocal,
 		Enabled: func() bool { return httpapi.PairingEnabled(*cfgPath) }}
@@ -347,7 +358,7 @@ func run(opts daemonOptions) error {
 	}
 	// the addons' rc.d layer (task 187): the nav, the update check and - without systemd - the
 	// read-only addon list; SystemdAddons runs the same scripts in a scope below
-	scripts := system.AddonScripts{Root: root}
+	scripts := system.AddonScripts{Root: root, HTTP: trustStore.HTTPClient(trust.StoreOcculited, 0)} // task 231: an addon's own update URL
 	var lister httpapi.AddonLister = scripts
 	var addonCtl httpapi.AddonController // 28.8: nil off systemd
 	// B-2: an addon's update check goes to occulited's own CGI route with a credential - the
@@ -465,6 +476,7 @@ func run(opts daemonOptions) error {
 	// B-195: the index is asked with the system's VERSION as the WebUI asks, a fetched bundle that
 	// needs more is refused, and the last run is kept in the state dir across restarts
 	fwClient := firmware.New(cfg.Firmware.Base)
+	fwClient.HTTP = trustStore.HTTPClient(trust.StoreOcculited, 2*time.Minute) // task 231: eQ-3's servers
 	fwClient.SystemVersion = root.ReadVersion().Version
 	fw := firmware.NewService(fwClient, cfg.Firmware.Dir, radioIfs, log)
 	fw.SystemVersion = fwClient.SystemVersion
@@ -544,8 +556,9 @@ func run(opts daemonOptions) error {
 	var catSvc *catalog.Service // the same service, for the manifest fallback below
 	if cfg.Catalog.Enabled && len(cfg.Catalog.URLs) > 0 {
 		c := catalog.New(cfg.Catalog.URLs, httpapi.ArchName(), installAdapter{manager})
-		c.TimingsFile = filepath.Join(cfg.StateDir, "catalog-timings.json") // 30.2: the bar's pace
-		c.CacheFile = filepath.Join(cfg.StateDir, "catalog-cache.json")     // D-119: the fetched manifests, stars, releases
+		c.HTTP = trustStore.HTTPClient(trust.StoreOcculited, 10*time.Minute) // task 231: GitHub and the catalogue
+		c.TimingsFile = filepath.Join(cfg.StateDir, "catalog-timings.json")  // 30.2: the bar's pace
+		c.CacheFile = filepath.Join(cfg.StateDir, "catalog-cache.json")      // D-119: the fetched manifests, stars, releases
 		c.BundledManifests = config.BundledManifestsDir
 		c.Daily = catalogDaily.Load
 		cat, catSvc = c, c
@@ -592,6 +605,7 @@ func run(opts daemonOptions) error {
 	var feed *sysupdate.Service
 	if cfg.SystemUpdate.Feed != "" {
 		feed = sysupdate.New(root, cfg.SystemUpdate.Feed, cfg.SystemUpdate.Enabled, log)
+		feed.HTTP = trustStore.HTTPClient(trust.StoreOcculited, 30*time.Minute) // task 231: GitHub's releases
 		if *rootDir == "/" {
 			go feed.Run(context.Background()) // the daily check follows the setting (task 244)
 		}
@@ -607,6 +621,22 @@ func run(opts daemonOptions) error {
 		return fmt.Errorf("certificate service: %w", err)
 	}
 	certSvc.Issuer = acme.LegoIssuer{UserAgent: "occulited/" + version}
+	// task 231: the directory connection trusts occulited's store plus the ACME anchors; a CA root
+	// kept in the settings before moves into the ACME store once
+	certSvc.Roots = func() *x509.CertPool {
+		pool, err := trustStore.PoolFor(trust.PurposeACME)
+		if err != nil {
+			return nil
+		}
+		return pool
+	}
+	if pem := certSvc.TakeCARoot(); pem != "" {
+		if _, err := trustStore.AddTo(context.Background(), trust.PurposeACME, []byte(pem), "", trust.OriginACMESettings); err != nil {
+			log.Warn("acme: the settings' CA root could not move into the ACME trust store", "err", err)
+		} else {
+			log.Info("acme: the settings' CA root is in the ACME trust store now (System → Trust stores)")
+		}
+	}
 	certSvc.Installer = system.CertInstaller{Root: root, Run: run, Systemd: root.HasSystemd()} // dry off a real box
 	// task 102 (D-59): an attempt's lines and a firmware flash's go to the journal, one entry each
 	// with the run's fields (internal/runlog); off a real systemd box they go to occulited's log
@@ -783,7 +813,7 @@ func run(opts daemonOptions) error {
 	} else if adopted {
 		log.Info("backup encryption: the system's identity was carried across the restore")
 	}
-	sysAPI := &httpapi.SystemAPI{Root: root, Services: services, Log: logReader, Journal: journal, Timers: timers, Addons: lister, Manager: manager, Nav: scripts, Firmware: fw, OnFirmwareToggle: toggle, Catalog: cat, CatalogDaily: catalogDaily.Load, OnCatalogDaily: func(on bool) error {
+	sysAPI := &httpapi.SystemAPI{Trust: trustStore, Root: root, Services: services, Log: logReader, Journal: journal, Timers: timers, Addons: lister, Manager: manager, Nav: scripts, Firmware: fw, OnFirmwareToggle: toggle, Catalog: cat, CatalogDaily: catalogDaily.Load, OnCatalogDaily: func(on bool) error {
 		catalogDaily.Store(on)
 		cfg.Catalog.Daily = &on
 		return config.Save(*cfgPath, cfg)

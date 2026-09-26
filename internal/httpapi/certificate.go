@@ -5,9 +5,11 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"strings"
 
 	"github.com/hobbyquaker/occulited/internal/acme"
 	"github.com/hobbyquaker/occulited/internal/system"
+	"github.com/hobbyquaker/occulited/internal/trust"
 )
 
 // The certificate routes (task 35, D-48): the current certificate and the ACME settings, the
@@ -41,6 +43,20 @@ func (a *SystemAPI) certificateSettingsPut(w http.ResponseWriter, r *http.Reques
 		badBody(w, err)
 		return
 	}
+	// openccu-lite task 231: the CA root field adds to the ACME trust store (the Trust stores
+	// page lists and removes it); nothing of it is kept in the settings any more
+	if pem := strings.TrimSpace(u.CARoot); pem != "" {
+		if a.Trust == nil {
+			writeJSON(w, http.StatusUnprocessableEntity, apiError{Error: "invalid", Message: "no trust store: the CA root cannot be kept on this system"})
+			return
+		}
+		if _, err := a.Trust.AddTo(r.Context(), trust.PurposeACME, []byte(pem), SessionFrom(r).User, trust.OriginACMESettings); err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, apiError{Error: "invalid", Message: "the CA root: " + err.Error()})
+			return
+		}
+		a.trustChanged()
+	}
+	u.CARoot = ""
 	if _, err := a.Cert.SetSettings(u); err != nil {
 		if errors.Is(err, acme.ErrInvalid) {
 			writeJSON(w, http.StatusUnprocessableEntity, apiError{Error: "invalid", Message: err.Error()})

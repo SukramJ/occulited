@@ -96,7 +96,7 @@ func (li LegoIssuer) Issue(ctx context.Context, req Request) (*Result, error) {
 	cfg.CADirURL = req.DirectoryURL
 	cfg.UserAgent = li.UserAgent
 	cfg.Certificate.KeyType = certcrypto.EC256
-	cfg.HTTPClient = httpClient(req.CARoot)
+	cfg.HTTPClient = httpClient(req.Roots)
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -181,9 +181,9 @@ func emailNote(email string) string {
 	return " for " + email
 }
 
-// httpClient is lego's default client, with the custom CA's root as the only trust anchor when
-// one is given - for that connection, never the box's trust store.
-func httpClient(caRoot []byte) *http.Client {
+// httpClient is lego's default client on the pool the caller trusts for the directory (task 231:
+// occulited's store plus the ACME anchors); nil = Go's own roots.
+func httpClient(roots *x509.CertPool) *http.Client {
 	tr := &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
 		DialContext:           (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
@@ -191,11 +191,8 @@ func httpClient(caRoot []byte) *http.Client {
 		ResponseHeaderTimeout: 30 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 	}
-	if len(caRoot) > 0 {
-		pool := x509.NewCertPool()
-		if pool.AppendCertsFromPEM(caRoot) {
-			tr.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
-		}
+	if roots != nil {
+		tr.TLSClientConfig = &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}
 	}
 	return &http.Client{Timeout: 2 * time.Minute, Transport: tr}
 }

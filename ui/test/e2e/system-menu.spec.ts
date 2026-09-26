@@ -6,8 +6,8 @@ import {expect, test, type Page} from '@playwright/test';
  * tab and shrinks back; a bottom sheet on a phone; the same menu under a system page's title; the
  * keyboard: Ctrl/⌘+K, the arrow keys, Escape's focus return.
  */
-const ORDER_EN = ['Interfaces', 'LAN devices', 'Keys', 'Network', 'Firewall', 'Remote access', 'Certificate', 'Users', 'Services', 'Log', 'Storage', 'Backup', 'Updates', 'Status LED'];
-const ORDER_DE = ['Schnittstellen', 'LAN-Geräte', 'Schlüssel', 'Netzwerk', 'Firewall', 'Fernzugriff', 'Zertifikat', 'Benutzer', 'Dienste', 'Protokoll', 'Speicher', 'Sicherung', 'Updates', 'Statusleuchte'];
+const ORDER_EN = ['Interfaces', 'LAN devices', 'Keys', 'Network', 'Firewall', 'Remote access', 'Trust stores', 'Certificate', 'Users', 'Services', 'Log', 'Storage', 'Backup', 'Updates', 'Status LED'];
+const ORDER_DE = ['Schnittstellen', 'LAN-Geräte', 'Schlüssel', 'Netzwerk', 'Firewall', 'Fernzugriff', 'Vertrauensspeicher', 'Zertifikat', 'Benutzer', 'Dienste', 'Protokoll', 'Speicher', 'Sicherung', 'Updates', 'Statusleuchte'];
 
 const tab = (page: Page) => page.locator('.ol-systab');
 const menu = (page: Page) => page.locator('.ol-sysmenu');

@@ -1,6 +1,7 @@
 package trust
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -8,6 +9,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -214,5 +216,52 @@ func TestPool(t *testing.T) {
 func TestFingerprintNormal(t *testing.T) {
 	if NormalFingerprint(" ab:cd-EF 01 ") != "ABCDEF01" {
 		t.Error(NormalFingerprint(" ab:cd-EF 01 "))
+	}
+}
+
+// openccu-lite B-248: an OnChange callback may read the store. The OIDC client's callback builds
+// its pool through Pool; when addAnchors and Remove called the callbacks under s.mu, the first
+// start that moved an ACME CA root into the store (with OIDC configured) never got past it.
+func TestChangeHookReadsTheStore(t *testing.T) {
+	s := Open(t.TempDir())
+	_, _, ca := testcert.Issued([]string{"auth.example.org"}, time.Now().Add(90*24*time.Hour))
+	reads := 0
+	s.OnChange(func() {
+		if _, err := s.Pool(PurposeOIDC); err != nil {
+			t.Errorf("Pool in the hook: %v", err)
+		}
+		if _, err := s.PoolFor(PurposeACME); err != nil {
+			t.Errorf("PoolFor in the hook: %v", err)
+		}
+		reads++
+	})
+	done := make(chan error, 1)
+	go func() {
+		ctx := context.Background()
+		added, err := s.AddTo(ctx, PurposeACME, ca, "", OriginACMESettings)
+		if err != nil || len(added) != 1 {
+			done <- fmt.Errorf("AddTo: %v %v", added, err)
+			return
+		}
+		if _, err := s.Add(ca, PurposeOIDC, "admin"); err != nil {
+			done <- fmt.Errorf("Add: %v", err)
+			return
+		}
+		if err := s.Remove(added[0].ID, PurposeOIDC); err != nil {
+			done <- fmt.Errorf("Remove: %v", err)
+			return
+		}
+		done <- s.RemoveFrom(ctx, PurposeACME, added[0].ID)
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("a change whose hook reads the store did not return: the store's lock is held across the hook")
+	}
+	if reads != 4 {
+		t.Errorf("the hook ran %d times, want 4", reads)
 	}
 }

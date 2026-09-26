@@ -121,7 +121,7 @@ func (a *AuthAPI) oidcTrustAdd(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	added, err := a.Trust.Add([]byte(body.PEM), trust.PurposeOIDC, SessionFrom(r).User)
+	added, err := a.Trust.AddTo(r.Context(), trust.PurposeOIDC, []byte(body.PEM), SessionFrom(r).User, trust.OriginOIDCSettings)
 	if err != nil {
 		trustError(w, err)
 		return
@@ -130,7 +130,7 @@ func (a *AuthAPI) oidcTrustAdd(w http.ResponseWriter, r *http.Request) {
 		a.logger().Warn("auth.oidc: the trust anchors could not be applied", "err", err)
 	}
 	for _, i := range added {
-		a.logger().Info("auth.oidc: certificate trusted for the identity provider", "subject", i.Subject, "fingerprint", i.Fingerprint, "by", SessionFrom(r).User)
+		withCaller(r, a.logger()).Info("auth.oidc: certificate trusted for the identity provider", "subject", i.Subject, "fingerprint", i.Fingerprint)
 	}
 	l, _ := a.Trust.List(trust.PurposeOIDC)
 	writeJSON(w, 200, trustList{Anchors: l, Added: added})
@@ -148,7 +148,7 @@ func (a *AuthAPI) oidcTrustRemove(w http.ResponseWriter, r *http.Request) {
 	if err := a.ApplyOIDCTrust(); err != nil {
 		a.logger().Warn("auth.oidc: the trust anchors could not be applied", "err", err)
 	}
-	a.logger().Info("auth.oidc: a trusted certificate removed", "id", id, "by", SessionFrom(r).User)
+	withCaller(r, a.logger()).Info("auth.oidc: a trusted certificate removed", "id", id)
 	l, _ := a.Trust.List(trust.PurposeOIDC)
 	writeJSON(w, 200, trustList{Anchors: l})
 }
