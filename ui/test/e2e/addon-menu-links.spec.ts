@@ -53,8 +53,13 @@ test('a link that opens a new tab: the name and ↗ lead there, ↗ is no second
     await expect(arrow).toHaveAttribute('href', 'http://192.0.2.119/');
     await expect(arrow).toHaveAttribute('target', '_blank');
     await expect(arrow).toHaveAttribute('tabindex', '-1');
-    // a click opens the tab and closes the menu; the shell stays where it was
+    // a click opens the tab and closes the menu; the shell stays where it was. The link's address
+    // is a documentation address that nothing answers: a runner that drops the packets (GitHub's)
+    // never commits the new tab's navigation, and a noopener tab is only handed out once it has -
+    // so the test answers it itself.
+    await page.context().route('http://192.0.2.119/**', (r) => r.fulfill({contentType: 'text/html', body: '<title>CCU WebUI</title>'}));
     const [popupPage] = await Promise.all([page.context().waitForEvent('page'), item.click()]);
+    await expect(popupPage).toHaveURL('http://192.0.2.119/');
     await popupPage.close();
     await expect(popup(page)).toHaveCount(0);
     await expect(page).toHaveURL(/\/$/);

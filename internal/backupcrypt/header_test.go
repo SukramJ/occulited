@@ -47,6 +47,9 @@ func TestSniffAndDecrypt(t *testing.T) {
 	if !h.Opens(box) || !h.Opens(rec.Identity()) || h.Opens(other) {
 		t.Error("Opens")
 	}
+	if again, err := io.ReadAll(r); err != nil || !bytes.Equal(again, enc) {
+		t.Fatalf("the sniffed reader: %v, %d of %d bytes", err, len(again), len(enc))
+	}
 	// the reader yields the whole file again, and each identity decrypts it
 	for _, id := range []age.Identity{box, rec.Identity()} {
 		_, r, _ = Sniff(bytes.NewReader(enc))

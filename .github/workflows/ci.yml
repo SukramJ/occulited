@@ -1,7 +1,7 @@
 # openccu-lite: CI for occulited. Runs on the project's own self-hosted runner (host mode) on the
 # private forge the project is developed on. On GitHub it does not run: no self-hosted runner is
-# attached to the public repository (see the job's `if`); a workflow for GitHub-hosted runners is
-# a separate file when there is one.
+# attached to the public repository (see the job's `if`); github-ci.yml runs the same checks on
+# GitHub-hosted runners there.
 name: ci
 
 on:

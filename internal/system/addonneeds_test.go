@@ -3,6 +3,7 @@ package system
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -223,8 +224,13 @@ func TestRefreshAddonNeeds(t *testing.T) {
 	if got, ok := needsFile(t, r, "hmm"); ok {
 		t.Errorf("hmm kept %q beside an unknown id", got)
 	}
+	// a second run changes nothing and writes nothing
+	before := policyDirState(t, r)
 	if ids := a.RefreshAddonNeeds(); ids != nil {
 		t.Errorf("second run: %v", ids)
+	}
+	if after := policyDirState(t, r); !maps.Equal(before, after) {
+		t.Errorf("the second run touched the policy directory:\n%v\n%v", before, after)
 	}
 }
 

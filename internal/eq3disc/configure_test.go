@@ -154,6 +154,11 @@ func TestConfigure(t *testing.T) {
 	if restarts, err := c.Configure(context.Background(), lo, "eQ3-HMIP-HAP-App", "HAPSERIAL", cfg, ""); err != nil || !restarts {
 		t.Errorf("%v %v", restarts, err)
 	}
+	d.mu.Lock()
+	if d.wrapped != 0 || !bytes.HasPrefix(d.set, want) {
+		t.Errorf("in clear: wrapped %d, set %x, want %x", d.wrapped, d.set, want)
+	}
+	d.mu.Unlock()
 	// nobody there
 	dead := &Client{Timeout: 100 * time.Millisecond, Port: 9}
 	if _, err := dead.Configure(context.Background(), lo, "x", "y", cfg, ""); !errors.Is(err, ErrNoAnswer) {

@@ -29,6 +29,7 @@ import (
 	"time"
 
 	bolt "go.etcd.io/bbolt"
+	bolterrors "go.etcd.io/bbolt/errors"
 )
 
 const (
@@ -90,7 +91,7 @@ func Open(path string) (*DB, error) {
 	if err == nil {
 		return &DB{bolt: db, path: path}, nil
 	}
-	if errors.Is(err, bolt.ErrTimeout) {
+	if errors.Is(err, bolterrors.ErrTimeout) {
 		return nil, fmt.Errorf("%s is held by another process: %w", path, err)
 	}
 	if _, serr := os.Stat(path); serr != nil {

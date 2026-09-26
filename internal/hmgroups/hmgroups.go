@@ -216,7 +216,7 @@ type suitable struct {
 	Type   string `json:"type"`
 }
 
-func (s suitable) member() Member { return Member{ID: s.ID, Serial: s.Serial, Type: s.Type} }
+func (s suitable) member() Member { return Member(s) }
 
 // ConfigureView is the configure-devices dialog: the members whose configuration is pending.
 type ConfigureView struct {

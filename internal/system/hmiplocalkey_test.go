@@ -160,6 +160,20 @@ func lkCheck(t *testing.T, k *HmIPLocalKey, want string) *LocalKeyCheck {
 	return nil
 }
 
+// lkDone waits for the check after a switch to reach its final state: until then its goroutine
+// writes state.json, and a test that ends earlier races its TempDir's cleanup
+func lkDone(t *testing.T, k *HmIPLocalKey) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if c := k.Status().Check; c != nil && !checkOpen(c.State) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("the check did not end: %+v", k.Status().Check)
+}
+
 // task 149: generate, snapshot, write, restart; the override; the revert from the snapshot
 func TestLocalKeyGenerateOverrideRevert(t *testing.T) {
 	fake := &fakeHmIPServer{state: "ok"}
@@ -448,6 +462,7 @@ func TestLocalKeyAndDeviceKeysApplyExclusive(t *testing.T) {
 	if n := strings.Count(strings.Join(svc.calls, " "), "hmipserver restart"); n != 3 {
 		t.Fatalf("%d restarts: %v", n, svc.calls)
 	}
+	lkDone(t, k)
 }
 
 // B-197: the override or a switch during the check ends it with a final state at once, and the

@@ -155,6 +155,9 @@ func TestEncryptionRoutes(t *testing.T) {
 		t.Errorf("%d %v", st, out)
 	}
 	st, out = g.do(t, "GET", "/backup/encryption", "")
+	if st != 200 {
+		t.Fatalf("%d %v", st, out)
+	}
 	if prev := out["previous"].([]any); len(prev) != 1 || prev[0].(map[string]any)["fingerprint"] != sec.Fingerprint() || out["recovery"].(map[string]any)["fingerprint"] != sec2.Fingerprint() {
 		t.Errorf("%v", out)
 	}

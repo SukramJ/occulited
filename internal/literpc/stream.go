@@ -57,10 +57,6 @@ func ParseFilter(q url.Values) Filter {
 	return Filter{Interfaces: clean(q["interface"]), Addresses: clean(q["address"]), Keys: append(clean(q["key"]), clean(q["datapoint"])...), Types: clean(q["type"])}
 }
 
-func (f Filter) empty() bool {
-	return len(f.Interfaces) == 0 && len(f.Addresses) == 0 && len(f.Keys) == 0 && len(f.Types) == 0
-}
-
 // matches says whether a bus message passes: hello and resync always do; an interface or
 // devices message is matched by interface and type only.
 func (f Filter) matches(typ string, m rpcsub.Message) bool {
