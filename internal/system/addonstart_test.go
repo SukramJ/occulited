@@ -58,6 +58,7 @@ func TestStartAloneLeavesUndeclared(t *testing.T) {
 		{"startonly", &AddonRuntime{Start: "early"}, true},
 		{"startneeds", &AddonRuntime{Start: "early", Needs: needs("rfd", "hmipserver")}, true},
 		{"startports", &AddonRuntime{Start: "early", Ports: []int{8090}}, false},
+		{"startneedsdaemon", &AddonRuntime{Start: "early", Needs: needs("rfd", "hmipserver"), Daemon: true}, false}, // B-20
 	} {
 		writePolicy(t, r, AddonPolicy{ID: c.id, Mode: "confined", Source: "catalog", Runtime: c.rt})
 		if got := a.PolicyView(c.id).Undeclared; got != c.undeclared {

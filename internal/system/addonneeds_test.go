@@ -70,6 +70,11 @@ func TestNeedsAloneLeavesUndeclared(t *testing.T) {
 		{"sessiononly", &AddonRuntime{Session: &AddonSession{HeaderSince: "9.7.3"}}, true},
 		{"sessionneeds", &AddonRuntime{Needs: needs("rfd"), Session: &AddonSession{HeaderSince: "9.7.3"}}, true},
 		{"sessionports", &AddonRuntime{Session: &AddonSession{HeaderSince: "9.7.3"}, Ports: []int{1880}}, false},
+		// B-20: daemon and api_scopes are keys added later, and count like the confinement keys
+		{"daemononly", &AddonRuntime{Daemon: true}, false},
+		{"daemonneeds", &AddonRuntime{Daemon: true, Needs: needs("rfd", "hmipserver")}, false},
+		{"scopesneeds", &AddonRuntime{APIScopes: []string{"meta:read"}, Needs: needs()}, false},
+		{"emptyscopesneeds", &AddonRuntime{APIScopes: []string{}, Needs: needs()}, true},
 	} {
 		writePolicy(t, r, AddonPolicy{ID: c.id, Mode: "confined", Source: "catalog", Runtime: c.rt})
 		if got := a.PolicyView(c.id).Undeclared; got != c.undeclared {

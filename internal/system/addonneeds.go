@@ -59,7 +59,10 @@ func needsLine(rt *AddonRuntime) (line string, ok bool, unknown []string) {
 // holds ({} included), except one that holds nothing but needs, start and session: the start order,
 // the early start (task 119) and how the addon reads the session are no statement of what it needs
 // to run, and docs/manifest-format.md says declaring them alone does not remove the marking. A key added to AddonRuntime later belongs
-// in this list.
+// in this list: daemon (B-158) and api_scopes (task 66) are statements about how the addon runs, so
+// {"daemon": true, "needs": [...], "start": "early"} is as declared as {"daemon": true} alone
+// (occulited B-20) - an addon that needs nothing beyond its own directories can say so and still
+// declare its start order.
 func (rt *AddonRuntime) declaresConfinement() bool {
 	if rt == nil {
 		return false
@@ -67,7 +70,8 @@ func (rt *AddonRuntime) declaresConfinement() bool {
 	if rt.Needs == nil && rt.Session == nil && rt.Start == "" {
 		return true
 	}
-	return rt.Root || len(rt.Capabilities) > 0 || len(rt.Groups) > 0 || len(rt.Paths) > 0 || len(rt.DataDirs) > 0 || len(rt.Ports) > 0 || len(rt.PortInfo) > 0
+	return rt.Root || len(rt.Capabilities) > 0 || len(rt.Groups) > 0 || len(rt.Paths) > 0 || len(rt.DataDirs) > 0 || len(rt.Ports) > 0 || len(rt.PortInfo) > 0 ||
+		rt.Daemon || len(rt.APIScopes) > 0
 }
 
 // NeedsLine is the start order an addon's declaration gives, as the .needs file spells it; ""

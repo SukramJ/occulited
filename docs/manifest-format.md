@@ -111,7 +111,11 @@ A `<asset>.sha256` beside the asset is checked when it exists; without one the d
 Under systemd every addon runs in a generated unit, as its own user `addon-<id>` unless it declares `root`. The block
 says what that unit gets; **applied as declared** (rule 2). An addon without a `runtime` block runs confined with
 nothing but its own three directories and is shown as *undeclared* on the Addons and Services pages — that marking is
-what a missing block looks like, and the block is what removes it. The busybox products ignore the block.
+what a missing block looks like, and the block is what removes it. **One exception:** a block that says nothing but
+the start order (`needs`, `start`, with or without a `note`) keeps the marking, because the start order is no
+statement of what the addon needs to run. Any other key removes it, `daemon: true` and `api_scopes` included — so an
+addon that needs nothing beyond its own directories declares `{"daemon": true, "needs": [...], "start": "early"}`, or
+an empty block `{}` when it keeps no process running. The busybox products ignore the block.
 
 | Key | Rules |
 | --- | --- |
