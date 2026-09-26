@@ -114,6 +114,20 @@
 
     // the network form
     let form = $state<Settings>({hostname: '', mode: 'dhcp', dns: []});
+    // openccu-lite task 62: the last rename's outcome - the lease and the certificate reminder
+    interface Rename { hostname: string; previous: string; lease: {renewed: boolean; static?: boolean; error?: string; address?: string; at?: string} }
+    interface CertNames { names: string[]; fits: boolean; mode: string; known: boolean }
+    let rename = $state<(Rename & {certificate: CertNames | null; acme: {state: string; names: string[]; previous: string[]} | null}) | null>(null);
+    const certNotice = $derived.by(() => {
+        if (!rename?.certificate || rename.certificate.fits || !rename.certificate.known) return '';
+        const c = rename.certificate;
+        const old = c.names.filter((n) => !/^\d+\.\d+\.\d+\.\d+$/.test(n)).join(', ') || rename.previous;
+        if (c.mode === 'self-signed') return t("The system's own certificate still names {old}. Browsers will warn until it is renewed.", {old});
+        const base = t('The certificate names {old}; for {name} you most likely need a new one.', {old, name: rename.hostname});
+        if (rename.acme?.state === 'adapted') return `${base} ${t('The ACME names were adapted to {names}; the certificate follows at the next renewal, or on Issue now.', {names: rename.acme.names.join(', ')})}`;
+        if (rename.acme?.state === 'set-by-hand') return `${base} ${t('The ACME names were set by hand and stay: {names}.', {names: rename.acme.names.join(', ')})}`;
+        return base;
+    });
     let dnsText = $state('');
     let pending = $state<Pending | null>(null);
     let secondsLeft = $state(0);
@@ -305,9 +319,18 @@
             // task 125: the ticket for the confirm link is fetched before the address changes -
             // afterwards this page may not reach the box any more
             if (changesAddress) await sessionTicket();
-            const r = await api.post<{applied: boolean; pending: Pending | null}>('/api/system/v1/network', s);
+            const r = await api.post<{applied: boolean; pending: Pending | null; rename?: Rename; certificate?: CertNames; acme_names?: {state: string; names: string[]; previous: string[]}}>('/api/system/v1/network', s);
             if (r.applied) {
-                notice = t('Saved.');
+                // openccu-lite task 62: a rename says what it did about the lease, and whether the
+                // certificate still names the old host
+                if (r.rename) {
+                    const l = r.rename.lease;
+                    const lease = l.static ? t('Static address: no DHCP server to tell.') : l.renewed ? t('The DHCP server was told at {time}{address}.', {time: l.at ? new Date(l.at).toLocaleTimeString() : '', address: l.address ? ` (${l.address})` : ''}) : t('The DHCP lease could not be renewed under the new name: {error} Until the next start the server knows the system as {old}.', {error: l.error ?? '', old: r.rename.previous});
+                    notice = `${t('Hostname set to {name}.', {name: r.rename.hostname})} ${lease}`;
+                    rename = {...r.rename, certificate: r.certificate ?? null, acme: r.acme_names ?? null};
+                } else {
+                    notice = t('Saved.');
+                }
                 await load();
             } else {
                 setPending(r.pending);
@@ -571,7 +594,13 @@
     <Loading {error} />
 {:else}
     {#if error}<div class="ol-notice err">{error}</div>{/if}
-    {#if notice}<div class="ol-notice">{notice}</div>{/if}
+    {#if notice}<div class="ol-notice" data-notice="network">{notice}</div>{/if}
+    {#if certNotice}
+        <div class="ol-panel ol-notice-panel warn ol-notice-link" data-notice="rename-certificate">
+            <span>{certNotice}</span>
+            <a class="hmm-button" href="/system/certificates" use:link data-action="open-certificate">{t('Open certificate settings')}</a>
+        </div>
+    {/if}
     <!-- task 34: a container's veth is configured by the container manager (Proxmox) and its
          clock is the host's, so this page shows the network and sets nothing but the zone. -->
     {#if net.host_managed}

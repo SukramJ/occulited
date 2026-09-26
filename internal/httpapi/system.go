@@ -1245,7 +1245,7 @@ func (a *SystemAPI) networkBegin(w http.ResponseWriter, r *http.Request) {
 		s.DNS = []string{}
 	}
 	oldHost := a.Root.Hostname()
-	p, err := a.NetTx.Begin(r.Context(), s)
+	p, ren, err := a.NetTx.Begin(r.Context(), s)
 	if err != nil {
 		switch {
 		case errors.Is(err, system.ErrTxPending):
@@ -1264,6 +1264,12 @@ func (a *SystemAPI) networkBegin(w http.ResponseWriter, r *http.Request) {
 			if fr := a.followFQDNRename(s.Hostname); fr != nil {
 				out["fqdn_redirect"] = fr
 			}
+			// openccu-lite task 62: what the rename did about the lease, and whether the live
+			// certificate still names the old host
+			if ren != nil {
+				out["rename"] = ren
+			}
+			out["certificate"] = a.certificateNames(s.Hostname)
 		}
 		writeJSON(w, 200, out)
 		return
@@ -3110,4 +3116,47 @@ func (a *SystemAPI) addonCtl(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "unit": "addon-" + id + ".service", "action": body.Action, "output": out})
+}
+
+// CertificateNames is the rename's certificate reminder (openccu-lite task 62): the names the
+// live certificate carries, whether one of them is the new host (bare, or as <host>.<domain>),
+// and how the certificate is managed - self-signed (S50lighttpd's, renewed on its own only when
+// it expires), acme or manual.
+type CertificateNames struct {
+	Names []string `json:"names"`
+	Fits  bool     `json:"fits"`
+	Mode  string   `json:"mode"`
+	// Known is false when the live certificate could not be read
+	Known bool `json:"known"`
+}
+
+// certificateNames reads the live certificate through the certificate service.
+func (a *SystemAPI) certificateNames(host string) CertificateNames {
+	c := CertificateNames{Names: []string{}, Mode: "self-signed"}
+	if a.Cert == nil {
+		return c
+	}
+	st := a.Cert.Status()
+	if st.Managed {
+		c.Mode = st.ManagedMode
+	}
+	if st.Current == nil {
+		return c
+	}
+	c.Known = true
+	c.Names = append(c.Names, st.Current.Names...)
+	c.Fits = NamesFit(c.Names, host)
+	return c
+}
+
+// NamesFit says whether one of a certificate's names is the host itself or the host in a domain.
+func NamesFit(names []string, host string) bool {
+	h := strings.ToLower(host)
+	for _, n := range names {
+		n = strings.ToLower(strings.TrimPrefix(n, "*."))
+		if n == h || strings.HasPrefix(n, h+".") {
+			return true
+		}
+	}
+	return false
 }

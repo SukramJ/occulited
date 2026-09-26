@@ -81,6 +81,9 @@ type Device struct {
 	// Presentation is the presentationURL for the root URL the description was read over
 	// (PresentationFor with the system's names and its certificate); nil = PresentationURL(root).
 	Presentation func(root string) string
+	// Settled, when set, says whether the identity is final (an Identity's Settled): the
+	// responder holds its first announcement a little while it is not (B-245). nil = final.
+	Settled func() bool
 }
 
 // Product, Manufacturer and the URL are what a scanner shows beside the name. "the system" is the
@@ -193,6 +196,12 @@ const (
 // the daemon stops. A byebye carries neither LOCATION nor CACHE-CONTROL - there is nothing to
 // fetch any more - which is what the spec says and what a listener expects.
 func (d Device) Notify(location, nts string) []byte {
+	return d.NotifyAs(d.UDN(), location, nts)
+}
+
+// NotifyAs is Notify under a given UDN: the byebye for an identity this device announced before
+// it was final (B-245), so a listener drops that entry instead of keeping it beside the real one.
+func (d Device) NotifyAs(udn, location, nts string) []byte {
 	h := [][2]string{{"HOST", Addr}}
 	if nts != Byebye {
 		h = append(h, [2]string{"CACHE-CONTROL", "max-age=" + strconv.Itoa(MaxAge)}, [2]string{"LOCATION", location})
@@ -201,7 +210,7 @@ func (d Device) Notify(location, nts string) []byte {
 		[2]string{"NT", "upnp:rootdevice"},
 		[2]string{"NTS", nts},
 		[2]string{"SERVER", d.server()},
-		[2]string{"USN", d.UDN() + "::upnp:rootdevice"},
+		[2]string{"USN", udn + "::upnp:rootdevice"},
 	)
 	return message("NOTIFY * HTTP/1.1", h)
 }
@@ -223,7 +232,7 @@ func message(start string, headers [][2]string) []byte {
 
 // Location is the URL of the description for a request that arrived on ip, or for an announcement
 // sent from it. Plain HTTP and no port: that is where SSDP's LOCATION has always pointed, and the
-// description is public, read-only XML. The page behind presentationURL is the HTTPS one.
+// description is public, read-only XML.
 func Location(ip string) string {
 	return "http://" + hostPart(ip) + DescriptionPath
 }
@@ -281,14 +290,19 @@ func (d Device) presentation(root string) string {
 // warning (task 165, found 2026-09-23: Windows' network view opened https://<IP>/, which the
 // certificate does not name, and failed). The first name the certificate covers wins - the host the
 // description was read over, then each of names (the system's <host>.<domain>, then its host name);
-// with none covered it is plain http:// to the address the description was read over, as OpenCCU
-// and ssdpd always had it, and lighttpd's redirect takes the browser on from there.
+// with none covered it is the address the description was read over.
+//
+// The scheme is plain http:// in every case, the shape every CCU's description has had and the one
+// Windows' network view is known to open in a browser (B-245: with https://<name>/ Windows
+// downloaded the page into its IE cache and opened the file instead). lighttpd redirects http://
+// to https:// under the same host, so a covered name still ends on the web UI without a warning,
+// one hop later.
 func PresentationFor(root string, names []string, covered func(host string) bool) string {
 	host := hostOf(root)
 	if covered != nil {
 		for _, n := range append([]string{host}, names...) {
 			if n = strings.ToLower(strings.TrimSpace(n)); n != "" && covered(n) {
-				return "https://" + n + "/"
+				return "http://" + n + "/"
 			}
 		}
 	}
@@ -308,13 +322,12 @@ func hostOf(root string) string {
 	return host
 }
 
-// PresentationURL is the page a scanner opens on a double click: the web UI over HTTPS, whatever
-// the description itself was fetched over (task 165). lighttpd always serves 443 here, and the
-// plain port only redirects to it, so sending a reader to http:// would be one hop for nothing -
-// and a UPnP control point that opens the URL in a browser gets the certificate question either
-// way. A port in the address is dropped: it belongs to the description's own URL, not to the UI's.
+// PresentationURL is the page a scanner opens on a double click when the device has no
+// Presentation of its own: the web UI at the host the description was read over, plain http://
+// (see PresentationFor; lighttpd redirects on). A port in the address is dropped: it belongs to
+// the description's own URL, not to the UI's.
 func PresentationURL(root string) string {
-	return "https://" + hostOf(root) + "/"
+	return "http://" + hostOf(root) + "/"
 }
 
 // escapeXML escapes a text node. The serial and the hostname come off the system and are not
@@ -402,6 +415,18 @@ type Identity struct {
 
 	mu    sync.Mutex
 	found string
+}
+
+// Settled says whether the serial has been read from a file: the identity does not change again
+// once it has. Before, Serial answers the hostname.
+func (i *Identity) Settled() bool {
+	return i.Serial() != i.Hostname || i.hasFile()
+}
+
+func (i *Identity) hasFile() bool {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.found != ""
 }
 
 // Serial is the system's serial now: the files' value once there is one, the hostname before.

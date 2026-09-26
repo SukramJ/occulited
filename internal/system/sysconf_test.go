@@ -2,6 +2,7 @@ package system
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,12 +18,21 @@ import (
 type recorder struct {
 	mu    sync.Mutex
 	calls []string
+	// answers by program name, and the programs that fail (task 62's tests)
+	answers map[string]string
+	fails   map[string]bool
 }
 
 func (r *recorder) run(_ context.Context, name string, args ...string) ([]byte, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.calls = append(r.calls, strings.TrimSpace(name+" "+strings.Join(args, " ")))
+	if r.fails[name] {
+		return []byte("failed"), errors.New(name + ": exit 1")
+	}
+	if a, ok := r.answers[name]; ok {
+		return []byte(a), nil
+	}
 	return nil, nil
 }
 
@@ -122,7 +132,7 @@ func TestNetTxConfirmAndRevert(t *testing.T) {
 	rec := &recorder{}
 	tx := &NetTx{Root: r, Applier: NetApplier{Root: r, Iface: "eth0", Run: rec.run}, Window: 50 * time.Millisecond}
 	static := NetworkSettings{Hostname: "openccu", Mode: "static", Address: "192.0.2.200", Netmask: "255.255.255.0", Gateway: "192.0.2.1", DNS: []string{"192.0.2.1"}}
-	p, err := tx.Begin(context.Background(), static)
+	p, _, err := tx.Begin(context.Background(), static)
 	if err != nil || p == nil {
 		t.Fatalf("begin: %v %v", err, p)
 	}
@@ -135,7 +145,7 @@ func TestNetTxConfirmAndRevert(t *testing.T) {
 			t.Errorf("missing %q in\n%s", want, joined)
 		}
 	}
-	if _, err := tx.Begin(context.Background(), static); err != ErrTxPending {
+	if _, _, err := tx.Begin(context.Background(), static); err != ErrTxPending {
 		t.Errorf("second begin: %v", err)
 	}
 	if err := tx.Confirm(context.Background(), "wrong"); err != ErrNoTx {
@@ -153,7 +163,7 @@ func TestNetTxConfirmAndRevert(t *testing.T) {
 
 	// back to DHCP, then let the window expire: the static setup must be re-applied
 	rec.reset()
-	p, err = tx.Begin(context.Background(), NetworkSettings{Hostname: "openccu", Mode: "dhcp"})
+	p, _, err = tx.Begin(context.Background(), NetworkSettings{Hostname: "openccu", Mode: "dhcp"})
 	if err != nil || p == nil {
 		t.Fatalf("begin dhcp: %v", err)
 	}
@@ -171,14 +181,73 @@ func TestNetTxConfirmAndRevert(t *testing.T) {
 		t.Errorf("expiry must not persist anything:\n%s", got)
 	}
 
-	// hostname only: immediate, no window
+	// hostname only: immediate, no window; a static setup has no DHCP server to tell (task 62)
 	rec.reset()
-	p, err = tx.Begin(context.Background(), NetworkSettings{Hostname: "cupboard", Mode: "static", Address: "192.0.2.200", Netmask: "255.255.255.0", Gateway: "192.0.2.1", DNS: []string{"192.0.2.1"}})
-	if err != nil || p != nil {
-		t.Fatalf("hostname only: %v %v", err, p)
+	p, ren, err := tx.Begin(context.Background(), NetworkSettings{Hostname: "cupboard", Mode: "static", Address: "192.0.2.200", Netmask: "255.255.255.0", Gateway: "192.0.2.1", DNS: []string{"192.0.2.1"}})
+	if err != nil || p != nil || ren == nil || ren.Hostname != "cupboard" || ren.Previous != "openccu" || !ren.Lease.Static || ren.Lease.Renewed {
+		t.Fatalf("hostname only: %v %v %+v", err, p, ren)
 	}
-	if !strings.Contains(strings.Join(rec.Calls(), "\n"), "hostname cupboard") || readFile(r.join("/etc/hostname")) != "cupboard\n" {
-		t.Errorf("hostname not applied: %v", rec.Calls())
+	calls := strings.Join(rec.Calls(), "\n")
+	if !strings.Contains(calls, "hostname cupboard") || readFile(r.join("/etc/hostname")) != "cupboard\n" || strings.Contains(calls, "udhcpc") || strings.Contains(calls, "reload") {
+		t.Errorf("hostname not applied, or the lease touched on a static setup: %v", rec.Calls())
+	}
+	// the same name again: nothing to do
+	if p, ren, err := tx.Begin(context.Background(), NetworkSettings{Hostname: "cupboard", Mode: "static", Address: "192.0.2.200", Netmask: "255.255.255.0", Gateway: "192.0.2.1", DNS: []string{"192.0.2.1"}}); err != nil || p != nil || ren != nil {
+		t.Errorf("unchanged: %v %v %v", err, p, ren)
+	}
+}
+
+// TestRenameDHCP (openccu-lite task 62): a hostname-only change on a DHCP setup asks the server
+// for a lease under the new name - through the unit's reload with systemd, by restarting udhcpc
+// without - and /etc/hosts keeps the lines that are not the host's own.
+func TestRenameDHCP(t *testing.T) {
+	hosts := "127.0.0.1 localhost\n127.0.1.1 openccu\n# an addon's entry\n192.0.2.9 nas nas.home.arpa\n::1 ip6-localhost ip6-loopback\n"
+	for _, systemd := range []bool{true, false} {
+		r := rootWith(t, map[string]string{"etc/config/netconfig": netconfigDHCP, "var/run/udhcpc_eth0.pid": "1233\n", "etc/hosts": hosts})
+		rec := &recorder{answers: map[string]string{"/sbin/ip": "2: eth0    inet 192.0.2.119/24 brd 192.0.2.255 scope global dynamic eth0\n"}}
+		tx := &NetTx{Root: r, Applier: NetApplier{Root: r, Iface: "eth0", Run: rec.run, Systemd: systemd}, Window: 50 * time.Millisecond}
+		p, ren, err := tx.Begin(context.Background(), NetworkSettings{Hostname: "attic", Mode: "dhcp", DNS: []string{}})
+		if err != nil || p != nil || ren == nil || !ren.Lease.Renewed || ren.Lease.Static || ren.Lease.Address != "192.0.2.119" {
+			t.Fatalf("systemd=%v: %v %v %+v", systemd, err, p, ren)
+		}
+		calls := strings.Join(rec.Calls(), "\n")
+		if systemd {
+			if !strings.Contains(calls, "systemctl reload occu-network.service") || strings.Contains(calls, "udhcpc") {
+				t.Errorf("systemd: the unit's reload, not a client of our own:\n%s", calls)
+			}
+		} else if !strings.Contains(calls, "kill 1233") || !strings.Contains(calls, "/sbin/udhcpc -b -t 20 -T 3 -S -x hostname:attic -i eth0 -F attic") {
+			t.Errorf("busybox: kill and restart with the new name:\n%s", calls)
+		}
+		got := readFile(r.join("/etc/hosts"))
+		if got != "127.0.0.1 localhost\n127.0.1.1 attic\n# an addon's entry\n192.0.2.9 nas nas.home.arpa\n::1 ip6-localhost ip6-loopback\n" {
+			t.Errorf("hosts:\n%s", got)
+		}
+		if !strings.Contains(readFile(r.join("/etc/config/netconfig")), "HOSTNAME=attic\n") {
+			t.Error("netconfig not written")
+		}
+	}
+	// a reload that fails is reported, not fatal: the name is set, the lease stays the old one
+	r := rootWith(t, map[string]string{"etc/config/netconfig": netconfigDHCP, "var/run/udhcpc_eth0.pid": "1233\n"})
+	rec := &recorder{fails: map[string]bool{"systemctl": true}}
+	tx := &NetTx{Root: r, Applier: NetApplier{Root: r, Iface: "eth0", Run: rec.run, Systemd: true}, Window: 50 * time.Millisecond}
+	_, ren, err := tx.Begin(context.Background(), NetworkSettings{Hostname: "attic", Mode: "dhcp", DNS: []string{}})
+	if err != nil || ren == nil || ren.Lease.Renewed || ren.Lease.Error == "" {
+		t.Fatalf("failed reload: %v %+v", err, ren)
+	}
+}
+
+func TestHostsWithName(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"", "127.0.0.1 localhost\n127.0.1.1 x\n::1 ip6-localhost ip6-loopback\nff02::1 ip6-allnodes\nff02::2 ip6-allrouters\n"},
+		{"127.0.0.1 localhost\n127.0.1.1 old\n", "127.0.0.1 localhost\n127.0.1.1 x\n"},
+		{"127.0.0.1 localhost\n192.0.2.9 nas\n", "127.0.0.1 localhost\n127.0.1.1 x\n192.0.2.9 nas\n"},
+		{"192.0.2.9 nas\n", "127.0.1.1 x\n192.0.2.9 nas\n"},
+		{"127.0.1.1 a\n127.0.1.1 b\n10.0.0.1 c\n", "127.0.1.1 x\n10.0.0.1 c\n"},
+	}
+	for _, c := range cases {
+		if got := HostsWithName(c.in, "x"); got != c.want {
+			t.Errorf("%q: got %q want %q", c.in, got, c.want)
+		}
 	}
 }
 

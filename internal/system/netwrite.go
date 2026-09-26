@@ -190,6 +190,72 @@ type NetApplier struct {
 	Root  Root
 	Iface string // eth0 unless the box says otherwise
 	Run   Runner
+	// Systemd: the DHCP client runs inside occu-network.service, and a new lease with a new host
+	// name is asked for with the unit's reload (openccu-lite task 62), so the client stays in the
+	// unit's cgroup; without systemd the client is killed and started again here.
+	Systemd bool
+}
+
+// LeaseRenewal is what a rename did about the DHCP lease (task 62): the client restarted with
+// the new host name, so the DHCP server - and the router's DNS behind it - learn the new name.
+type LeaseRenewal struct {
+	// Renewed: the client was restarted with the new name; false with Error when that failed, and
+	// false without one on a static setup, where there is no server to tell
+	Renewed bool `json:"renewed"`
+	// Static: a static address, nothing to tell
+	Static bool   `json:"static,omitempty"`
+	Error  string `json:"error,omitempty"`
+	// Address is the interface's IPv4 address after the renewal, when it could be read
+	Address string    `json:"address,omitempty"`
+	At      time.Time `json:"at,omitzero"`
+}
+
+// Rename is a hostname-only change as Begin applied it: the names and the lease.
+type Rename struct {
+	Hostname string       `json:"hostname"`
+	Previous string       `json:"previous"`
+	Lease    LeaseRenewal `json:"lease"`
+}
+
+// RenewLease asks the DHCP server for a lease under the new host name. With systemd the unit's
+// reload does it (the fork's lite-network-reload: the running udhcpc is stopped without releasing
+// the lease and started again with -x hostname:<new> -F <new>, inside occu-network.service);
+// without, the client is restarted here as Apply does. The address is read back for the answer.
+func (a NetApplier) RenewLease(ctx context.Context, hostname string) LeaseRenewal {
+	run := a.run()
+	iface := a.iface()
+	res := LeaseRenewal{At: time.Now()}
+	var err error
+	if a.Systemd {
+		var out []byte
+		out, err = run(ctx, "systemctl", "reload", "occu-network.service")
+		if err != nil {
+			err = fmt.Errorf("systemctl reload occu-network: %w: %s", err, strings.TrimSpace(string(out)))
+		}
+	} else {
+		if pid := pidFromFile(a.Root.join("/var/run/udhcpc_" + iface + ".pid")); pid > 0 {
+			_, _ = run(ctx, "kill", strconv.Itoa(pid))
+		}
+		var out []byte
+		out, err = run(ctx, "/sbin/udhcpc", "-b", "-t", "20", "-T", "3", "-S", "-x", "hostname:"+hostname, "-i", iface, "-F", hostname, "-V", "eQ3-CCU3", "-s", "/bin/dhcp.script", "-p", "/var/run/udhcpc_"+iface+".pid")
+		if err != nil {
+			err = fmt.Errorf("udhcpc: %w: %s", err, strings.TrimSpace(string(out)))
+		}
+	}
+	if err != nil {
+		res.Error = err.Error()
+		return res
+	}
+	res.Renewed = true
+	if out, err := run(ctx, "/sbin/ip", "-4", "-o", "addr", "show", "dev", iface); err == nil {
+		for _, f := range strings.Fields(string(out)) {
+			if ip, _, ok := strings.Cut(f, "/"); ok && net.ParseIP(ip) != nil && strings.Count(f, ".") == 3 {
+				res.Address = ip
+				break
+			}
+		}
+	}
+	return res
 }
 
 // Apply brings the interface to s. It is not transactional; NetTx wraps it.
@@ -290,12 +356,47 @@ func (a NetApplier) ApplyHostname(ctx context.Context, name string) error {
 	if err := writeFileAtomic(a.Root.join("/etc/hostname"), []byte(name+"\n"), 0o644); err != nil {
 		return err
 	}
-	hosts := "127.0.0.1 localhost\n127.0.1.1 " + name + "\n::1 ip6-localhost ip6-loopback\nff02::1 ip6-allnodes\nff02::2 ip6-allrouters\n"
-	if err := writeFileAtomic(a.Root.join("/etc/hosts"), []byte(hosts), 0o644); err != nil {
+	if err := writeFileAtomic(a.Root.join("/etc/hosts"), []byte(HostsWithName(readFile(a.Root.join("/etc/hosts")), name)), 0o644); err != nil {
 		return err
 	}
 	_, err := run(ctx, "hostname", name)
 	return err
+}
+
+// HostsWithName is /etc/hosts with the system's own line naming name: the 127.0.1.1 line (the
+// one eQ3StartNetwork writes for the host) is replaced, every other line - an addon's or the
+// user's entries - stays (openccu-lite task 62; ApplyHostname replaced the whole file before).
+// A file without the line gets it after the localhost line; an empty or missing file becomes the
+// script's five lines.
+func HostsWithName(hosts, name string) string {
+	if strings.TrimSpace(hosts) == "" {
+		return "127.0.0.1 localhost\n127.0.1.1 " + name + "\n::1 ip6-localhost ip6-loopback\nff02::1 ip6-allnodes\nff02::2 ip6-allrouters\n"
+	}
+	lines := strings.Split(strings.TrimRight(hosts, "\n"), "\n")
+	done := false
+	out := make([]string, 0, len(lines)+1)
+	for _, l := range lines {
+		if f := strings.Fields(l); len(f) >= 1 && f[0] == "127.0.1.1" {
+			if done {
+				continue // a second line of the host's own: dropped
+			}
+			l = "127.0.1.1 " + name
+			done = true
+		}
+		out = append(out, l)
+	}
+	if !done {
+		// after the localhost line, else first
+		at := 0
+		for i, l := range out {
+			if f := strings.Fields(l); len(f) >= 1 && f[0] == "127.0.0.1" {
+				at = i + 1
+				break
+			}
+		}
+		out = append(out[:at], append([]string{"127.0.1.1 " + name}, out[at:]...)...)
+	}
+	return strings.Join(out, "\n") + "\n"
 }
 
 func pidFromFile(path string) int {
@@ -340,42 +441,59 @@ var ErrTxPending = errors.New("a network change is already waiting for confirmat
 // ErrNoTx is returned by Confirm/Revert with no or a wrong token.
 var ErrNoTx = errors.New("no such pending network change")
 
-// Begin validates, records the current state, applies s live and arms the revert timer.
-func (t *NetTx) Begin(ctx context.Context, s NetworkSettings) (*NetPending, error) {
+// Begin validates, records the current state, applies s live and arms the revert timer. A
+// hostname-only change is applied at once (no window: it cannot lock anyone out) and answered as
+// a Rename - the new name, and the DHCP lease asked for under it (task 62) - with no pending
+// transaction.
+func (t *NetTx) Begin(ctx context.Context, s NetworkSettings) (*NetPending, *Rename, error) {
 	if err := s.Validate(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.pending != nil {
-		return nil, ErrTxPending
+		return nil, nil, ErrTxPending
 	}
 	prev := t.current()
-	if prev.Mode == s.Mode && prev.Address == s.Address && prev.Netmask == s.Netmask && prev.Gateway == s.Gateway && strings.Join(prev.DNS, " ") == strings.Join(s.DNS, " ") {
+	// the same setup: on DHCP the address, mask and gateway are the lease's, not settings, so only
+	// the mode and the DNS override count there (a rename on a DHCP box opened a window before)
+	sameAddress := s.Mode == "dhcp" || (prev.Address == s.Address && prev.Netmask == s.Netmask && prev.Gateway == s.Gateway)
+	if prev.Mode == s.Mode && sameAddress && strings.Join(prev.DNS, " ") == strings.Join(s.DNS, " ") {
 		// only the hostname (or nothing) changes: no window needed, it cannot lock anyone out
 		if err := t.Root.WriteNetconfig(s); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if err := t.saveOverride(s); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		if s.Hostname != prev.Hostname {
-			if err := t.Applier.ApplyHostname(ctx, s.Hostname); err != nil {
-				return nil, err
+		if s.Hostname == prev.Hostname {
+			return nil, nil, nil
+		}
+		if err := t.Applier.ApplyHostname(ctx, s.Hostname); err != nil {
+			return nil, nil, err
+		}
+		ren := &Rename{Hostname: s.Hostname, Previous: prev.Hostname}
+		if s.Mode == "dhcp" {
+			ren.Lease = t.Applier.RenewLease(ctx, s.Hostname)
+			if ren.Lease.Error != "" {
+				slog.Warn("network: renamed, but the DHCP lease could not be renewed under the new name", "hostname", s.Hostname, "err", ren.Lease.Error)
 			}
+		} else {
+			ren.Lease = LeaseRenewal{Static: true}
 		}
-		return nil, nil
+		slog.Info("network: renamed", "hostname", s.Hostname, "previous", prev.Hostname, "lease_renewed", ren.Lease.Renewed)
+		return nil, ren, nil
 	}
 	dnsOnly := prev.Mode == "dhcp" && s.Mode == "dhcp" && prev.Hostname == s.Hostname
 	if dnsOnly {
 		if err := t.Applier.setDNSOverride(ctx, s.DNS); err != nil {
 			_ = t.Applier.setDNSOverride(context.Background(), prev.DNS)
-			return nil, err
+			return nil, nil, err
 		}
 	} else if err := t.Applier.Apply(ctx, s); err != nil {
 		// best effort back to where we were
 		_ = t.Applier.Apply(context.Background(), prev)
-		return nil, err
+		return nil, nil, err
 	}
 	window := t.Window
 	if window == 0 {
@@ -386,7 +504,7 @@ func (t *NetTx) Begin(ctx context.Context, s NetworkSettings) (*NetPending, erro
 	t.pending = p
 	t.timer = time.AfterFunc(window, func() { t.expire(p.Token) })
 	slog.Warn("network: applied, waiting for confirmation", "mode", s.Mode, "address", s.Address, "window", window)
-	return p, nil
+	return p, nil, nil
 }
 
 func (t *NetTx) expire(token string) {

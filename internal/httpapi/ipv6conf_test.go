@@ -55,6 +55,9 @@ func TestIPv6Routes(t *testing.T) {
 	}
 	// another change, reverted by the user
 	st, out, _ = do(t, srv, "POST", "/api/system/v1/network/ipv6", `{"interface":"eth0","mode":"off"}`, nil)
+	if st != 200 || out["changed"] != true || out["pending"] == nil {
+		t.Fatalf("begin the second change: %d %v", st, out)
+	}
 	token := out["pending"].(map[string]any)["token"].(string)
 	calls = nil
 	st, out, _ = do(t, srv, "POST", "/api/system/v1/network/ipv6/revert", `{"token":"`+token+`"}`, nil)

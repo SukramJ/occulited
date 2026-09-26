@@ -214,3 +214,112 @@ func TestLocalAddressesLeavesOutTheLoopback(t *testing.T) {
 		}
 	}
 }
+
+// B-245: the identity a system announces at boot may be the host name (B-199: the radio detection
+// writes the serial seconds after occulited starts), and a listener that keeps devices by USN -
+// Windows' network view - never showed the system whose description then said another UDN. The
+// first alive waits for the identity to settle, up to Hold; an identity that changes afterwards
+// is taken back with a byebye for the old UDN and announced again with the new.
+func TestResponderFollowsTheIdentity(t *testing.T) {
+	server, client := pair(t)
+	var mu sync.Mutex
+	serial, settled := "ccu-vm-1", false
+	d := Device{
+		SerialFunc: func() string { mu.Lock(); defer mu.Unlock(); return serial },
+		Settled:    func() bool { mu.Lock(); defer mu.Unlock(); return settled },
+		Hostname:   "ccu-vm-1",
+	}
+	r := &Responder{
+		Device:          d,
+		Interfaces:      func() []netip.Addr { return []netip.Addr{netip.MustParseAddr("192.168.1.5")} },
+		Listen:          func() (net.PacketConn, error) { return server, nil },
+		Delay:           func(int) time.Duration { return 0 },
+		Every:           time.Hour,
+		Hold:            400 * time.Millisecond,
+		IdentityRecheck: 20 * time.Millisecond,
+		Repeat:          100 * time.Millisecond,
+		group:           client.LocalAddr(),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	start := time.Now()
+	go func() { _ = r.Run(ctx) }()
+
+	// the detection writes the serial inside the hold: the first alive already carries it
+	time.Sleep(100 * time.Millisecond)
+	mu.Lock()
+	serial, settled = "3014F711A000041709ADFA5E", true
+	mu.Unlock()
+	first := read(t, client)
+	if !strings.Contains(first, "NTS: ssdp:alive") || !strings.Contains(first, "USN: uuid:upnp-BasicDevice-1_0-3014F711A000041709ADFA5E::upnp:rootdevice") {
+		t.Fatalf("the first alive must carry the settled identity:\n%s", first)
+	}
+	if time.Since(start) > 350*time.Millisecond {
+		t.Errorf("the alive waited for the hold to run out (%v) instead of following the identity", time.Since(start))
+	}
+	// the announcement is repeated once, Repeat later, the same way (a first one lost on a port
+	// that is not forwarding yet)
+	second := read(t, client)
+	if second != first {
+		t.Fatalf("the repeated alive must equal the first:\n%s\n---\n%s", second, first)
+	}
+
+	// the identity changes later (a serial that appears after the hold): byebye for the old, alive for the new
+	mu.Lock()
+	serial = "JEQ0534849"
+	mu.Unlock()
+	bye := read(t, client)
+	if !strings.Contains(bye, "NTS: ssdp:byebye") || !strings.Contains(bye, "USN: uuid:upnp-BasicDevice-1_0-3014F711A000041709ADFA5E::upnp:rootdevice") {
+		t.Fatalf("the old identity must be taken back:\n%s", bye)
+	}
+	alive := read(t, client)
+	if !strings.Contains(alive, "NTS: ssdp:alive") || !strings.Contains(alive, "USN: uuid:upnp-BasicDevice-1_0-JEQ0534849::upnp:rootdevice") || !strings.Contains(alive, "LOCATION: http://192.168.1.5"+DescriptionPath) {
+		t.Fatalf("the new identity must be announced:\n%s", alive)
+	}
+	// and nothing more while it stays
+	_ = client.SetReadDeadline(time.Now().Add(150 * time.Millisecond))
+	if n, _, err := client.ReadFrom(make([]byte, 2048)); err == nil {
+		t.Errorf("an unchanged identity is not announced again: %d bytes", n)
+	}
+}
+
+// The hold runs out: a system whose identity never settles (a container without the files)
+// announces after Hold with what it has, and a device without Settled announces at once.
+func TestResponderHoldRunsOut(t *testing.T) {
+	server, client := pair(t)
+	d := dev
+	d.Settled = func() bool { return false }
+	r := &Responder{
+		Device:     d,
+		Interfaces: func() []netip.Addr { return []netip.Addr{netip.MustParseAddr("192.168.1.5")} },
+		Listen:     func() (net.PacketConn, error) { return server, nil },
+		Delay:      func(int) time.Duration { return 0 },
+		Every:      time.Hour,
+		Hold:       150 * time.Millisecond,
+		group:      client.LocalAddr(),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	start := time.Now()
+	go func() { _ = r.Run(ctx) }()
+	alive := read(t, client)
+	if !strings.Contains(alive, "USN: "+dev.UDN()+"::upnp:rootdevice") {
+		t.Fatalf("the alive after the hold:\n%s", alive)
+	}
+	if d := time.Since(start); d < 150*time.Millisecond {
+		t.Errorf("the alive went out after %v, before the hold ran out", d)
+	}
+}
+
+// Identity.Settled: false while no file has a value, true from the first value on.
+func TestIdentitySettled(t *testing.T) {
+	root := t.TempDir()
+	id := &Identity{Root: root, Hostname: "ccu-vm-1"}
+	if id.Settled() {
+		t.Fatal("settled without a file")
+	}
+	writeVar(t, root, "var/board_serial", "JEQ0534849\n")
+	if !id.Settled() || id.Serial() != "JEQ0534849" {
+		t.Fatalf("settled=%v serial=%q", id.Settled(), id.Serial())
+	}
+}

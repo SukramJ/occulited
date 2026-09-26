@@ -79,7 +79,7 @@ func TestDNSOverrideUnderDHCP(t *testing.T) {
 	}
 
 	// set: the record only - no DHCP restart, which would flush the address
-	p, err := tx.Begin(context.Background(), NetworkSettings{Hostname: "openccu", Mode: "dhcp", DNS: []string{"192.0.2.53"}})
+	p, _, err := tx.Begin(context.Background(), NetworkSettings{Hostname: "openccu", Mode: "dhcp", DNS: []string{"192.0.2.53"}})
 	if err != nil || p == nil {
 		t.Fatalf("begin: %v %v", err, p)
 	}
@@ -104,7 +104,7 @@ func TestDNSOverrideUnderDHCP(t *testing.T) {
 	}
 
 	// a change that is not confirmed goes back to the stored override
-	p, err = tx.Begin(context.Background(), NetworkSettings{Hostname: "openccu", Mode: "dhcp", DNS: []string{"192.0.2.54", "192.0.2.55"}})
+	p, _, err = tx.Begin(context.Background(), NetworkSettings{Hostname: "openccu", Mode: "dhcp", DNS: []string{"192.0.2.54", "192.0.2.55"}})
 	if err != nil || p == nil {
 		t.Fatalf("begin: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestDNSOverrideUnderDHCP(t *testing.T) {
 	}
 
 	// emptied: the record goes, the lease's servers are used again
-	p, err = tx.Begin(context.Background(), NetworkSettings{Hostname: "openccu", Mode: "dhcp", DNS: []string{}})
+	p, _, err = tx.Begin(context.Background(), NetworkSettings{Hostname: "openccu", Mode: "dhcp", DNS: []string{}})
 	if err != nil || p == nil {
 		t.Fatalf("begin: %v", err)
 	}

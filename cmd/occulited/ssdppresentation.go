@@ -11,8 +11,8 @@ import (
 
 // ssdpPresentation is the UPnP description's presentationURL (task 165): the system's name its
 // certificate covers - <host>.<domain>, then the host name - so that the double click in Windows'
-// network view opens the web UI without a certificate warning; plain http:// to the address
-// otherwise. certNames reads the live certificate's names; they are kept for a minute, as a
+// network view ends on the web UI without a certificate warning; the address otherwise. Always
+// http:// (B-245), the CCU's shape; lighttpd's redirect takes the browser to HTTPS. certNames reads the live certificate's names; they are kept for a minute, as a
 // scanner may fetch the description often and the certificate is read through the helper.
 func ssdpPresentation(root system.Root, certNames func() []string) func(string) string {
 	var (

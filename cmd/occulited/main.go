@@ -771,7 +771,7 @@ func run(opts daemonOptions) error {
 	// task 69: the storage health panel - SMART through the helper's one read, the kernel log from
 	// the journal, the daily write sample under <state>
 	storage := &system.Storage{Root: root, StateFile: filepath.Join(cfg.StateDir, "storage-writes.json"), Systemd: root.HasSystemd(), Log: log}
-	netTx := &system.NetTx{Root: root, Applier: system.NetApplier{Root: root, Iface: "eth0", Run: run}, Override: system.DNSOverride{Path: filepath.Join(cfg.StateDir, "dns-override")}}
+	netTx := &system.NetTx{Root: root, Applier: system.NetApplier{Root: root, Iface: "eth0", Run: run, Systemd: root.HasSystemd()}, Override: system.DNSOverride{Path: filepath.Join(cfg.StateDir, "dns-override")}}
 	// task 227: IPv6 per interface; a change still pending at the last stop is rolled back, then
 	// the confirmed configuration applied (in the background: a DHCPv6 client may take seconds)
 	ipv6Tx := &system.IPv6Tx{Applier: system.IPv6Applier{Root: root, Run: run, Systemd: root.HasSystemd()}, Store: system.IPv6Store{Path: filepath.Join(cfg.StateDir, "ipv6.json")}, PendingPath: filepath.Join(cfg.StateDir, "ipv6.pending.json"), Log: area("network")}
@@ -912,7 +912,9 @@ func run(opts daemonOptions) error {
 	// B-199: the serial is read again until the radio detection, which runs beside occulited at
 	// boot, has written /var/board_sgtin or /var/board_serial; one Identity for both responders
 	boardID := &ssdp.Identity{Root: *rootDir, Hostname: root.Hostname()}
-	ssdpDev := ssdp.Device{SerialFunc: boardID.Serial, Hostname: root.Hostname(),
+	// B-245: the first announcement waits for the detection's files (up to 15 s), and an identity
+	// that settles later is announced again with a byebye for the host-name one
+	ssdpDev := ssdp.Device{SerialFunc: boardID.Serial, Settled: boardID.Settled, Hostname: root.Hostname(),
 		Server: "Linux UPnP/1.0 openccu-lite/" + root.ReadVersion().Version,
 		Presentation: ssdpPresentation(root, func() []string {
 			if st := certSvc.Status(); st.Current != nil {

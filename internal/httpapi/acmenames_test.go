@@ -93,10 +93,23 @@ func TestRenameAnswersTheACMENames(t *testing.T) {
 			if r.Hostname() != "lite" {
 				t.Fatalf("not renamed: %q", r.Hostname())
 			}
+			// openccu-lite task 62: the rename says what became of the lease (a static rig: nothing
+			// to tell) and whether the live certificate names the new host (no certificate here)
+			ren, ok := out["rename"].(map[string]any)
+			if !ok || ren["hostname"] != "lite" || ren["previous"] != "ccu" || ren["lease"].(map[string]any)["static"] != true || ren["lease"].(map[string]any)["renewed"] != false {
+				t.Fatalf("rename: %v", out["rename"])
+			}
+			cert, ok := out["certificate"].(map[string]any)
+			if !ok || cert["fits"] != false || cert["known"] != false {
+				t.Fatalf("certificate: %v", out["certificate"])
+			}
 			// the same name again: nothing renamed, nothing to say
 			_, out, _ = do(t, srv, "POST", "/api/system/v1/network", renameBody, nil)
 			if _, has := out["acme_names"]; has {
 				t.Fatalf("no rename, yet acme_names: %v", out)
+			}
+			if _, has := out["rename"]; has {
+				t.Fatalf("no rename, yet rename: %v", out)
 			}
 		})
 	}
@@ -183,4 +196,24 @@ func toStrings(v any) []string {
 		out = append(out, s)
 	}
 	return out
+}
+
+// TestNamesFit (openccu-lite task 62): a certificate names the host bare, in a domain, or not.
+func TestNamesFit(t *testing.T) {
+	for _, c := range []struct {
+		names []string
+		host  string
+		want  bool
+	}{
+		{[]string{"lite.home.arpa", "lite"}, "lite", true},
+		{[]string{"ccu.home.arpa", "ccu", "192.0.2.119"}, "lite", false},
+		{[]string{"lite.home.arpa"}, "LITE", true},
+		{[]string{"*.home.arpa"}, "lite", false},
+		{[]string{"literal.home.arpa"}, "lite", false},
+		{nil, "lite", false},
+	} {
+		if got := NamesFit(c.names, c.host); got != c.want {
+			t.Errorf("%v %q: %v", c.names, c.host, got)
+		}
+	}
 }

@@ -118,7 +118,7 @@ func TestDescriptionXML(t *testing.T) {
 		`<root xmlns="urn:schemas-upnp-org:device-1-0">`,
 		"<URLBase>https://ccu.example</URLBase>",
 		"<deviceType>urn:schemas-upnp-org:device:Basic:1</deviceType>",
-		"<presentationURL>https://ccu.example/</presentationURL>",
+		"<presentationURL>http://ccu.example/</presentationURL>",
 		"<friendlyName>openccu-lite - ccu-pi3-1</friendlyName>",
 		"<manufacturer>openccu-lite</manufacturer>",
 		"<modelName>openccu-lite</modelName>",
@@ -176,7 +176,7 @@ func TestDescribe(t *testing.T) {
 		t.Errorf("plain HTTP:\n%s", body)
 	}
 	// the page a double click opens is the web UI over HTTPS, whatever this was fetched over
-	if !strings.Contains(body, "<presentationURL>https://192.168.1.5/</presentationURL>") {
+	if !strings.Contains(body, "<presentationURL>http://192.168.1.5/</presentationURL>") {
 		t.Errorf("the presentation URL is the HTTPS one:\n%s", body)
 	}
 
@@ -205,11 +205,11 @@ func TestLocation(t *testing.T) {
 
 func TestPresentationURL(t *testing.T) {
 	for in, want := range map[string]string{
-		"https://ccu.example":     "https://ccu.example/",
-		"http://192.168.1.5":      "https://192.168.1.5/",
-		"http://192.168.1.5:8080": "https://192.168.1.5/",
-		"http://[fd00::1]":        "https://[fd00::1]/",
-		"http://[fd00::1]:8080":   "https://[fd00::1]/",
+		"https://ccu.example":     "http://ccu.example/",
+		"http://192.168.1.5":      "http://192.168.1.5/",
+		"http://192.168.1.5:8080": "http://192.168.1.5/",
+		"http://[fd00::1]":        "http://[fd00::1]/",
+		"http://[fd00::1]:8080":   "http://[fd00::1]/",
 	} {
 		if got := PresentationURL(in); got != want {
 			t.Errorf("PresentationURL(%q) = %q, want %q", in, got, want)
@@ -218,7 +218,9 @@ func TestPresentationURL(t *testing.T) {
 }
 
 // Task 165, found 2026-09-23: Windows' network view opened https://<IP>/, which the certificate
-// does not name. The presentationURL is the first name the certificate covers, else plain http://
+// does not name. The presentationURL is the first name the certificate covers, else the address.
+// B-245: always http:// - the CCU's shape, which Windows opens in a browser; with https:// it
+// downloaded the page into its IE cache - and lighttpd's redirect takes the browser to HTTPS
 // to the address.
 func TestPresentationFor(t *testing.T) {
 	cert := map[string]bool{"ccu-vm-1": true, "ccu-vm-1.lan.example": true}
@@ -230,11 +232,11 @@ func TestPresentationFor(t *testing.T) {
 		covered    func(string) bool
 		want       string
 	}{
-		{"the FQDN the certificate covers", "http://192.0.2.119", names, covered, "https://ccu-vm-1.lan.example/"},
-		{"the port dropped", "http://192.0.2.119:8080", names, covered, "https://ccu-vm-1.lan.example/"},
-		{"the host name when the FQDN is not covered", "http://192.0.2.119", []string{"ccu-vm-1.other.example", "ccu-vm-1"}, covered, "https://ccu-vm-1/"},
-		{"no domain known", "http://192.0.2.119", []string{"", "ccu-vm-1"}, covered, "https://ccu-vm-1/"},
-		{"read over a covered name: that name", "https://CCU-VM-1", names, covered, "https://ccu-vm-1/"},
+		{"the FQDN the certificate covers", "http://192.0.2.119", names, covered, "http://ccu-vm-1.lan.example/"},
+		{"the port dropped", "http://192.0.2.119:8080", names, covered, "http://ccu-vm-1.lan.example/"},
+		{"the host name when the FQDN is not covered", "http://192.0.2.119", []string{"ccu-vm-1.other.example", "ccu-vm-1"}, covered, "http://ccu-vm-1/"},
+		{"no domain known", "http://192.0.2.119", []string{"", "ccu-vm-1"}, covered, "http://ccu-vm-1/"},
+		{"read over a covered name: that name", "https://CCU-VM-1", names, covered, "http://ccu-vm-1/"},
 		{"nothing covered: plain http to the address", "http://192.0.2.119", []string{"x.example", "x"}, covered, "http://192.0.2.119/"},
 		{"no certificate", "http://192.0.2.119", names, nil, "http://192.0.2.119/"},
 		{"IPv6", "http://[fd00::1]:80", nil, covered, "http://[fd00::1]/"},

@@ -30,15 +30,27 @@ type Responder struct {
 	Every time.Duration
 	// Recheck is how often the addresses are looked at again; 0 = 30 s.
 	Recheck time.Duration
-	Log     *slog.Logger
+	// Hold is how long the first announcement waits for the identity to settle (Device.Settled)
+	// before it goes out with whatever the device answers then; 0 = 15 s. IdentityRecheck is how
+	// often the identity is compared with the one announced afterwards; 0 = 2 s (B-245).
+	Hold            time.Duration
+	IdentityRecheck time.Duration
+	// Repeat is how long after the first alive it is sent once more; 0 = 60 s. The spec says an
+	// announcement should go out more than once, and on a LAN whose switch port passes nothing for
+	// its first half minute after link-up (a spanning-tree delay, seen on a lab system: the first
+	// alive was lost on four boots, ssh answered from the same moment on) the repeat is the
+	// announcement that arrives (B-245).
+	Repeat time.Duration
+	Log    *slog.Logger
 	// Listen and Delay are test seams: the socket, and the random wait before an answer.
 	Listen func() (net.PacketConn, error)
 	Delay  func(mx int) time.Duration
 	// group is where the announcements go; nil = Addr. A test points it at a socket it can read.
 	group net.Addr
 
-	mu      sync.Mutex
-	current []netip.Addr
+	mu        sync.Mutex
+	current   []netip.Addr
+	announced string // the UDN the last alive carried
 }
 
 func (s *Responder) log() *slog.Logger {
@@ -60,6 +72,27 @@ func (s *Responder) recheck() time.Duration {
 		return s.Recheck
 	}
 	return 30 * time.Second
+}
+
+func (s *Responder) hold() time.Duration {
+	if s.Hold > 0 {
+		return s.Hold
+	}
+	return 15 * time.Second
+}
+
+func (s *Responder) identityRecheck() time.Duration {
+	if s.IdentityRecheck > 0 {
+		return s.IdentityRecheck
+	}
+	return 2 * time.Second
+}
+
+func (s *Responder) repeat() time.Duration {
+	if s.Repeat > 0 {
+		return s.Repeat
+	}
+	return time.Minute
 }
 
 // delay is the wait before an answer: a random moment inside the MX the searcher named, so that a
@@ -159,13 +192,32 @@ func (s *Responder) Run(ctx context.Context) error {
 // announce sends ssdp:alive at the start and every interval, re-joins the group when the
 // addresses change, and sends ssdp:byebye when the context ends. ssdpd never said goodbye and
 // never noticed an address change; both are the point of doing this here.
+//
+// B-245: occulited starts beside the radio detection, whose files give the system its serial a
+// few seconds later (B-199); an alive sent before that carries a USN built from the host name,
+// which the description contradicts once the serial is there, and a listener that keeps devices
+// by USN - Windows' network view - never shows the system. So the first alive waits for the
+// identity to settle, up to Hold, and whenever the announced UDN turns out to differ from the
+// device's, a byebye for the old one and an alive for the new go out.
 func (s *Responder) announce(ctx context.Context, conn net.PacketConn) {
+	if !s.waitSettled(ctx) {
+		return
+	}
 	s.setAddresses(s.addresses())
+	if known := s.known(); len(known) == 0 {
+		s.log().Info("ssdp: no address to announce from yet; the next look at the addresses announces", "udn", s.Device.UDN())
+	} else {
+		s.log().Info("ssdp: announcing", "udn", s.Device.UDN(), "addresses", addrList(known))
+	}
 	s.send(conn, Alive)
+	again := time.NewTimer(s.repeat())
+	defer again.Stop()
 	alive := time.NewTicker(s.every())
 	defer alive.Stop()
 	look := time.NewTicker(s.recheck())
 	defer look.Stop()
+	ident := time.NewTicker(s.identityRecheck())
+	defer ident.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -173,8 +225,17 @@ func (s *Responder) announce(ctx context.Context, conn net.PacketConn) {
 			// instead of waiting out max-age
 			s.send(conn, Byebye)
 			return
+		case <-again.C:
+			s.log().Info("ssdp: announcing again", "udn", s.Device.UDN(), "addresses", addrList(s.known()))
+			s.send(conn, Alive)
 		case <-alive.C:
 			s.send(conn, Alive)
+		case <-ident.C:
+			if old, now := s.announcedUDN(), s.Device.UDN(); old != "" && now != old {
+				s.log().Info("ssdp: the identity changed, announcing again", "was", old, "now", now)
+				s.sendAs(conn, old, Byebye)
+				s.send(conn, Alive)
+			}
 		case <-look.C:
 			now := s.addresses()
 			if s.setAddresses(now) {
@@ -211,9 +272,51 @@ func (s *Responder) known() []netip.Addr {
 	return append([]netip.Addr(nil), s.current...)
 }
 
+// waitSettled holds the first announcement while the device's identity is not final, up to Hold;
+// false when the context ended meanwhile. A device without Settled is final at once.
+func (s *Responder) waitSettled(ctx context.Context) bool {
+	if s.Device.Settled == nil || s.Device.Settled() {
+		return true
+	}
+	deadline := time.NewTimer(s.hold())
+	defer deadline.Stop()
+	poll := time.NewTicker(min(200*time.Millisecond, s.hold()))
+	defer poll.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-deadline.C:
+			s.log().Info("ssdp: the identity has not settled yet, announcing as it is", "udn", s.Device.UDN())
+			return true
+		case <-poll.C:
+			if s.Device.Settled() {
+				return true
+			}
+		}
+	}
+}
+
 // send writes one NOTIFY per address to the group, so that a system on two networks is found on
-// both with the LOCATION of the one it was heard on.
+// both with the LOCATION of the one it was heard on. An alive remembers the UDN it carried.
 func (s *Responder) send(conn net.PacketConn, nts string) {
+	udn := s.Device.UDN()
+	s.sendAs(conn, udn, nts)
+	if nts == Alive {
+		s.mu.Lock()
+		s.announced = udn
+		s.mu.Unlock()
+	}
+}
+
+func (s *Responder) announcedUDN() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.announced
+}
+
+// sendAs is send under a given UDN.
+func (s *Responder) sendAs(conn net.PacketConn, udn, nts string) {
 	group := s.group
 	if group == nil {
 		g, err := net.ResolveUDPAddr("udp4", Addr)
@@ -223,8 +326,8 @@ func (s *Responder) send(conn net.PacketConn, nts string) {
 		group = g
 	}
 	for _, ip := range s.known() {
-		if _, err := conn.WriteTo(s.Device.Notify(Location(ip.String()), nts), group); err != nil {
-			s.log().Debug("ssdp: the announcement could not be sent", "nts", nts, "address", ip.String(), "error", err)
+		if _, err := conn.WriteTo(s.Device.NotifyAs(udn, Location(ip.String()), nts), group); err != nil {
+			s.log().Warn("ssdp: the announcement could not be sent", "nts", nts, "address", ip.String(), "error", err)
 		}
 	}
 }
