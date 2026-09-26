@@ -536,12 +536,21 @@ func (a *SystemdAddons) Uninstall(ctx context.Context, id string) (string, error
 	if strings.ContainsAny(id, "/\\ ") || id == "" {
 		return "", fmt.Errorf("invalid addon id")
 	}
-	_, _ = a.Systemd.run(ctx, "stop", "--no-pager", "--", "addon-"+id+".service")
+	unit := "addon-" + id + ".service"
+	if sout, serr := a.Systemd.run(ctx, "stop", "--no-pager", "--", unit); serr != nil {
+		// not fatal: the addon goes anyway (a stop script that finds its daemon gone and exits 1,
+		// RedMatic's, leaves the unit failed - the reset below clears that)
+		slog.Warn("addons: the unit's stop failed before the uninstall; the uninstall goes on", "id", id, "err", serr, "output", strings.TrimSpace(string(sout)))
+	}
 	scope := a.scopeName()
 	out, err := a.Scripts.Uninstall(context.WithValue(ctx, scopeKey{}, scope), id)
 	a.journalUninstall(id, out, err)
 	// the scope is not stopped (B-3, see Install)
 	_, _ = a.Systemd.run(ctx, "daemon-reload")
+	// B-236: a unit that ended failed (its stop exited non-zero) stays listed after its file is
+	// gone - "not-found", "failed" on the Services page and in systemctl --failed - until systemd
+	// is told to forget the failure. Harmless when the unit is not failed or already gone.
+	_, _ = a.Systemd.run(ctx, "reset-failed", "--no-pager", "--", unit)
 	// D-47: the policy file outlives the addon (it reserves the uid), its opened ports do not -
 	// the firewall closes them now, and a later reinstall starts with every port closed (D-29);
 	// nor does its manifest: a package installed later brings its own or none (D-119)

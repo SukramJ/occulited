@@ -484,9 +484,11 @@ func (c Client) OwnTree(id string, dirs []string, uid int, opt OwnTreeOptions) (
 // box, a fake tree in development), so the allowlists are relative to it.
 type Policy struct {
 	Root string
-	// Programs are the absolute programs, or bare names looked up in PATH, that may run.
+	// Programs are the absolute programs, or bare names looked up in PATH, that may run - each
+	// with the argument shapes of programShapes (shapes.go), never with free arguments.
 	Programs []string
-	// ProgramDirs are directories whose executables may run (init scripts, rc.d scripts, /bin).
+	// ProgramDirs are directories whose executables may run (init scripts, rc.d scripts), with
+	// one action word (dirScriptShape).
 	ProgramDirs []string
 	// RunUnitDir is systemd's runtime unit directory, /run/systemd/system/ (task 27.4, task 50).
 	// It is not a prefix grant: under it write and remove admit only <unit>.d/50-occulite.conf
@@ -563,31 +565,44 @@ type Policy struct {
 func DefaultPolicy(root, stateDir string) Policy {
 	return Policy{
 		Root: root,
-		// no chown (task 107): the list checks the program, not its arguments, so it let the daemon
-		// run `chown -R` on anything as root; an addon's files go through owntree now, which walks
-		// without following a link and admits one addon's directories and uid
+		// every name here has an argument shape in programShapes (shapes.go, openccu-lite B-234):
+		// the list used to check the program and pass its arguments through, which let the daemon
+		// run `chown -R` on anything as root (task 107 took chown off for that) and, until B-234,
+		// `systemd-run /bin/sh -c …`; an addon's files go through owntree, which walks without
+		// following a link and admits one addon's directories and uid
 		Programs: []string{"systemctl", "systemd-run", "kill", "hostname", "date", "sh",
 			"/sbin/ip", "/sbin/udhcpc", "/sbin/udhcpc6", "/sbin/ifconfig", "/sbin/resolvconf", "/sbin/hwclock", "/sbin/reboot", "/bin/reboot",
 			// the power menu's halt on a busybox box, where the two paths are busybox's applet (a
 			// systemd box halts through systemctl, which is on the list already)
 			"/sbin/poweroff", "/bin/poweroff",
 			"/bin/crypttool", "/bin/install_addon", "/bin/restoreBackup.sh", "/bin/createBackup.sh", "/bin/cronBackup.sh",
-			"/bin/SetInterfaceClock", "/bin/updateTZ.sh", "/bin/eq3configcmd", "/bin/checkFirmwareUpdate.sh", "/usr/bin/systemctl",
+			"/bin/SetInterfaceClock", "/bin/updateTZ.sh", "/bin/eq3configcmd", "/usr/bin/systemctl",
 			"/usr/libexec/occu/lite-addon-rc", // 28.8: the addon-rc wrapper adopter
 			// D-66: the writable extension directories' reset (the image's device descriptions
 			// win again); the daemon reads their status itself
 			"/usr/libexec/occu/lite-extension-dirs",
+			// openccu-lite task 231: the CA bundle rebuilt after the Trust stores page changed the
+			// userfs additions or the distrust file (the same script the boot runs)
+			"/usr/libexec/occu/lite-ca-certificates",
 			"/bin/detect_radio_module"}, // task 41: the coprocessor's running version, read off the raw-uart
 		ProgramDirs: []string{"/etc/init.d", "/usr/local/etc/config/rc.d"},
 		Paths: []string{"/etc/config/", "/usr/local/etc/config/", "/usr/local/tmp/", "/usr/local/.firmwareUpdate", "/usr/local/.recoveryMode", "/usr/local/.doFactoryReset",
-			"/usr/local/etc/monit-", "/etc/hostname", "/etc/hosts", "/var/run/", "/run/occulite/", "/sys/class/leds/", "/usr/local/addons/",
+			"/usr/local/etc/monit-", "/etc/hostname", "/etc/hosts",
+			// B-53: on the image the two are links into /var/etc; a write resolves through them
+			// (B-235) and the target has to be on the list as well
+			"/var/etc/hostname", "/var/etc/hosts",
+			"/var/run/", "/run/occulite/", "/sys/class/leds/", "/usr/local/addons/",
 			"/usr/local/backup/", "/media/",
 			// openccu-lite task 145: the recovery system's install logs, written as root and
 			// removed by the daemon once they are in the journal (system.RecoveryLogDir)
 			"/usr/local/var/recovery/",
 			// root's crontab, exact: the NEO Server leftover's watchdog line is removed from it
 			// (task 37); nothing else in /usr/local/crontabs/ is the daemon's
-			"/usr/local/crontabs/root"},
+			"/usr/local/crontabs/root",
+			// openccu-lite task 231: the system trust store's userfs half - the administrator's CA
+			// files update-ca-certificates adds, and the file whose "!<name>" lines deselect image
+			// certificates; both exact to their purpose, nothing else lives there
+			"/usr/local/share/ca-certificates/", "/usr/local/etc/ca-certificates.conf"},
 		// task 27.4 and task 50: /run/systemd/system is not on Paths - a prefix there let the
 		// daemon write any runtime unit, masks and wants links included. Exactly two shapes are
 		// admitted under it (runUnitFileAllowed): <unit>.d/50-occulite.conf, and an own timer's
@@ -1046,46 +1061,6 @@ var ipv6ConfRe = regexp.MustCompile(`^echo '[012]' > '/proc/sys/net/ipv6/conf/([
 // would let anything after the prefix run as root, which is the whole boundary (task 17).
 var backupListRe = regexp.MustCompile(`^tar -xOf '((?:[^']|'\\'')*)' usr_local\.tar\.gz 2>/dev/null \| tar -tzf - 2>/dev/null \| grep -c 'etc/config/homematic\.regadom\$'$`)
 
-func (p Policy) programAllowed(name string, args []string) bool {
-	if name == "sh" {
-		// the shell uses, each a fixed shape
-		if len(args) != 2 || args[0] != "-c" {
-			return false
-		}
-		if m := backupListRe.FindStringSubmatch(args[1]); m != nil { // listing a backup archive
-			path := strings.ReplaceAll(m[1], `'\''`, "'")
-			return p.pathAllowed(path) || p.stagingAllowed(path)
-		}
-		if m := ledTriggerRe.FindStringSubmatch(args[1]); m != nil { // an LED trigger
-			return p.pathAllowed(m[1])
-		}
-		if m := ipv6ConfRe.FindStringSubmatch(args[1]); m != nil { // an interface's IPv6 sysctl
-			return m[1] != "all" && m[1] != "default" && m[1] != "lo" && !strings.Contains(m[1], "..")
-		}
-		return false
-	}
-	for _, a := range p.Programs {
-		if a == name {
-			return true
-		}
-	}
-	rel, ok := p.rel(name)
-	if !ok {
-		return false
-	}
-	for _, a := range p.Programs {
-		if a == rel {
-			return true
-		}
-	}
-	for _, d := range p.ProgramDirs {
-		if filepath.Dir(rel) == d {
-			return true
-		}
-	}
-	return false
-}
-
 // Server is the root side.
 type Server struct {
 	Policy Policy
@@ -1270,10 +1245,30 @@ func fdUnder(f *os.File, dir string) error {
 
 func refuse(why string) response { return response{Error: "refused: " + why} }
 
+// resolved is the boundary's path check for a file operation (B-235): the path as the daemon
+// gave it passes allowed, it resolves through trusted links only (Policy.resolve), and the
+// resolved path passes allowed as well. The operation then runs on the resolved path. A refusal
+// is logged once, here.
+func (s *Server) resolved(path string, final bool, allowed func(string) bool) (string, error) {
+	if !allowed(path) {
+		return "", errors.New("not on the list")
+	}
+	res, err := s.Policy.resolve(path, final)
+	if err != nil {
+		s.log("helper: refused %s: %v", path, err)
+		return "", err
+	}
+	if res != filepath.Clean(path) && !allowed(res) {
+		s.log("helper: refused %s: it resolves to %s, which is not on the list", path, res)
+		return "", fmt.Errorf("resolves to %s, which is not on the list", res)
+	}
+	return res, nil
+}
+
 // ops is what the Server performs with: Local unless a test substitutes something.
 func (s *Server) ops() Ops {
 	if s.Ops == nil {
-		return Local{}
+		return Local{noFollow: true} // B-235: the paths were resolved here, nothing is followed below
 	}
 	return s.Ops
 }
@@ -1314,45 +1309,73 @@ func (s *Server) do(ctx context.Context, req request) response {
 		return response{OK: true, Stdout: r.Stdout, Stderr: r.Stderr, Exit: r.Exit}
 	case "write":
 		// systemd's runtime unit directory admits its two exact shapes for write and remove, and
-		// no other operation (RunUnitDir)
-		if !s.Policy.pathAllowed(req.Path) && !s.Policy.runUnitFileAllowed(req.Path) {
-			return refuse("path " + req.Path)
+		// no other operation (RunUnitDir). B-235: the path as given and as it resolves through
+		// the image's links both have to pass, and the write follows nothing below
+		writable := func(path string) bool { return s.Policy.pathAllowed(path) || s.Policy.runUnitFileAllowed(path) }
+		path, err := s.resolved(req.Path, true, writable)
+		if err != nil {
+			return refuse("path " + req.Path + ": " + err.Error())
 		}
-		return fail(ops.WriteFile(req.Path, req.Data, os.FileMode(req.Mode)))
+		return fail(ops.WriteFile(path, req.Data, os.FileMode(req.Mode)))
 	case "touch":
-		if !s.Policy.pathAllowed(req.Path) {
-			return refuse("path " + req.Path)
+		path, err := s.resolved(req.Path, true, s.Policy.pathAllowed)
+		if err != nil {
+			return refuse("path " + req.Path + ": " + err.Error())
 		}
-		return fail(ops.Touch(req.Path, os.FileMode(req.Mode)))
+		return fail(ops.Touch(path, os.FileMode(req.Mode)))
 	case "remove", "removeall":
-		allowed := s.Policy.pathAllowed(req.Path) || (req.Op == "remove" && s.Policy.runUnitFileAllowed(req.Path))
-		if !allowed {
-			return refuse("path " + req.Path)
+		allowed := func(path string) bool {
+			return s.Policy.pathAllowed(path) || (req.Op == "remove" && s.Policy.runUnitFileAllowed(path))
+		}
+		path, err := s.resolved(req.Path, false, allowed)
+		if err != nil {
+			return refuse("path " + req.Path + ": " + err.Error())
 		}
 		if req.Op == "remove" {
-			return fail(ops.Remove(req.Path))
+			return fail(ops.Remove(path))
 		}
-		return fail(ops.RemoveAll(req.Path))
+		return fail(ops.RemoveAll(path))
 	case "mkdir":
-		if !s.Policy.dataDirAllowed(req.Path) && !s.Policy.runUnitDirAllowed(req.Path) {
-			return refuse("path " + req.Path)
+		allowed := func(path string) bool { return s.Policy.dataDirAllowed(path) || s.Policy.runUnitDirAllowed(path) }
+		path, err := s.resolved(req.Path, true, allowed)
+		if err != nil {
+			return refuse("path " + req.Path + ": " + err.Error())
 		}
-		return fail(ops.MkdirAll(req.Path, os.FileMode(req.Mode)))
+		return fail(ops.MkdirAll(path, os.FileMode(req.Mode)))
 	case "symlink":
-		if !s.Policy.pathAllowed(req.Path) {
-			return refuse("path " + req.Path)
+		// B-235: the target too - a link from an allowed path to /etc/passwd made the next
+		// write there root's
+		link, err := s.resolved(req.Path, false, s.Policy.pathAllowed)
+		if err != nil {
+			return refuse("path " + req.Path + ": " + err.Error())
 		}
-		return fail(ops.Symlink(req.Target, req.Path))
+		if !s.Policy.symlinkTargetAllowed(link, req.Target) {
+			s.log("helper: refused the link %s -> %s", req.Path, req.Target)
+			return refuse("symlink target " + req.Target)
+		}
+		return fail(ops.Symlink(req.Target, link))
 	case "rename":
-		if !s.Policy.pathAllowed(req.Dst) || !(s.Policy.pathAllowed(req.Src) || s.Policy.stagingAllowed(req.Src)) {
-			return refuse("rename " + req.Src + " -> " + req.Dst)
+		src, err := s.resolved(req.Src, false, func(p string) bool { return s.Policy.pathAllowed(p) || s.Policy.stagingAllowed(p) })
+		if err != nil {
+			return refuse("rename " + req.Src + ": " + err.Error())
 		}
-		return fail(ops.Rename(req.Src, req.Dst))
+		dst, err := s.resolved(req.Dst, false, s.Policy.pathAllowed)
+		if err != nil {
+			return refuse("rename " + req.Dst + ": " + err.Error())
+		}
+		if isSymlink(src) {
+			s.log("helper: refused to move the link %s to %s", req.Src, req.Dst)
+			return refuse("rename " + req.Src + ": a symlink")
+		}
+		return fail(ops.Rename(src, dst))
 	case "chown":
-		if !s.Policy.dataDirAllowed(req.Path) {
-			return refuse("path " + req.Path)
+		// the entry itself, never through a link at the end (Lchown; the recursive walk follows
+		// none either)
+		path, err := s.resolved(req.Path, false, s.Policy.dataDirAllowed)
+		if err != nil {
+			return refuse("path " + req.Path + ": " + err.Error())
 		}
-		return fail(ops.Chown(req.Path, req.UID, req.GID, req.Recursive))
+		return fail(ops.Chown(path, req.UID, req.GID, req.Recursive))
 	case opOwnTree:
 		if err := s.Policy.OwnTreeAllowed(req.Name, req.Args, req.UID); err != nil {
 			s.log("helper: refused the ownership walk for %s: %v", req.Name, err)
@@ -1368,10 +1391,11 @@ func (s *Server) do(ctx context.Context, req request) response {
 		}
 		return response{OK: true, Stdout: b}
 	case "chmod":
-		if !s.Policy.pathAllowed(req.Path) {
-			return refuse("path " + req.Path)
+		path, err := s.resolved(req.Path, true, s.Policy.pathAllowed)
+		if err != nil {
+			return refuse("path " + req.Path + ": " + err.Error())
 		}
-		return fail(ops.Chmod(req.Path, os.FileMode(req.Mode)))
+		return fail(ops.Chmod(path, os.FileMode(req.Mode)))
 	case opRootPassword:
 		if !s.Policy.shadowAllowed(req.Path) {
 			s.log("helper: refused the root password write to %s", req.Path)

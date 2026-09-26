@@ -64,6 +64,44 @@ func TestSystemdAddonsInstallUninstall(t *testing.T) {
 	if _, err := os.Stat(rc); !os.IsNotExist(err) {
 		t.Error("rc.d entry kept")
 	}
+	// B-236: the unit's failure is forgotten once its file is gone, or it stays listed not-found
+	if !strings.HasSuffix(joined, "systemctl daemon-reload\nsystemctl reset-failed --no-pager -- addon-new.service") {
+		t.Errorf("no reset-failed after the reload:\n%s", joined)
+	}
+}
+
+// B-236: an addon whose stop exits non-zero (RedMatic's, when Node-RED is already gone) is
+// uninstalled all the same - the failed stop is logged, the uninstall runs, the failed unit is
+// reset after the reload
+func TestSystemdAddonsUninstallAfterAFailedStop(t *testing.T) {
+	r := rootWith(t, map[string]string{"usr/local/etc/config/rc.d/red": "#!/bin/sh\necho uninstalled\nexit 0\n"})
+	_ = os.Chmod(r.join("/usr/local/etc/config/rc.d/red"), 0o755)
+	var calls []string
+	run := func(_ context.Context, name string, args ...string) ([]byte, error) {
+		calls = append(calls, name+" "+strings.Join(args, " "))
+		if name == "systemctl" && args[0] == "stop" {
+			return []byte("Job for addon-red.service failed because the control process exited with error code."), errors.New("exit status 1")
+		}
+		return nil, nil
+	}
+	a := NewSystemdAddons(r, SystemdServices{Root: r, Run: run})
+	out, err := a.Uninstall(context.Background(), "red")
+	if err != nil || out != "uninstalled" {
+		t.Fatalf("%v %q", err, out)
+	}
+	want := []string{"systemctl stop --no-pager -- addon-red.service", "systemctl daemon-reload", "systemctl reset-failed --no-pager -- addon-red.service"}
+	var got []string
+	for _, c := range calls {
+		if strings.HasPrefix(c, "systemctl ") && !strings.HasPrefix(c, "systemctl show ") && !strings.HasPrefix(c, "systemctl list-units") {
+			got = append(got, c)
+		}
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("calls:\n%s", strings.Join(calls, "\n"))
+	}
+	if _, err := os.Stat(r.join("/usr/local/etc/config/rc.d/red")); !os.IsNotExist(err) {
+		t.Error("rc.d entry kept")
+	}
 }
 
 func TestSystemdAddonsRebootRequired(t *testing.T) {

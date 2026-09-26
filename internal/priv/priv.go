@@ -307,7 +307,12 @@ type Credential struct {
 }
 
 // Local does the operations in this process. It is what root uses and what the helper runs.
-type Local struct{}
+type Local struct {
+	// noFollow: the file operations follow no symlink at all (nofollow.go, openccu-lite B-235) -
+	// the helper Server sets it, having resolved the path through the image's own links itself.
+	// Off, a link is followed as before: root without a helper has no boundary to hold.
+	noFollow bool
+}
 
 func (Local) Run(ctx context.Context, name string, args []string, stdin []byte) (Result, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
@@ -533,7 +538,10 @@ func (Local) RunAs(ctx context.Context, cred Credential, name string, args []str
 	return res, nil
 }
 
-func (Local) WriteFile(path string, data []byte, mode os.FileMode) error {
+func (l Local) WriteFile(path string, data []byte, mode os.FileMode) error {
+	if l.noFollow {
+		return l.writeFileNoFollow(path, data, mode)
+	}
 	// B-53: /etc/hostname and /etc/hosts are symlinks into /var/etc on the image, and the
 	// rootfs is read-only - a temporary file beside the *link* fails with "read-only file
 	// system". Write beside, and rename onto, the file the link points to.
@@ -603,7 +611,10 @@ func throughLinks(path string) string {
 	return cur
 }
 
-func (Local) Touch(path string, mode os.FileMode) error {
+func (l Local) Touch(path string, mode os.FileMode) error {
+	if l.noFollow {
+		return l.touchNoFollow(path, mode)
+	}
 	_ = os.MkdirAll(filepath.Dir(path), 0o755)
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, mode)
 	if err != nil {
@@ -612,27 +623,53 @@ func (Local) Touch(path string, mode os.FileMode) error {
 	return f.Close()
 }
 
-func (Local) Remove(path string) error {
+func (l Local) Remove(path string) error {
+	if l.noFollow {
+		return l.removeNoFollow(path)
+	}
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	return nil
 }
 
-func (Local) RemoveAll(path string) error { return os.RemoveAll(path) }
+func (l Local) RemoveAll(path string) error {
+	if l.noFollow {
+		return l.removeAllNoFollow(path)
+	}
+	return os.RemoveAll(path)
+}
 
-func (Local) MkdirAll(path string, mode os.FileMode) error { return os.MkdirAll(path, mode) }
+func (l Local) MkdirAll(path string, mode os.FileMode) error {
+	if l.noFollow {
+		return l.mkdirAllNoFollow(path, mode)
+	}
+	return os.MkdirAll(path, mode)
+}
 
-func (Local) Symlink(target, link string) error {
+func (l Local) Symlink(target, link string) error {
+	if l.noFollow {
+		return l.symlinkNoFollow(target, link)
+	}
 	if err := os.Remove(link); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	return os.Symlink(target, link)
 }
 
-func (Local) Rename(src, dst string) error { return os.Rename(src, dst) }
+func (l Local) Rename(src, dst string) error {
+	if l.noFollow {
+		return l.renameNoFollow(src, dst)
+	}
+	return os.Rename(src, dst)
+}
 
-func (Local) Chmod(path string, mode os.FileMode) error { return os.Chmod(path, mode) }
+func (l Local) Chmod(path string, mode os.FileMode) error {
+	if l.noFollow {
+		return l.chmodNoFollow(path, mode)
+	}
+	return os.Chmod(path, mode)
+}
 
 func (Local) ReadFile(path string) ([]byte, error) { return os.ReadFile(path) }
 
@@ -846,8 +883,11 @@ func appendAccountLine(path, name string, id int, line string) error {
 // strings, which opens every directory by its name again - a directory the addon's user swapped for
 // a link between the walk's lstat and its open was entered, and root changed owners wherever the
 // link led. It is ownwalk's descriptor walk now.
-func (Local) Chown(path string, uid, gid int, recursive bool) error {
+func (l Local) Chown(path string, uid, gid int, recursive bool) error {
 	if !recursive {
+		if l.noFollow {
+			return l.lchownNoFollow(path, uid, gid)
+		}
 		return os.Lchown(path, uid, gid)
 	}
 	res := ownwalk.Own([]string{path}, ownwalk.Options{UID: uid, GID: gid})

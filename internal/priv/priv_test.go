@@ -70,22 +70,32 @@ func TestServerAllowlists(t *testing.T) {
 	go func() { _ = srv.Serve(ctx, l) }()
 	c := Client{Socket: sock}
 
-	// allowed program by name, by directory; refused program
-	if r, err := c.Run(context.Background(), "hostname", nil, nil); err != nil || r.Exit != 0 {
-		t.Errorf("hostname: %v %+v", err, r)
+	// allowed program by name, by directory; refused program. B-234: a program runs with the
+	// arguments of its shape only - hostname takes exactly the new name (its bare call is not a
+	// form the daemon has), cronBackup.sh takes nothing
+	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(root, "bin/cronBackup.sh"), []byte("#!/bin/sh\necho cron\n"), 0o755)
+	if r, err := c.Run(context.Background(), filepath.Join(root, "bin/cronBackup.sh"), nil, nil); err != nil || r.Exit != 0 || string(r.Stdout) != "cron\n" {
+		t.Errorf("cronBackup.sh: %v %+v", err, r)
+	}
+	if _, err := c.Run(context.Background(), filepath.Join(root, "bin/cronBackup.sh"), []string{"--help"}, nil); err == nil || !strings.Contains(err.Error(), "refused") {
+		t.Errorf("cronBackup.sh with an argument: %v", err)
+	}
+	if _, err := c.Run(context.Background(), "hostname", nil, nil); err == nil || !strings.Contains(err.Error(), "refused") {
+		t.Errorf("hostname without a name: %v", err)
 	}
 	if r, err := c.Run(context.Background(), filepath.Join(root, "etc/init.d/S99x"), []string{"start"}, nil); err != nil || string(r.Stdout) != "init start\n" {
 		t.Errorf("init script: %v %+v", err, r)
 	}
 	// B-144: the standard input crosses the socket - the restore script reads the key from it
-	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o755); err != nil {
-		t.Fatal(err)
-	}
 	_ = os.WriteFile(filepath.Join(root, "bin/restoreBackup.sh"), []byte("#!/bin/sh\nset -e\nread -r KEY\necho \"key=[$KEY]\"\n"), 0o755)
-	if r, err := c.Run(context.Background(), filepath.Join(root, "bin/restoreBackup.sh"), []string{"-c"}, []byte("s3cret\n")); err != nil || r.Exit != 0 || string(r.Stdout) != "key=[s3cret]\n" {
+	sbk := filepath.Join(root, "usr/local/tmp/x.sbk")
+	if r, err := c.Run(context.Background(), filepath.Join(root, "bin/restoreBackup.sh"), []string{"-c", sbk}, []byte("s3cret\n")); err != nil || r.Exit != 0 || string(r.Stdout) != "key=[s3cret]\n" {
 		t.Errorf("restore with stdin: %v %+v", err, r)
 	}
-	if r, err := c.Run(context.Background(), filepath.Join(root, "bin/restoreBackup.sh"), []string{"-c"}, nil); err != nil || r.Exit == 0 {
+	if r, err := c.Run(context.Background(), filepath.Join(root, "bin/restoreBackup.sh"), []string{"-c", sbk}, nil); err != nil || r.Exit == 0 {
 		t.Errorf("restore without stdin must meet EOF: %v %+v", err, r)
 	}
 	if _, err := c.Run(context.Background(), "rm", []string{"-rf", "/"}, nil); err == nil || !strings.Contains(err.Error(), "refused") {
@@ -96,10 +106,11 @@ func TestServerAllowlists(t *testing.T) {
 	if DefaultPolicy("/", "/usr/local/etc/occulite").programAllowed("/bin/setfirewall.tcl", nil) {
 		t.Error("setfirewall.tcl is still on the program list")
 	}
-	for _, prog := range []string{"/bin/createBackup.sh", "/bin/cronBackup.sh", "/bin/restoreBackup.sh",
-		"/bin/updateTZ.sh", "/bin/SetInterfaceClock", "/bin/install_addon"} {
-		if !DefaultPolicy("/", "/usr/local/etc/occulite").programAllowed(prog, nil) {
-			t.Errorf("%s is not on the program list", prog)
+	for prog, args := range map[string][]string{
+		"/bin/createBackup.sh": {"/usr/local/tmp/b.sbk"}, "/bin/cronBackup.sh": nil, "/bin/restoreBackup.sh": {"/usr/local/tmp/b.sbk"},
+		"/bin/updateTZ.sh": nil, "/bin/SetInterfaceClock": {"127.0.0.1:2001"}, "/bin/install_addon": nil} {
+		if !DefaultPolicy("/", "/usr/local/etc/occulite").programAllowed(prog, args) {
+			t.Errorf("%s %v is not on the program list", prog, args)
 		}
 	}
 	if _, err := c.Run(context.Background(), "sh", []string{"-c", "id"}, nil); err == nil {
