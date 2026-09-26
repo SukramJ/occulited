@@ -36,12 +36,16 @@ const (
 	// task 86's follow-up, task 161): the delivery is skipped, not failed - the other targets get
 	// their copy and the nightly unit succeeds - and the Status warning names the target.
 	StateNoMedium = "no-medium"
+	// StateUpdateRoom: a directory target on the system's own user partition that would leave
+	// less than UpdateRoom free even with its older backups removed (openccu-lite B-247): the
+	// backup is skipped, and the Status page says why.
+	StateUpdateRoom = "update-room"
 )
 
 // Failed says whether a state is a failure the Status page warns about.
 func Failed(state string) bool {
 	switch state {
-	case StateReadOnly, StateFull, StateUnreachable, StateAuthFailed, StateHostKeyUnknown, StateHostKeyChanged, StateNoSFTP, StateStale, StateError, StateNoMedium:
+	case StateReadOnly, StateFull, StateUnreachable, StateAuthFailed, StateHostKeyUnknown, StateHostKeyChanged, StateNoSFTP, StateStale, StateError, StateNoMedium, StateUpdateRoom:
 		return true
 	}
 	return false

@@ -457,7 +457,8 @@ func (a *SystemAPI) Register(mux *http.ServeMux) {
 	// task 35: the box's TLS certificate
 	route(mux, auth.ScopeSystemRead, "GET "+p+"/certificate", a.certificate)
 	route(mux, auth.ScopeSystemWrite, "PUT "+p+"/certificate/settings", a.certificateSettingsPut)
-	a.registerTrust(mux, p) // openccu-lite task 231
+	a.registerTrust(mux, p)          // openccu-lite task 231
+	a.registerRestoreDevices(mux, p) // openccu-lite task 251
 	route(mux, auth.ScopeSystemWrite, "POST "+p+"/certificate/test", a.certificateStart(acme.KindTest))
 	route(mux, auth.ScopeSystemWrite, "POST "+p+"/certificate/issue", a.certificateStart(acme.KindIssue))
 	route(mux, auth.ScopeSystemWrite, "POST "+p+"/certificate/renew", a.certificateStart(acme.KindRenew))
@@ -2424,11 +2425,25 @@ func (a *SystemAPI) systemUpdateDownload(w http.ResponseWriter, r *http.Request)
 	// the download outlives the request's context on purpose: a closed browser tab must not
 	// leave a half-written file behind as "staged"
 	u, err := a.Feed.Download(context.Background())
+	if noUpdateSpace(w, err) {
+		return
+	}
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, apiError{Error: "download-failed", Message: err.Error()})
 		return
 	}
 	writeJSON(w, 200, u)
+}
+
+// noUpdateSpace answers a staged update that would not fit where the recovery unpacks it
+// (B-247): 422 no-space with the free and the required bytes, which the Updates page words.
+func noUpdateSpace(w http.ResponseWriter, err error) bool {
+	var se *system.UpdateSpaceError
+	if !errors.As(err, &se) {
+		return false
+	}
+	writeJSON(w, http.StatusUnprocessableEntity, apiError{Error: "no-space", Message: se.Error(), Detail: map[string]any{"free": se.Free, "required": se.Required}})
+	return true
 }
 
 // uploadPart returns the "file" part of a multipart body (or the body itself) and its name.
@@ -2461,6 +2476,9 @@ func (a *SystemAPI) systemUpdateUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u, err := a.Root.StageSystemUpdate(r.Context(), name, r.ContentLength, src)
+	if noUpdateSpace(w, err) {
+		return
+	}
 	if err != nil {
 		writeJSON(w, http.StatusUnprocessableEntity, apiError{Error: "update-rejected", Message: err.Error()})
 		return
@@ -2504,6 +2522,9 @@ func (a *SystemAPI) systemUpdateInstall(w http.ResponseWriter, _ *http.Request) 
 		return
 	}
 	if err := a.Root.ArmSystemUpdate(); err != nil {
+		if noUpdateSpace(w, err) {
+			return
+		}
 		writeJSON(w, http.StatusConflict, apiError{Error: "nothing-staged", Message: err.Error()})
 		return
 	}

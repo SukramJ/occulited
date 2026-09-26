@@ -25,6 +25,7 @@
     import {ask} from './dialog.svelte';
     import {t} from './i18n.svelte';
     import Help from './Help.svelte';
+    import Disclosure from './Disclosure.svelte';
     import LocationPicker from './LocationPicker.svelte';
     import {folderError, formatLocation, parseLocation} from './locations';
 
@@ -35,6 +36,9 @@
     let msg = $state<Record<string, string>>({});
     let err = $state('');
     let open = $state<Record<string, TargetBackup[] | null>>({});
+    // task 268: a target's Backups here becomes the panel of its backups, and its Edit is gone
+    // while its form is open (the panel's Close / the form's Cancel bring them back)
+    let backupsButtons = $state<Record<string, HTMLButtonElement>>({});
     let hostkeys = $state<Record<string, {type: string; fingerprint: string; trusted: boolean; changed: boolean; trusted_fingerprint?: string}>>({});
     let tests = $state<Record<string, {ok: boolean; state: string; step: string; error?: string; free_bytes: number; needed_bytes: number; write_mbps?: number}>>({});
 
@@ -84,6 +88,7 @@
         'no-sftp': () => t('no SFTP on the server'),
         stale: () => t('not answering'),
         'no-medium': () => t('no USB stick'),
+        'update-room': () => t('skipped: room for an update'),
         running: () => t('backing up…'),
         error: () => t('error'),
     };
@@ -419,11 +424,12 @@
                             {#if x.state.mounted}<button class="hmm-button" onclick={() => void act(x, 'unmount')} disabled={busy !== ''} data-action="unmount">{t('Unmount')}</button>
                             {:else}<button class="hmm-button" onclick={() => void act(x, 'mount')} disabled={busy !== ''} data-action="mount">{t('Mount')}</button>{/if}
                         {/if}
-                        <button class="hmm-button" onclick={() => void toggleBackups(x)} data-action="backups">{open[x.id] !== undefined ? t('Hide backups') : t('Backups here')}</button>
+                        <button class="hmm-button" aria-expanded={open[x.id] !== undefined} onclick={() => void toggleBackups(x)} bind:this={backupsButtons[x.id]} data-action="backups">{t('Backups here')}</button>
                     {/if}
-                    <button class="hmm-button" onclick={() => edit(x)} disabled={busy !== ''} data-action="edit">{t('Edit')}</button>
+                    {#if !(draft && draft.id === x.id)}<button class="hmm-button" onclick={() => edit(x)} disabled={busy !== ''} data-action="edit">{t('Edit')}</button>{/if}
                     <button class="hmm-button" onclick={() => void remove(x)} disabled={busy !== ''} data-action="remove">{t('Remove')}</button>
                 </div>
+                <Disclosure title={t('Backups here')} readOnly trigger={backupsButtons[x.id]} bind:open={() => open[x.id] !== undefined, (v) => { if (!v && open[x.id] !== undefined) void toggleBackups(x); }}>
                 {#if open[x.id] === null}
                     <p class="ol-muted">{t('Loading…')}</p>
                 {:else if open[x.id]}
@@ -444,6 +450,7 @@
                         </table>
                     {/if}
                 {/if}
+                </Disclosure>
                 {#if draft && draft.id === x.id}{@render form()}{/if}
             </div>
         {/each}

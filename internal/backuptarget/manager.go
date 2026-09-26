@@ -54,9 +54,8 @@ type Manager struct {
 	Now    func() time.Time
 	Prober Prober
 
-	mu      sync.Mutex
-	checks  map[string]Check
-	started map[string]time.Time
+	mu     sync.Mutex
+	checks map[string]Check
 }
 
 // Check is the last test or probe of a target.

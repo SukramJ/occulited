@@ -230,7 +230,22 @@ func deliverLocal(ctx context.Context, t Target, f StagedFile, hostname string, 
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fail("mkdir", err)
 	}
-	if sp, err := StatSpace(dir); err == nil && sp.Free < f.Size+f.Size/10 {
+	if onUserfs(dir) {
+		// B-247: on the system's own user partition the backup leaves room for a system update,
+		// the oldest backups removed first to get there
+		var released int64
+		if onUserfs(filepath.Dir(f.Path)) {
+			released = f.Size
+		}
+		need := roomNeeded(f.Size, released)
+		removed, free, ok := makeRoom(dir, need, f.Name)
+		r.Removed = append(r.Removed, removed...)
+		if !ok {
+			r.State, r.Step, r.Error = StateUpdateRoom, "space", roomError(free, need)
+			r.DurationMS = time.Since(start).Milliseconds()
+			return r
+		}
+	} else if sp, err := StatSpace(dir); err == nil && sp.Free < f.Size+f.Size/10 {
 		r.State = StateFull
 		r.Step, r.Error = "space", fmt.Sprintf("%d bytes free, %d needed", sp.Free, f.Size+f.Size/10)
 		r.DurationMS = time.Since(start).Milliseconds()

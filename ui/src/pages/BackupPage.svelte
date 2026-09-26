@@ -18,6 +18,17 @@
     import {boxUptime} from '../lib/power';
 
     interface Check { ok: boolean; output: string; backup_version?: string; running_version?: string; needs_key: boolean; has_rega: boolean }
+    // openccu-lite task 251: the paired devices a checked backup holds, and this system's side
+    interface RadioBackup {
+        bidcos_rf: {devices: number; address?: string; serial?: string; has_key: boolean; gateways: number};
+        hmip: {devices: number; identity_sgtin?: string; local_key: boolean; device_key_map: boolean};
+        bidcos_wired: {devices: number; gateways: number};
+        key_index: number;
+        files: string[];
+        version?: string;
+    }
+    interface RestoreTarget { paired: Record<string, {devices: number; known: boolean; error?: string}>; devices: number; unknown?: string[]; user_key: boolean; importable: boolean }
+    interface DevicesView { backup: RadioBackup; target: RestoreTarget }
     // task 91: what the upload's age header said, and whether the recovery key is still needed
     interface Encryption { encrypted: boolean; format?: string; armored?: boolean; box_fingerprint?: string; recovery_fingerprint?: string; known?: 'current' | 'previous' | 'unknown'; key_created?: string; opened_with?: 'box' | 'recovery'; needs_recovery_key: boolean; passphrase?: boolean; created_here: boolean }
     let encryption = $state<EncryptionView | null>(null);
@@ -87,6 +98,65 @@
     let force = $state(false);
     let applied = $state('');
     let namesMsg = $state('');
+    // task 251: the paired devices of the checked backup, loaded after a check for an administrator
+    let devices = $state<DevicesView | null>(null);
+    let devicesMsg = $state('');
+    const backupEmpty = (b: RadioBackup) => b.bidcos_rf.devices === 0 && b.hmip.devices === 0 && b.bidcos_wired.devices === 0 && !b.hmip.identity_sgtin && !b.bidcos_rf.address;
+    async function loadDevices() {
+        devices = null;
+        devicesMsg = '';
+        if (!uploaded || auth.role !== 'admin') return;
+        try {
+            const v = await api.get<DevicesView>(`/api/system/v1/restore/devices?file=${encodeURIComponent(uploaded)}`);
+            // an answer without the two halves (an older daemon, a stub) shows nothing rather than a broken block
+            devices = v && v.backup && v.target ? v : null;
+        } catch (e) {
+            devicesMsg = (e as Error).message;
+        }
+    }
+    // the import takes over the backup's radio identity and reboots, like the restore
+    async function importDevices() {
+        if (!devices || !uploaded) return;
+        const b = devices.backup;
+        const parts = [
+            t('{n} BidCos-RF devices', {n: b.bidcos_rf.devices}),
+            t('{n} HmIP devices', {n: b.hmip.devices}),
+            t('{n} BidCos-Wired devices', {n: b.bidcos_wired.devices}),
+        ].join(', ');
+        const message = [
+            t('The paired devices of this backup - {parts} - come onto this system with the radio identity they are bound to: the BidCos address and security key, the HmIP identity, the LAN gateways.', {parts}),
+            t('This system\'s own radio identity is set aside and it reboots. HmIP devices are taken over by the adapter exchange on this system\'s module at the start - with eQ-3\'s key server, or offline in local key mode.'),
+        ].join('\n\n');
+        if (!(await ask({title: t('Import the paired devices'), message, confirm: t('Import and reboot'), danger: true}))) return;
+        busy = 'devices';
+        error = '';
+        devicesMsg = '';
+        const before = await boxUptime();
+        const entry = await beginBoot('restore', () => api.get('/api/system/v1/boot-expect?kind=restore'));
+        const wait = () => {
+            restoring = entry;
+            watchBoot({entry, before, onUpdate: (e) => (restoring = e), onBack: () => setTimeout(() => location.reload(), EASE_MS)});
+        };
+        try {
+            const r = await api.post<{ok: boolean; rebooting: boolean; message?: string}>('/api/system/v1/restore/import-devices', {file: uploaded, key});
+            if (r.rebooting) {
+                applied = t('The paired devices are imported.');
+                wait();
+            } else {
+                removeEntry();
+                devicesMsg = t('The devices are imported but the reboot did not start: {message} Reboot the system to apply it.', {message: r.message ?? ''});
+            }
+        } catch (e) {
+            if (e instanceof ApiError) {
+                removeEntry();
+                devicesMsg = e.message;
+            } else {
+                wait();
+            }
+        } finally {
+            busy = '';
+        }
+    }
     async function importNames() {
         if (!uploaded) return;
         busy = 'names';
@@ -115,6 +185,7 @@
             const data = await api.post<{file: string; check: Check | null; encryption?: Encryption}>('/api/system/v1/restore/check', {target, name});
             uploaded = data.file;
             check = data.check;
+            void loadDevices();
             encInfo = data.encryption ?? null;
             restoreFrom = name;
             document.getElementById('restore')?.scrollIntoView({block: 'start'});
@@ -158,6 +229,7 @@
             if (!res.ok) throw new Error(data.message ?? res.statusText);
             uploaded = data.file;
             check = data.check;
+            void loadDevices();
             encInfo = data.encryption ?? null;
         } catch (e) {
             error = (e as Error).message;
@@ -263,6 +335,40 @@
             {#if check.backup_version}<dt>{t('Versions')}</dt><dd>{t('backup {b}, running {r}', {b: check.backup_version, r: check.running_version ?? ''})}</dd>{/if}
             <dt>ReGa</dt><dd>{check.has_rega ? t('contains a ReGa database — the restore ignores it; its names, rooms and functions can be imported here:') : t('none')} {#if check.has_rega}<button class="hmm-button" onclick={importNames} disabled={busy !== ''}>{t('Import the names from this backup')}</button>{/if}{#if namesMsg}<div class="ol-muted">{namesMsg}</div>{/if}</dd>
         </dl>
+        <!-- openccu-lite task 251: the paired devices of this backup, and the import onto a system
+             without any (all three radios, with the identity and the keys, then a reboot) -->
+        {#if devices}
+            {@const b = devices.backup}
+            {@const tg = devices.target}
+            <div class="ol-panel ol-devices" data-restore="devices">
+                <h3>{t('Paired devices in this backup')}<Help>{t('The pairings of the CCU or OpenCCU the backup came from: rfd\'s and hs485d\'s device files with the BidCos address and the security key, hmipserver\'s devices with the HmIP identity (and local key mode, if it was on), the LAN gateways. They come across together, or not at all, and only onto a system that has no device paired yet: the import takes over that system\'s radio identity, so devices paired here would be orphaned.')}</Help></h3>
+                {#if backupEmpty(b)}
+                    <p class="ol-muted" data-devices="none">{t('None: the backup holds no paired device and no radio identity.')}</p>
+                {:else}
+                    <dl class="ol-kv">
+                        <dt>BidCos-RF</dt><dd data-devices="bidcos-rf">{t('{n} devices', {n: b.bidcos_rf.devices})}{#if b.bidcos_rf.address}{' · '}{t('address {a}', {a: b.bidcos_rf.address})}{/if}{#if b.bidcos_rf.has_key}{' · '}{t('an individual security key')}{/if}{#if b.bidcos_rf.gateways}{' · '}{t('{n} LAN gateways', {n: b.bidcos_rf.gateways})}{/if}</dd>
+                        <dt>HmIP</dt><dd data-devices="hmip">{t('{n} devices', {n: b.hmip.devices})}{#if b.hmip.identity_sgtin}{' · '}{t('identity of module {sgtin}', {sgtin: b.hmip.identity_sgtin})}{/if}{#if b.hmip.local_key}{' · '}{t('local key mode')}{/if}{#if b.hmip.device_key_map}{' · '}{t('device key map')}{/if}</dd>
+                        <dt>BidCos-Wired</dt><dd data-devices="wired">{t('{n} devices', {n: b.bidcos_wired.devices})}{#if b.bidcos_wired.gateways}{' · '}{t('{n} LAN gateways', {n: b.bidcos_wired.gateways})}{/if}</dd>
+                    </dl>
+                    {#if tg.unknown?.length}
+                        <p class="ol-warn" data-devices-target="unknown">{t('{list} did not answer: whether devices are paired here is not known yet. Try again in a moment.', {list: tg.unknown.join(', ')})}</p>
+                    {:else if tg.devices > 0}
+                        <p class="ol-warn" data-devices-target="paired">{t('This system has {n} devices paired ({list}): the import is refused, it would take over another system\'s radio identity and orphan them.', {n: tg.devices, list: Object.entries(tg.paired).filter(([, p]) => p.devices > 0).map(([name, p]) => `${name}: ${p.devices}`).join(', ')})}</p>
+                    {:else}
+                        <p class="ol-muted" data-devices-target="free">{t('This system has no paired devices: the import can take over the backup\'s.')}</p>
+                    {/if}
+                    {#if (b.key_index > 0 || b.bidcos_rf.has_key || tg.user_key) && !check.needs_key}
+                        <label>{t('Security key')} <input class="hmm-input" type="password" bind:value={key} autocomplete="off" data-input="devices-key" /></label>
+                    {/if}
+                    <div class="ol-actions" style="margin-top:8px">
+                        <button class="hmm-button danger" onclick={importDevices} disabled={busy !== '' || !tg.importable || ((b.key_index > 0 || b.bidcos_rf.has_key || tg.user_key) && !key)} data-action="import-devices">{t('Import the paired devices and reboot')}</button>
+                    </div>
+                {/if}
+                {#if devicesMsg}<div class="ol-notice error" data-notice="devices">{devicesMsg}</div>{/if}
+            </div>
+        {:else if devicesMsg}
+            <div class="ol-notice error" data-notice="devices">{devicesMsg}</div>
+        {/if}
         {#if check.needs_key}
             {#if encInfo?.encrypted}
                 <p class="ol-muted">{t('The security key protects the radio link to BidCos devices, and a restore on another system asks for it; the recovery key encrypts the backup itself, so nobody can read it without that key.')}</p>

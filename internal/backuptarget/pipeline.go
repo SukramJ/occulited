@@ -288,6 +288,17 @@ func (p *Pipeline) CreateRun(ctx context.Context, instance string) error {
 				log.Warn("backup: skipped, the target cannot take a file", "target", t.ID, "kind", t.Kind, "state", r.State, "step", r.Step, "err", r.Error)
 				continue
 			}
+			// B-247: on the system's own user partition, room for a system update first
+			removed, r, ok := precheckRoom(t, p.Staging, at, instance)
+			if len(removed) > 0 {
+				log.Info("backup: old backups removed to keep room for a system update", "target", t.ID, "dir", t.Dir(), "removed", removed)
+			}
+			if !ok {
+				p.writeResult(t, r)
+				failed = append(failed, t.ID)
+				log.Warn("backup: skipped, it would leave too little room for a system update", "target", t.ID, "dir", t.Dir(), "err", r.Error)
+				continue
+			}
 		}
 		ready = append(ready, t)
 	}

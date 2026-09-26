@@ -142,6 +142,11 @@ func (r Root) StageSystemUpdate(ctx context.Context, name string, size int64, sr
 		os.Remove(tmp)
 		return nil, err
 	}
+	// B-247: the recovery unpacks the file beside itself; refuse now what it would refuse then
+	if err := checkUpdateSpace(path, kind); err != nil {
+		_ = remove(path)
+		return nil, err
+	}
 	// the WebUI linked the absolute path; the recovery reads the link on the mounted userfs
 	if err := Priv.Symlink(filepath.Join(updateDir, name), r.join(updateLink)); err != nil {
 		_ = remove(path)
@@ -155,10 +160,110 @@ func (r Root) StageSystemUpdate(ctx context.Context, name string, size int64, sr
 // ArmSystemUpdate touches /usr/local/.recoveryMode: the bootloader starts the recovery system
 // at the next boot, which installs the staged file. The caller reboots.
 func (r Root) ArmSystemUpdate() error {
-	if r.StagedSystemUpdate() == nil {
+	u := r.StagedSystemUpdate()
+	if u == nil {
 		return errors.New("no update staged")
 	}
+	// B-247: the space may have gone since the file was staged (a nightly backup)
+	if u.Kind != "missing" {
+		if err := checkUpdateSpace(filepath.Join(r.join(updateDir), u.File), u.Kind); err != nil {
+			return err
+		}
+	}
 	return touch(r.join(recoveryFlag), 0o644)
+}
+
+// UpdateSpaceError: the staged update would not fit where the recovery unpacks it (B-247).
+type UpdateSpaceError struct {
+	Free, Required int64
+}
+
+func (e *UpdateSpaceError) Error() string {
+	return fmt.Sprintf("not enough space for the update on the system's own storage: %d MB free, %d MB needed to unpack it - remove old backups (Backup page) or move them to a USB stick or a share", e.Free>>20, e.Required>>20)
+}
+
+// updateSpaceMargin is kept free beyond the recovery's own rule (it refuses when the unpacked size
+// is not below the free space): the journal and the state go on writing until the reboot.
+const updateSpaceMargin = 64 << 20
+
+// updateFree is the space free beside the staged file (a test swaps it).
+var updateFree = func(dir string) (int64, error) {
+	var fs syscall.Statfs_t
+	if err := syscall.Statfs(dir, &fs); err != nil {
+		return 0, err
+	}
+	return int64(fs.Bavail) * int64(fs.Bsize), nil
+}
+
+// checkUpdateSpace applies the recovery's check (fwinstall.sh, "[5/7] Preparing uploaded data"):
+// the archive's unpacked size must be below the free space of the directory it lies in, with the
+// file itself still there. A disk image, a rootfs or a bootfs is written as it is, not unpacked.
+func checkUpdateSpace(path, kind string) error {
+	need, err := unpackedSize(path, kind)
+	if err != nil || need == 0 {
+		return err
+	}
+	free, err := updateFree(filepath.Dir(path))
+	if err != nil {
+		return nil // the recovery checks again
+	}
+	if need+updateSpaceMargin >= free {
+		return &UpdateSpaceError{Free: free, Required: need + updateSpaceMargin}
+	}
+	return nil
+}
+
+// unpackedSize is what the recovery unpacks: a zip's entries (unzip -v's total), a tar's files
+// (tar -tv's sizes); 0 for the kinds it does not unpack.
+func unpackedSize(path, kind string) (int64, error) {
+	switch kind {
+	case "zip":
+		zr, err := zip.OpenReader(path)
+		if err != nil {
+			return 0, fmt.Errorf("zip: %w", err)
+		}
+		defer zr.Close()
+		var n int64
+		for _, e := range zr.File {
+			n += int64(e.UncompressedSize64)
+		}
+		return n, nil
+	case "tar":
+		f, err := os.Open(path)
+		if err != nil {
+			return 0, err
+		}
+		defer f.Close()
+		head := make([]byte, 2)
+		if _, err := io.ReadFull(f, head); err != nil {
+			return 0, err
+		}
+		if _, err := f.Seek(0, io.SeekStart); err != nil {
+			return 0, err
+		}
+		var rd io.Reader = f
+		if head[0] == 0x1f && head[1] == 0x8b {
+			gz, err := gzip.NewReader(f)
+			if err != nil {
+				return 0, fmt.Errorf("gzip: %w", err)
+			}
+			defer gz.Close()
+			rd = gz
+		}
+		tr := tar.NewReader(rd)
+		var n int64
+		for {
+			h, err := tr.Next()
+			if err == io.EOF {
+				return n, nil
+			}
+			if err != nil {
+				return 0, fmt.Errorf("tar: %w", err)
+			}
+			n += h.Size
+		}
+	}
+	return 0, nil
 }
 
 // DiscardSystemUpdate removes the link, the file it points to and the recovery marker.

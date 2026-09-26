@@ -53,6 +53,16 @@
             build = '';
         }
     }
+    // B-247: the recovery unpacks the file on the system's own storage; a file that would not fit is
+    // refused before the reboot, with the free and the needed space
+    const gbText = (n: unknown) => `${(Number(n) / 1e9).toFixed(1)} GB`;
+    function updateError(code: string | undefined, message: string, detail?: Record<string, unknown>): string {
+        if (code === 'no-space' && detail) {
+            return t('Not enough space for this update: {free} free on the system, {required} needed to unpack it. Remove old backups on the Backup page, or keep them on a USB stick or a share.', {free: gbText(detail.free), required: gbText(detail.required)});
+        }
+        return message;
+    }
+    const errText = (err: unknown) => (err instanceof ApiError ? updateError(err.code, err.message, err.detail) : (err as Error).message);
     let updFile = $state<File | null>(null);
     let updBusy = $state(false);
     let updNotice = $state('');
@@ -75,8 +85,8 @@
             const fd = new FormData();
             fd.append('file', updFile);
             const res = await fetch('/api/system/v1/system-update/upload', {method: 'POST', body: fd});
-            const data = (await res.json()) as Staged & {error?: string; message?: string; hsts_error?: string};
-            if (data.error) throw new Error(data.message ?? data.error);
+            const data = (await res.json()) as Staged & {error?: string; message?: string; detail?: Record<string, unknown>; hsts_error?: string};
+            if (data.error) throw new Error(updateError(data.error, data.message ?? data.error, data.detail));
             updNotice = [data.warning ?? '', data.hsts_error ? t('HSTS could not be switched off: {e}', {e: data.hsts_error}) : ''].filter(Boolean).join(' ');
             updFile = null;
         } catch (err) {
@@ -137,7 +147,7 @@
         } catch (err) {
             if (err instanceof ApiError) {
                 removeEntry();
-                updNotice = err.message;
+                updNotice = errText(err);
             } else {
                 // no answer at all: the box went away with the request, into the recovery
                 updNotice = '';
@@ -185,7 +195,7 @@
             const u = await api.post<Staged>('/api/system/v1/system-update/download');
             updNotice = u.warning ?? '';
         } catch (err) {
-            updNotice = (err as Error).message;
+            updNotice = errText(err);
         } finally {
             updBusy = false;
             await loadUpdate();

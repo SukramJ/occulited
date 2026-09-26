@@ -35,7 +35,7 @@ export interface Warning {
     id: string;
     variant: string;
     severity: Severity;
-    params?: {addons?: WarnAddon[]; account?: string; at?: string; path?: string; days?: number; verdict?: string; reasons?: StorageReason[]; devices?: WarnDevice[]; mode?: string; reason?: string; adapter?: string; cause?: string; line?: string; families?: string[]; unreachable?: number; total?: number; port?: number; addresses?: string; sgtin?: string; address?: string; name?: string; detail?: string; label?: string; dir?: string; target?: string; share?: string; reconnecting?: boolean; interface?: string; kind?: string; since?: string; checked?: boolean; listeners?: StallListener[]; folder?: string; device?: string; running?: string; newest?: string; node?: string; drops_off?: boolean};
+    params?: {addons?: WarnAddon[]; account?: string; at?: string; path?: string; days?: number; verdict?: string; reasons?: StorageReason[]; devices?: WarnDevice[]; mode?: string; reason?: string; adapter?: string; cause?: string; line?: string; families?: string[]; unreachable?: number; total?: number; port?: number; addresses?: string; sgtin?: string; address?: string; name?: string; detail?: string; label?: string; dir?: string; target?: string; share?: string; reconnecting?: boolean; interface?: string; kind?: string; since?: string; checked?: boolean; listeners?: StallListener[]; folder?: string; device?: string; running?: string; newest?: string; node?: string; drops_off?: boolean; hosts?: string[]; issuer?: string; store?: string; candidate?: boolean};
     href?: string;
     /** this administrator's own silence (D-64) */
     silenced?: Silence;
@@ -97,6 +97,12 @@ export function warningText(w: Warning, words: Words): string {
             return t('Addons that failed: {list}. The Addons page starts them again; the log says why they failed.', {list: names(addons)});
         case 'meta':
             return t('The metadata store had to be recovered from its backup. The last change before the failure may be lost.');
+        case 'trust-ca': {
+            // openccu-lite task 231: a server presents an authority occulited's store lacks (strict)
+            const hosts = (p.hosts ?? [w.variant]).join(', ');
+            const base = t('{hosts}: the server presents a certificate from {issuer}, which the {store} trust store does not hold. The call fails until the authority is added.', {hosts, issuer: p.issuer ?? '', store: p.store ?? 'occulited'});
+            return p.candidate ? `${base} ${t('The System store holds it: one click on the Trust stores page copies it.')}` : base;
+        }
         case 'app-public':
             return t('Control is public: anyone who reaches the web port operates the house, as {account}, without a login.', {account: String(p.account ?? w.variant)});
         case 'unclean':
@@ -122,6 +128,8 @@ export function warningText(w: Warning, words: Words): string {
                 'no-medium': t('The USB stick of the backup target {name} is not plugged in; the other targets got their copy.', {name}),
                 'no-sftp': t('The server of the backup target {name} offers no SFTP.', {name}),
                 'too-old': t('No successful backup to {name} for more than a day.', {name}),
+                // B-247: on the system's own storage the backup keeps room for a system update
+                'update-room': t('The backup to {name} was skipped: on the system itself it would leave too little room for a system update, even with the older backups removed. Use a USB stick or a share.', {name}),
             };
             return why[String(p.cause ?? '')] ?? t('The last backup to {name} failed.', {name});
         }
@@ -239,6 +247,7 @@ const LINK_LABELS: Record<string, string> = {
     arch: 'Addons',
     meta: 'Control',
     'app-public': 'Settings',
+    'trust-ca': 'Trust stores',
     unclean: 'Log',
     'backup-target': 'Backup',
     'backup-userfs': 'Backup',

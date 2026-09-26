@@ -7,6 +7,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/binary"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -204,5 +205,72 @@ func TestDetectRootfsBootfs(t *testing.T) {
 	_ = os.WriteFile(f, vfat, 0o644)
 	if k, err := detectUpdateKind(f); err != nil || k != "bootfs" {
 		t.Errorf("%v %s", err, k)
+	}
+}
+
+// B-247: an update the recovery could not unpack is refused when it is staged, and again when it
+// is armed (a nightly backup may have taken the room since); the answer says free and required.
+func TestUpdateSpace(t *testing.T) {
+	var free int64
+	old := updateFree
+	updateFree = func(string) (int64, error) { return free, nil }
+	t.Cleanup(func() { updateFree = old })
+	zipBody := zipPadded("openccu-lite-x86_64-ova-1.0.0.img", "EULA.en", "EULA.de", "LICENSE") // 4 × 400 bytes unpacked
+	tgzBody := tgzWith("EULA.de", "rootfs.ext4")                                               // 2 × 1500
+	for _, c := range []struct {
+		name     string
+		body     []byte
+		free     int64
+		required int64 // 0: fits
+	}{
+		{"zip fits", zipBody, 1600 + updateSpaceMargin + 1, 0},
+		{"zip: the recovery's rule, not below the free space", zipBody, 1600 + updateSpaceMargin, 1600 + updateSpaceMargin},
+		{"zip, far too little", zipBody, 10 << 20, 1600 + updateSpaceMargin},
+		{"tgz fits", tgzBody, 3000 + updateSpaceMargin + 1, 0},
+		{"tgz too big", tgzBody, 3000, 3000 + updateSpaceMargin},
+		{"a disk image is not unpacked", mbrImage(3, 0x83), 1, 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := rootWith(t, map[string]string{"usr/local/.keep": ""})
+			free = c.free
+			u, err := r.StageSystemUpdate(context.Background(), "openccu-lite-x86_64-ova-1.0.0.zip", 0, bytes.NewReader(c.body))
+			if c.required == 0 {
+				if err != nil || u == nil {
+					t.Fatalf("refused: %v", err)
+				}
+				return
+			}
+			var se *UpdateSpaceError
+			if !errors.As(err, &se) || se.Free != c.free || se.Required != c.required {
+				t.Fatalf("err %v, want free %d required %d", err, c.free, c.required)
+			}
+			if !strings.Contains(err.Error(), "remove old backups") {
+				t.Errorf("no hint: %v", err)
+			}
+			if r.StagedSystemUpdate() != nil {
+				t.Error("staged anyway")
+			}
+			if left, _ := os.ReadDir(r.join("/usr/local/tmp")); len(left) != 0 {
+				t.Errorf("the refused file stayed: %v", left)
+			}
+		})
+	}
+	// staged with room, armed without
+	r := rootWith(t, map[string]string{"usr/local/.keep": ""})
+	free = 1 << 30
+	if _, err := r.StageSystemUpdate(context.Background(), "openccu-lite-x86_64-ova-1.0.0.zip", 0, bytes.NewReader(zipBody)); err != nil {
+		t.Fatal(err)
+	}
+	free = 1 << 20
+	var se *UpdateSpaceError
+	if err := r.ArmSystemUpdate(); !errors.As(err, &se) {
+		t.Fatalf("armed without room: %v", err)
+	}
+	if _, err := os.Stat(r.join("/usr/local/.recoveryMode")); !os.IsNotExist(err) {
+		t.Error("the marker was set")
+	}
+	free = 1 << 30
+	if err := r.ArmSystemUpdate(); err != nil {
+		t.Fatal(err)
 	}
 }

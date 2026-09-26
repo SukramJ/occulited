@@ -4,6 +4,8 @@ export class ApiError extends Error {
         public status: number,
         public code: string,
         message: string,
+        /** the answer's detail object, where the route sends one (e.g. no-space: free, required) */
+        public detail?: Record<string, unknown>,
     ) {
         super(message);
     }
@@ -41,12 +43,12 @@ async function request<T>(method: string, path: string, body?: unknown, extra?: 
     } catch {
         /* non-JSON */
     }
-    const e = (data ?? {}) as {error?: string; message?: string};
+    const e = (data ?? {}) as {error?: string; message?: string; detail?: Record<string, unknown>};
     // a wrong password typed into a confirmation (task 154) or the password change is a 401 too,
     // but the session is still there: only the others sign the shell out
     if (res.status === 401 && e.error !== 'invalid-credentials') window.dispatchEvent(new CustomEvent('ol:unauthenticated'));
     if (!res.ok && res.status !== 304) {
-        throw new ApiError(res.status, e.error ?? 'http', e.message ?? `${res.status} ${res.statusText}`);
+        throw new ApiError(res.status, e.error ?? 'http', e.message ?? `${res.status} ${res.statusText}`, e.detail);
     }
     return data as T;
 }
