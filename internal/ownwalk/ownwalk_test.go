@@ -54,6 +54,10 @@ func (f *fakeOwners) hooks() *hooks {
 			f.chowned = append(f.chowned, k)
 			return nil
 		},
+		chmod: func(fd int, mode uint32) error {
+			// apply for real (the test user owns its own tree), so the tree settles and a re-walk sees it
+			return fchmodFD(fd, mode)
+		},
 		protectedHardlinks: func() bool { return true },
 	}
 }
@@ -622,5 +626,92 @@ func TestOwnQuickDepth(t *testing.T) {
 	}
 	if f.times(t, filepath.Join(root, "outside/secret")) != 0 {
 		t.Error("the link was followed")
+	}
+}
+
+// openccu-lite B-252: TightenModes closes a confined addon's tree to other users - directories to
+// at most 0751, non-www regular files to at most 0640 - and leaves the www subtree world-readable.
+func TestOwnTightensModes(t *testing.T) {
+	root := tree(t, "addon/var/db", "addon/var/sub/secret", "addon/etc/conf", "addon/www/index.html", "addon/www/css/app.css", "addon/already")
+	top := filepath.Join(root, "addon")
+	must := func(p string, m os.FileMode) {
+		t.Helper()
+		if err := os.Chmod(filepath.Join(root, p), m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, d := range []string{"addon", "addon/var", "addon/var/sub", "addon/etc", "addon/www", "addon/www/css"} {
+		must(d, 0o755)
+	}
+	for _, f := range []string{"addon/var/db", "addon/var/sub/secret", "addon/etc/conf", "addon/www/index.html", "addon/www/css/app.css"} {
+		must(f, 0o644)
+	}
+	must("addon/already", 0o600) // a file already tight is not touched
+	f := newFake()
+	o := opts(f)
+	o.TightenModes = true
+	o.PublicDirs = []string{filepath.Join(top, "www")}
+	res := Own([]string{top}, o)
+	if res.Problem() != "" {
+		t.Fatalf("problem: %+v", res)
+	}
+	perm := func(p string) os.FileMode {
+		st, err := os.Stat(filepath.Join(root, p))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return st.Mode().Perm()
+	}
+	// directories, private and www alike, become 0751 (traversable, not listable)
+	for _, d := range []string{"addon", "addon/var", "addon/var/sub", "addon/etc", "addon/www", "addon/www/css"} {
+		if perm(d) != 0o751 {
+			t.Errorf("%s is %o, want 0751", d, perm(d))
+		}
+	}
+	// private files lose the world (and group-write) bits; the already-tight file is untouched
+	for _, ff := range []string{"addon/var/db", "addon/var/sub/secret", "addon/etc/conf"} {
+		if perm(ff) != 0o640 {
+			t.Errorf("%s is %o, want 0640", ff, perm(ff))
+		}
+	}
+	if perm("addon/already") != 0o600 {
+		t.Errorf("an already-tight file was changed to %o", perm("addon/already"))
+	}
+	// the www files keep their mode: served to the browser
+	for _, ff := range []string{"addon/www/index.html", "addon/www/css/app.css"} {
+		if perm(ff) != 0o644 {
+			t.Errorf("%s is %o, want the www file left 0644", ff, perm(ff))
+		}
+	}
+	// counted: 6 dirs + 3 private files (the already-tight file and the two www files are not)
+	if res.ModeTightened != 9 {
+		t.Errorf("ModeTightened %d, want 9", res.ModeTightened)
+	}
+	// a second walk over the settled tree (the same fake, so its owners are the addon's now) changes
+	// nothing
+	f.reset()
+	o2 := o
+	o2.DryRun = true
+	if res := Own([]string{top}, o2); res.Wrong != 0 || res.ModeTightened != 0 || res.Left() != 0 {
+		t.Errorf("a settled tree: %+v", res)
+	}
+}
+
+// The quick check flags a world-readable top so a tree installed 0755 is tightened at the next start.
+func TestOwnTightenModesQuickCheck(t *testing.T) {
+	root := tree(t, "addon/var/db", "addon/settings")
+	top := filepath.Join(root, "addon")
+	for _, p := range []string{"addon", "addon/var", "addon/var/db", "addon/settings"} {
+		if err := os.Chmod(filepath.Join(root, p), map[bool]os.FileMode{true: 0o755, false: 0o644}[strings.HasSuffix(p, "var") || p == "addon"]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f := newFake()
+	o := opts(f)
+	o.TightenModes, o.DryRun, o.MaxDepth = true, true, QuickDepth
+	res := Own([]string{top}, o)
+	// the top and its direct entries (var, settings) are all mode-wrong; nothing below var is looked at
+	if res.Wrong == 0 || res.ModeTightened != 0 {
+		t.Errorf("quick check on a 0755 tree: %+v", res)
 	}
 }

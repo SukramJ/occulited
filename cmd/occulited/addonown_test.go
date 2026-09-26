@@ -152,7 +152,7 @@ func TestAddonOwnQuickCheckFindsAWrongOwner(t *testing.T) {
 	if code := r.run("hmm"); code != 0 || len(r.calls) != 2 || !isQuick(r.calls[0]) || !isWhole(r.calls[1]) {
 		t.Fatalf("exit %d, walks %+v: %s", code, r.calls, r.out.String())
 	}
-	want := "addon-own: hmm: the quick check found 1 entries with another owner at the top, first " + r.root + "/usr/local/addons/hmm/var: the whole tree is walked\n" +
+	want := "addon-own: hmm: the quick check found 1 entries to put right at the top, first " + r.root + "/usr/local/addons/hmm/var: the whole tree is walked\n" +
 		"addon-own: hmm: 20 of 345 entries given to addon-hmm (30007) in 1.00 s\n"
 	if r.out.String() != want {
 		t.Errorf("journal %q, want %q", r.out.String(), want)
@@ -270,5 +270,55 @@ func TestAddonOwnProblems(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// openccu-lite B-252: the subcommand tells the walk to close the tree to other users and to leave the
+// addon's www world-readable; it names the tightening in the journal.
+func TestAddonOwnTightensModesAndKeepsWww(t *testing.T) {
+	r := newOwnRig(t, confinedHmm)
+	// the addon's www, a symlink into its own directory as on the image
+	wwwReal := filepath.Join(r.root, "usr/local/addons/hmm/www")
+	if err := os.MkdirAll(wwwReal, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(r.root, "usr/local/etc/config/addons/www"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(wwwReal, filepath.Join(r.root, "usr/local/etc/config/addons/www/hmm")); err != nil {
+		t.Fatal(err)
+	}
+	r.mark(t)
+	r.answers = []ownwalk.Result{{Checked: 40, ModeTightened: 7, Duration: 120 * time.Millisecond}}
+	if code := r.run("hmm"); code != 0 {
+		t.Fatalf("exit %d: %s", code, r.out.String())
+	}
+	if len(r.calls) != 1 || !r.calls[0].TightenModes {
+		t.Fatalf("the walk was not told to tighten modes: %+v", r.calls)
+	}
+	if len(r.calls[0].PublicDirs) != 1 || r.calls[0].PublicDirs[0] != wwwReal {
+		t.Errorf("the www was not marked public: %v", r.calls[0].PublicDirs)
+	}
+	if !strings.Contains(r.out.String(), "7 entries closed to other users (directories 0751, files 0640; the www tree left)") {
+		t.Errorf("journal %q", r.out.String())
+	}
+}
+
+// A quick check that finds a world-readable top brings the whole walk.
+func TestAddonOwnQuickCheckFindsAWorldReadableTop(t *testing.T) {
+	r := newOwnRig(t, confinedHmm)
+	r.answers = []ownwalk.Result{
+		{Checked: 4, Wrong: 1, FirstWrong: r.root + "/usr/local/addons/hmm"},
+		{Checked: 40, ModeTightened: 6, Duration: time.Second},
+	}
+	if code := r.run("hmm"); code != 0 || len(r.calls) != 2 || !isQuick(r.calls[0]) || !isWhole(r.calls[1]) {
+		t.Fatalf("exit %d, walks %+v: %s", code, r.calls, r.out.String())
+	}
+	if !strings.Contains(r.out.String(), "the quick check found 1 entries to put right at the top") ||
+		!strings.Contains(r.out.String(), "6 entries closed to other users") {
+		t.Errorf("journal %q", r.out.String())
+	}
+	if r.calls[0].TightenModes != true || r.calls[1].TightenModes != true {
+		t.Errorf("both walks tighten modes: %+v", r.calls)
 	}
 }

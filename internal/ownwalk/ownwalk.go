@@ -38,6 +38,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -55,6 +56,19 @@ type Options struct {
 	// MaxDepth is how deep below a top directory the walk goes; 0 = 256. Every level holds one
 	// open descriptor. QuickDepth is the quick check.
 	MaxDepth int
+	// TightenModes, when set, also takes the world-read and world-write bits off the tree, and the
+	// group-write bit, so a confined addon's tree is the addon's alone (openccu-lite B-252): every
+	// directory becomes at most 0751 (kept traversable so a web path through it still works, but not
+	// listable), every regular file at most 0640 - with the group the addon's own (UID == GID), that
+	// is 0600 for anyone else. Only bits are cleared, never added; a link and a special file are
+	// left. Regular files under a PublicDir keep their mode: an addon's web content is served to the
+	// browser (occulited, and lighttpd's own error pages for a proxied addon), so it stays
+	// world-readable. The mode is a reason to change an entry as much as the owner is, so a tree
+	// installed 0755 is tightened at the next start, whether the quick check or the whole walk meets it.
+	TightenModes bool
+	// PublicDirs are resolved absolute directories whose regular files keep their mode under
+	// TightenModes (the addon's www). A file exactly under one, at any depth.
+	PublicDirs []string
 
 	hooks *hooks // tests only
 }
@@ -70,6 +84,7 @@ const QuickDepth = 1
 type hooks struct {
 	owner              func(st Stat) (uid, gid uint32)
 	chown              func(fd, uid, gid int) error
+	chmod              func(fd int, mode uint32) error
 	event              func(what, path string)
 	protectedHardlinks func() bool
 	// trusted is one more uid to trust: in a user namespace the host's root shows as the overflow
@@ -85,6 +100,8 @@ type Result struct {
 	Wrong int `json:"wrong"`
 	// Fixed is how many of those were changed.
 	Fixed int `json:"fixed"`
+	// ModeTightened is how many entries had world (or group-write) bits taken off (B-252).
+	ModeTightened int `json:"mode_tightened,omitempty"`
 	// FirstWrong is the first wrong entry met, for a message.
 	FirstWrong string `json:"first_wrong,omitempty"`
 	// RootOwned counts the wrong entries whose owner is root, FirstRootOwned is the first: B-92's
@@ -117,8 +134,8 @@ type Result struct {
 	Duration time.Duration `json:"duration"`
 }
 
-// Left is how many wrong entries were not changed.
-func (r Result) Left() int { return r.Wrong - r.Fixed }
+// Left is how many wrong entries were not put right - neither given the owner nor tightened.
+func (r Result) Left() int { return r.Wrong - r.Fixed - r.ModeTightened }
 
 // Problem is a one-line account of what went wrong, "" when nothing did: a refused directory, an
 // error, an unfinished walk. Entries left alone on purpose (devices, hard links) are not a problem
@@ -523,20 +540,35 @@ func (w *walker) entry(fd int, path string, depth int, top Stat) {
 	}
 }
 
-// wrong counts an entry whose owner is not the wanted one.
-func (w *walker) wrong(st Stat, path string) bool {
+// ownerWrong reports whether an entry's owner or group is not the wanted one, without counting it.
+func (w *walker) ownerWrong(st Stat) bool {
 	uid, gid := st.UID, st.GID
 	if w.opt.hooks.owner != nil {
 		uid, gid = w.opt.hooks.owner(st)
 	}
-	if uid == uint32(w.opt.UID) && gid == uint32(w.opt.GID) {
+	return uid != uint32(w.opt.UID) || gid != uint32(w.opt.GID)
+}
+
+// ownerUID is st's owner as the walk sees it (the fake layer in tests).
+func (w *walker) ownerUID(st Stat) uint32 {
+	if w.opt.hooks.owner != nil {
+		uid, _ := w.opt.hooks.owner(st)
+		return uid
+	}
+	return st.UID
+}
+
+// wrong counts an entry whose owner is not the wanted one: devices and hard links, which keep their
+// owner in the walk, use its count and its return.
+func (w *walker) wrong(st Stat, path string) bool {
+	if !w.ownerWrong(st) {
 		return false
 	}
 	w.res.Wrong++
 	if w.res.FirstWrong == "" {
 		w.res.FirstWrong = path
 	}
-	if uid == 0 {
+	if w.ownerUID(st) == 0 {
 		w.res.RootOwned++
 		if w.res.FirstRootOwned == "" {
 			w.res.FirstRootOwned = path
@@ -545,26 +577,100 @@ func (w *walker) wrong(st Stat, path string) bool {
 	return true
 }
 
-// fix gives the entry behind fd to the wanted owner when it has another one.
+// tightenMask is the permission bits TightenModes takes off: group-write and every world bit but
+// execute, so a directory ends at most 0751 (still traversable, so a web path through it works, but
+// not listable) and a regular file at most 0640. Only bits are cleared; a tighter mode is left.
+const tightenMask = 0o026
+
+// modeWant is the wanted permission of a directory or regular file under TightenModes, and whether it
+// differs from the current one. A regular file under a PublicDir (the addon's web content) keeps its
+// mode. Nothing to do for another kind, or when TightenModes is off.
+func (w *walker) modeWant(st Stat, path string) (os.FileMode, bool) {
+	if !w.opt.TightenModes {
+		return 0, false
+	}
+	typ := st.typ()
+	if typ != unix.S_IFDIR && typ != unix.S_IFREG {
+		return 0, false
+	}
+	if typ == unix.S_IFREG && w.publicFile(path) {
+		return 0, false
+	}
+	cur := os.FileMode(st.Mode & 0o7777)
+	want := cur &^ tightenMask
+	return want, want != cur
+}
+
+// publicFile reports whether a regular file at path lies in one of the addon's public directories
+// (its www): served to the browser, so it stays world-readable.
+func (w *walker) publicFile(path string) bool {
+	clean := filepath.Clean(path)
+	for _, d := range w.opt.PublicDirs {
+		d = filepath.Clean(d)
+		if clean == d || strings.HasPrefix(clean, d+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// fix gives the entry behind fd to the wanted owner, and under TightenModes takes the world and
+// group-write bits off a directory or a non-public regular file. An entry that needs either is
+// counted wrong once; a dry run counts and changes nothing.
 func (w *walker) fix(fd int, st Stat, path string) {
-	if !w.wrong(st, path) || w.opt.DryRun {
+	ownerBad := w.ownerWrong(st)
+	modeWant, modeBad := w.modeWant(st, path)
+	if ownerBad || modeBad {
+		w.res.Wrong++
+		if w.res.FirstWrong == "" {
+			w.res.FirstWrong = path
+		}
+		if ownerBad && w.ownerUID(st) == 0 {
+			w.res.RootOwned++
+			if w.res.FirstRootOwned == "" {
+				w.res.FirstRootOwned = path
+			}
+		}
+	}
+	if w.opt.DryRun {
 		return
 	}
-	chown := w.opt.hooks.chown
-	if chown == nil {
-		chown = fchownFD
+	if ownerBad {
+		chown := w.opt.hooks.chown
+		if chown == nil {
+			chown = fchownFD
+		}
+		if err := chown(fd, w.opt.UID, w.opt.GID); err != nil {
+			w.fail(path, err)
+			return
+		}
+		w.res.Fixed++
 	}
-	if err := chown(fd, w.opt.UID, w.opt.GID); err != nil {
-		w.fail(path, err)
-		return
+	if modeBad {
+		chmod := w.opt.hooks.chmod
+		if chmod == nil {
+			chmod = fchmodFD
+		}
+		if err := chmod(fd, uint32(modeWant)); err != nil {
+			w.fail(path, err)
+			return
+		}
+		w.res.ModeTightened++
 	}
-	w.res.Fixed++
 }
 
 // fchownFD changes the owner of exactly the inode fd refers to: an empty path relative to the
 // descriptor, and no link followed even if the descriptor were one.
 func fchownFD(fd, uid, gid int) error {
 	return unix.Fchownat(fd, "", uid, gid, unix.AT_EMPTY_PATH|unix.AT_SYMLINK_NOFOLLOW)
+}
+
+// fchmodFD sets the mode of exactly the inode an O_PATH descriptor refers to. fchmod and fchmodat
+// with AT_EMPTY_PATH do not work on an O_PATH descriptor, and the descriptor was opened O_NOFOLLOW on
+// an inode the walk already checked, so the magic /proc/self/fd link is safe: it names that very
+// inode, and a directory or a regular file (the only kinds fix chmods) is not a link.
+func fchmodFD(fd int, mode uint32) error {
+	return os.Chmod("/proc/self/fd/"+strconv.Itoa(fd), os.FileMode(mode))
 }
 
 const statxMask = unix.STATX_TYPE | unix.STATX_MODE | unix.STATX_NLINK | unix.STATX_UID | unix.STATX_GID | unix.STATX_INO | unix.STATX_MNT_ID

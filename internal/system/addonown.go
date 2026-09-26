@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 
@@ -107,6 +108,10 @@ type OwnPlan struct {
 	// Dirs are on the box: the three standard directories and the data directories of the stored
 	// policy that still pass the guard rails.
 	Dirs []string
+	// Public are the resolved directories whose files stay world-readable when the tree is closed to
+	// other users (B-252): the addon's www, served to the browser. Resolved because www is a symlink
+	// on the image; the walk reaches its files through the addon's own directory.
+	Public []string
 	// Refused are data directories of the policy the guard rails refuse now, with the reason.
 	Refused []string
 }
@@ -129,6 +134,12 @@ func AddonOwnPlan(root Root, id string) (*OwnPlan, error) {
 	plan := &OwnPlan{UID: p.UID, User: p.User}
 	for _, d := range standardAddonDirs(id) {
 		plan.Dirs = append(plan.Dirs, root.join(d))
+	}
+	// the addon's web tree stays world-readable: it is served to the browser (occulited, and
+	// lighttpd's own error page for an addon it proxies). www is a symlink on the image, so the
+	// resolved directory is what the walk meets while it descends the addon's own directory.
+	if real, err := filepath.EvalSymlinks(root.join(AddonWWW + "/" + id)); err == nil {
+		plan.Public = append(plan.Public, real)
 	}
 	a := NewSystemdAddons(root, SystemdServices{Root: root})
 	others := a.otherAddonDirs(id)

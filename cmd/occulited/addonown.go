@@ -82,7 +82,9 @@ func addonOwn(env addonOwnEnv, args []string) int {
 		fmt.Fprintf(env.stdout, "addon-own: %s: refused: %v\n", id, err)
 		return 1
 	}
-	opt := ownwalk.Options{UID: plan.UID, GID: plan.UID}
+	// TightenModes closes the tree to other users (openccu-lite B-252): the addon's www keeps its
+	// mode (it is served to the browser), everything else becomes at most 0751/0640.
+	opt := ownwalk.Options{UID: plan.UID, GID: plan.UID, TightenModes: true, PublicDirs: plan.Public}
 	marked := env.root.FullWalkNeeded(id)
 	if !marked {
 		quick := opt
@@ -93,7 +95,7 @@ func addonOwn(env addonOwnEnv, args []string) int {
 		case q.Problem() != "":
 			fmt.Fprintf(env.stdout, "addon-own: %s: the quick check did not look everywhere (%s): the whole tree is walked\n", id, q.Problem())
 		case changes > 0:
-			fmt.Fprintf(env.stdout, "addon-own: %s: the quick check found %d entries with another owner at the top, first %s: the whole tree is walked\n", id, changes, q.FirstWrong)
+			fmt.Fprintf(env.stdout, "addon-own: %s: the quick check found %d entries to put right at the top, first %s: the whole tree is walked\n", id, changes, q.FirstWrong)
 		default:
 			return 0
 		}
@@ -105,6 +107,9 @@ func addonOwn(env addonOwnEnv, args []string) int {
 		fmt.Fprintf(env.stdout, "addon-own: %s: %d of %d entries given to %s (%d) in %.2f s\n", id, res.Fixed, res.Checked, plan.User, plan.UID, res.Duration.Seconds())
 	case marked && res.Wrong == 0 && problem == "":
 		fmt.Fprintf(env.stdout, "addon-own: %s: the whole tree after an install or a policy change: %d entries, all %s's, in %.2f s\n", id, res.Checked, plan.User, res.Duration.Seconds())
+	}
+	if res.ModeTightened > 0 {
+		fmt.Fprintf(env.stdout, "addon-own: %s: %d entries closed to other users (directories 0751, files 0640; the www tree left) in %.2f s\n", id, res.ModeTightened, res.Duration.Seconds())
 	}
 	if n := res.Devices + res.HardLinks; n > 0 {
 		fmt.Fprintf(env.stdout, "addon-own: %s: %d entries keep another owner (%d device nodes, %d files with more than one link), first %s\n", id, n, res.Devices, res.HardLinks, res.FirstWrong)
