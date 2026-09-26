@@ -248,6 +248,23 @@ case("a stale HTTPS cookie before a live HTTP one", { { "Cookie", "__Secure-occu
 case("the removal does not take, with a live cookie", { FORGED_HDR, { "Cookie", "occulite_session=" .. LIVEHTTP } }, nil, 500, nil, "remove")
 case("the removal does not take, no credential", { FORGED_HDR }, nil, 500, nil, "remove")
 case("the header cannot be set", { { "Cookie", "occulite_session=" .. LIVEHTTP } }, nil, 500, nil, "set")
+-- openccu-lite B-230: a client-sent X-Forwarded-For (and the other forwarding headers) never
+-- reaches the addon, in any spelling; lighttpd appends its own element after the gate
+do
+  local function forwarding(headers)
+    local req_header, sent = header_table(headers)
+    local env = setmetatable({ lighty = { r = { req_header = req_header, req_attr = { ["uri.path"] = "/addons/x/", ["request.method"] = "GET", ["uri.authority"] = "box.lan" }, resp_header = {}, resp_body = { set = function() end } }, c = { md = md_stub } }, io = { open = function() return nil end }, print = print }, { __index = _G })
+    local rc = loadfile(gate_path, "t", env)()
+    local left = {}
+    for _, e in ipairs(sent()) do left[#left + 1] = e.name end
+    return rc, table.concat(left, ",")
+  end
+  local rc, left = forwarding({ { "X-Forwarded-For", "127.0.0.1" }, { "x-forwarded-proto", "https" }, { "X-Forwarded-Host", "evil.example" }, { "Forwarded", "for=127.0.0.1" }, { "X_Forwarded_For", "10.99.1.1" }, { "Accept", "text/html" } })
+  want(rc, 302, "forged forwarding headers, no session: answer")
+  want(left, "Accept", "forged forwarding headers: all removed, the rest kept")
+  rc, left = forwarding({ { "X-Forwarded-Fork", "keep" } })
+  want(left, "X-Forwarded-Fork", "a header that only resembles one stays")
+end
 do -- lighttpd before 1.4.60: no lighty.r
   local chunk = loadfile(gate_path, "t", setmetatable({ lighty = {} }, { __index = _G }))
   want(chunk(), 500, "no lighty.r: the gate fails closed")

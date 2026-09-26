@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -18,6 +17,7 @@ import (
 
 	"github.com/hobbyquaker/occulited/internal/acme"
 	"github.com/hobbyquaker/occulited/internal/auth"
+	"github.com/hobbyquaker/occulited/internal/clientaddr"
 	"github.com/hobbyquaker/occulited/internal/config"
 	"github.com/hobbyquaker/occulited/internal/pairing"
 )
@@ -99,6 +99,8 @@ type AuthAPI struct {
 	pubMu      sync.Mutex
 	pubOn      bool
 	pubAccount string
+
+	refused refusedLimit // the flood limit of the refused-login lines (B-231)
 }
 
 // PublicView is the public mode as it stands: whether it is on, and the account it uses.
@@ -332,6 +334,9 @@ func (a *AuthAPI) Middleware(mux *http.ServeMux) http.Handler {
 		}
 		sess := a.session(r)
 		if sess == nil {
+			if presentsToken(r) {
+				a.logRefused(r, "", "token", "unknown, expired or not allowed from this address")
+			}
 			writeJSON(w, http.StatusUnauthorized, apiError{Error: "unauthenticated", Message: "login required"})
 			return
 		}
@@ -342,6 +347,7 @@ func (a *AuthAPI) Middleware(mux *http.ServeMux) http.Handler {
 			return
 		}
 		if known && !allowed(sess, scopes) {
+			a.refusedScope(r, sess, pattern, scopes)
 			forbiddenScope(w, scopes[0])
 			return
 		}
@@ -353,7 +359,14 @@ func (a *AuthAPI) Middleware(mux *http.ServeMux) http.Handler {
 				return
 			}
 		}
-		mux.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, sess)))
+		// task 269: who and from where, for the Info lines of a change (auditlog.go)
+		c := &reqCaller{user: sess.User, remote: remote(r)}
+		r = r.WithContext(context.WithValue(context.WithValue(r.Context(), ctxKey{}, sess), callerKey{}, c))
+		if known && audited(r.Method, pattern, scopes) {
+			a.serveAudited(w, r, mux, c, pattern)
+			return
+		}
+		mux.ServeHTTP(w, r)
 	})
 }
 
@@ -400,15 +413,10 @@ func (a *AuthAPI) RequireSession(next http.Handler) http.Handler {
 	})
 }
 
+// remote is the address the request came from: lighttpd's element of X-Forwarded-For on a
+// connection from the loopback, never a client-sent one (B-230; package clientaddr).
 func remote(r *http.Request) string {
-	if f := r.Header.Get("X-Forwarded-For"); f != "" {
-		return strings.TrimSpace(strings.Split(f, ",")[0])
-	}
-	h, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return h
+	return clientaddr.Of(r)
 }
 
 // secure reports whether the browser reached the box over HTTPS; behind lighttpd that is
@@ -791,10 +799,11 @@ func (a *AuthAPI) ticketRedeem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if sess == nil {
+		a.logRefused(r, "", "ticket", "unknown, spent or run-out ticket")
 		writeJSON(w, http.StatusUnauthorized, apiError{Error: "invalid-ticket", Message: "the ticket is unknown, spent or run out"})
 		return
 	}
-	a.logger().Debug("auth: session handed over by ticket", "user", sess.User, "remote", sess.Remote)
+	a.logLogin(sess, "ticket")
 	a.clearStale(w, r, a.cookieName(r))
 	a.setCookie(w, r, sess.ID)
 	writeJSON(w, 200, map[string]any{"sid": sess.ID, "user": sess.User, "role": sess.Role, "level": sess.Level, "account_id": sess.AccountID, "must_change_password": a.Store.MustChangePassword(sess.User)})
@@ -827,7 +836,7 @@ func (a *AuthAPI) login(w http.ResponseWriter, r *http.Request) {
 	// task 19: with the switch off no account signs in with a password, whatever the name; the
 	// setup (loginWith from setup) is not affected - without an account there is nothing to match
 	if !a.passwordLoginOn() {
-		a.logger().Debug("auth: login refused, password login is switched off", "user", c.Username, "remote", remote(r))
+		a.logRefused(r, c.Username, auth.MethodPassword, "password login off")
 		passwordLoginDisabled(w)
 		return
 	}
@@ -837,16 +846,21 @@ func (a *AuthAPI) login(w http.ResponseWriter, r *http.Request) {
 func (a *AuthAPI) loginWith(w http.ResponseWriter, r *http.Request, c credentials) {
 	// a failed login costs the client a little time: argon2 already does, this keeps it uniform
 	start := time.Now()
-	sess, err := a.Store.Login(c.Username, c.Password, remote(r), r.UserAgent())
+	sess, why, err := a.Store.LoginDetail(c.Username, c.Password, remote(r), r.UserAgent())
 	if err != nil {
-		a.logger().Debug("auth: login refused", "user", c.Username, "remote", remote(r), "err", err)
+		reason := why.Reason
+		if reason == "" {
+			reason = err.Error() // setup required, or the session could not be written
+		}
+		a.logRefused(r, c.Username, auth.MethodPassword, reason)
+		a.logLockout(r, c.Username, why)
 		if d := 300*time.Millisecond - time.Since(start); d > 0 {
 			time.Sleep(d)
 		}
 		authErr(w, err)
 		return
 	}
-	a.logger().Debug("auth: login", "user", sess.User, "role", sess.Role, "remote", sess.Remote)
+	a.logLogin(sess, auth.MethodPassword)
 	a.clearStale(w, r, a.cookieName(r))
 	a.setCookie(w, r, sess.ID)
 	writeJSON(w, 200, map[string]any{"sid": sess.ID, "user": sess.User, "role": sess.Role, "level": sess.Level, "account_id": sess.AccountID, "must_change_password": a.Store.MustChangePassword(sess.User)})
@@ -1080,7 +1094,7 @@ func (a *AuthAPI) createToken(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	a.logger().Info("auth: token created", "name", b.Name, "scopes", scopes, "expires", b.Expires, "ips", b.IPs, "by", SessionFrom(r).User)
+	withCaller(r, a.logger()).Info("auth: token created", "name", b.Name, "scopes", scopes, "expires", b.Expires, "ips", b.IPs)
 	out := map[string]any{"name": b.Name, "scopes": scopes, "token": secret}
 	if b.Expires != nil {
 		out["expires"] = b.Expires
@@ -1155,7 +1169,7 @@ func (a *AuthAPI) oidcCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := a.OIDC.Finish(r.Context(), q.Get("state"), q.Get("code"))
 	if err != nil {
-		a.logger().Warn("oidc: login failed", "err", err, "remote", remote(r))
+		a.logRefused(r, "", auth.MethodOIDC, "provider: "+logName(err.Error()))
 		http.Redirect(w, r, "/login?error="+url.QueryEscape(err.Error()), http.StatusFound)
 		return
 	}
@@ -1165,16 +1179,16 @@ func (a *AuthAPI) oidcCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	sess, err := a.Store.LoginExternal("oidc", id.Username, remote(r), r.UserAgent())
 	if errors.Is(err, auth.ErrUnknownUser) {
-		a.logger().Warn("oidc: no account of that name on this box; the login is refused and nothing is created", "user", id.Username, "subject", id.Subject, "remote", remote(r))
+		a.logRefused(r, id.Username, auth.MethodOIDC, "unknown user (nothing is created)", "subject", logName(id.Subject))
 		http.Redirect(w, r, "/login?error=no-account&user="+url.QueryEscape(id.Username), http.StatusFound)
 		return
 	}
 	if err != nil {
-		a.logger().Warn("oidc: no session", "user", id.Username, "err", err)
+		a.logRefused(r, id.Username, auth.MethodOIDC, err.Error())
 		http.Redirect(w, r, "/login?error="+url.QueryEscape("account "+id.Username+": "+err.Error()), http.StatusFound)
 		return
 	}
-	a.logger().Info("oidc: login", "user", sess.User, "role", sess.Role, "remote", sess.Remote)
+	a.logLogin(sess, auth.MethodOIDC)
 	a.clearStale(w, r, a.cookieName(r))
 	a.setCookie(w, r, sess.ID)
 	// the cookie is the session on this host; the shell reads its id from GET /state. Until task
@@ -1332,7 +1346,7 @@ func (a *AuthAPI) authConfigPut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if on := cfg.Auth.PasswordLoginOn(); on != wasOn {
-		a.logger().Info("auth: password login switched", "password_login", on, "by", SessionFrom(r).User)
+		withCaller(r, a.logger()).Info("auth: password login switched", "password_login", on)
 	}
 	writeJSON(w, 200, a.view(cfg.Auth, cfg.Auth.EffectiveMode() != a.runningMode()))
 }

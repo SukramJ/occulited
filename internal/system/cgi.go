@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hobbyquaker/occulited/internal/clientaddr"
 	"github.com/hobbyquaker/occulited/internal/priv"
 )
 
@@ -162,12 +163,7 @@ func (c CGIRunner) env(r *http.Request, name, script, file, pathInfo string, bod
 			port = "443"
 		}
 	}
-	remote := r.Header.Get("X-Forwarded-For")
-	if remote == "" {
-		remote, _, _ = net.SplitHostPort(r.RemoteAddr)
-	} else {
-		remote = strings.TrimSpace(strings.Split(remote, ",")[0])
-	}
+	remote := clientaddr.Of(r) // lighttpd's element, never a client-sent one (B-230)
 	env := []string{
 		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 		"HOME=/root",

@@ -640,7 +640,7 @@ func (a *SystemAPI) radioFirmwareFlash(w http.ResponseWriter, r *http.Request) {
 		Module string `json:"module"`
 		File   string `json:"file"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
+	if err := decodeSmall(w, r, &b); err != nil {
 		badBody(w, err)
 		return
 	}
@@ -686,7 +686,10 @@ func (a *SystemAPI) putLANGateways(w http.ResponseWriter, r *http.Request) {
 		Gateways []system.LANGatewaySpec `json:"gateways"`
 		Restart  bool                    `json:"restart"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := decodeSmall(w, r, &body); err != nil {
+		if bodyTooLarge(w, err) {
+			return
+		}
 		writeJSON(w, http.StatusBadRequest, apiError{Error: "bad-request", Message: err.Error()})
 		return
 	}
@@ -717,7 +720,10 @@ func (a *SystemAPI) lanGatewayKey(w http.ResponseWriter, r *http.Request) {
 		Class, Serial, IP, Key, CurrentKey string
 	}
 	var raw map[string]string
-	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+	if err := decodeSmall(w, r, &raw); err != nil {
+		if bodyTooLarge(w, err) {
+			return
+		}
 		writeJSON(w, http.StatusBadRequest, apiError{Error: "bad-request", Message: err.Error()})
 		return
 	}
@@ -739,7 +745,10 @@ func (a *SystemAPI) securityKey(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Key string `json:"key"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := decodeSmall(w, r, &body); err != nil {
+		if bodyTooLarge(w, err) {
+			return
+		}
 		writeJSON(w, http.StatusBadRequest, apiError{Error: "bad-request", Message: err.Error()})
 		return
 	}
@@ -901,7 +910,7 @@ func (a *SystemAPI) reinstallDismiss(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	slog.Info("addons: reinstall hint dismissed", "by", who(r), "addon", id, "version", found.Version)
+	reqLog(r).Info("addons: reinstall hint dismissed", "addon", id, "version", found.Version)
 	writeJSON(w, 200, map[string]any{"ok": true, "id": id, "version": found.Version})
 }
 
@@ -1771,7 +1780,7 @@ func (a *SystemAPI) catalogSettings(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	slog.Info("catalog: daily check switched", "on", b.Daily, "by", who(r))
+	reqLog(r).Info("catalog: daily check switched", "on", b.Daily)
 	writeJSON(w, 200, map[string]any{"ok": true, "daily": b.Daily})
 }
 
@@ -1796,7 +1805,7 @@ func (a *SystemAPI) systemUpdateSettings(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	}
-	slog.Info("system update: daily check switched", "on", b.Enabled, "by", who(r))
+	reqLog(r).Info("system update: daily check switched", "on", b.Enabled)
 	writeJSON(w, 200, map[string]any{"ok": true, "enabled": b.Enabled})
 }
 
@@ -1905,7 +1914,7 @@ func (a *SystemAPI) backup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if a.BackupCrypt != nil && a.BackupCrypt.Enabled() {
-		slog.Info("backup: unencrypted download although encryption is on", "by", who(r), "remote", remote(r), "file", name)
+		reqLog(r).Info("backup: unencrypted download although encryption is on", "file", name)
 	}
 	w.Header().Set("Content-Disposition", "attachment; filename=\""+name+"\"")
 	if st != nil {
@@ -2011,7 +2020,7 @@ func (a *SystemAPI) restoreApply(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnprocessableEntity, apiError{Error: "restore-failed", Message: err.Error() + ": " + out})
 		return
 	}
-	slog.Info("restore: backup staged for the next boot", "by", who(r), "file", body.File, "force", body.Force)
+	reqLog(r).Info("restore: backup staged for the next boot", "file", body.File, "force", body.Force)
 	if a.Manager == nil {
 		writeJSON(w, 200, map[string]any{"ok": true, "output": out, "rebooting": false, "message": "restore staged; reboot to apply it"})
 		return
@@ -2552,7 +2561,7 @@ func (a *SystemAPI) addonPolicyPut(w http.ResponseWriter, r *http.Request) {
 		// boot and restarts nothing. A body with it and without a mode changes only the switch.
 		StartEarly *bool `json:"start_early"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := decodeSmall(w, r, &body); err != nil {
 		badBody(w, err)
 		return
 	}

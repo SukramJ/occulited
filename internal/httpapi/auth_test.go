@@ -195,6 +195,10 @@ func TestAPITokens(t *testing.T) {
 	if st, out, _ := do(t, srv, "GET", "/api/meta/v1/snapshot", "", map[string]string{"Authorization": lan["Authorization"], "X-Forwarded-For": "192.168.7.7"}); st != 401 {
 		t.Fatalf("outside the ranges: %d %v", st, out)
 	}
+	// B-230: a client-sent element in range before lighttpd's does not open the token
+	if st, out, _ := do(t, srv, "GET", "/api/meta/v1/snapshot", "", map[string]string{"Authorization": lan["Authorization"], "X-Forwarded-For": "10.1.2.3, 192.168.7.7"}); st != 401 {
+		t.Fatalf("a forged in-range element: %d %v", st, out)
+	}
 	st, out, _ = do(t, srv, "GET", "/api/auth/v1/tokens", "", hdr)
 	if st != 200 || len(out["tokens"].([]any)) != 2 || len(out["scopes"].([]any)) != 15 {
 		t.Fatalf("list: %d %v", st, out)
@@ -304,7 +308,7 @@ func TestOIDCLogin(t *testing.T) {
 	if loc != "/login?error=no-account&user=basti" || cookie != "" {
 		t.Fatalf("unknown name: %q cookie %q", loc, cookie)
 	}
-	if !strings.Contains(logs.String(), "no account of that name") || !strings.Contains(logs.String(), "user=basti") || !strings.Contains(logs.String(), "remote=127.0.0.1") {
+	if !strings.Contains(logs.String(), "reason=\"unknown user (nothing is created)\"") || !strings.Contains(logs.String(), "method=oidc") || !strings.Contains(logs.String(), "user=basti") || !strings.Contains(logs.String(), "remote=127.0.0.1") {
 		t.Errorf("log: %s", logs.String())
 	}
 	st, out, _ = do(t, srv, "GET", "/api/auth/v1/users", "", admin)

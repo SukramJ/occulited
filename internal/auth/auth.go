@@ -38,6 +38,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -694,7 +695,11 @@ const (
 // double the peak on a small box
 var hashSem = make(chan struct{}, 1)
 
+// hashes counts the argon2 computations; the tests use it to see that a refusal cost one
+var hashes atomic.Int64
+
 func idKey(pw string, salt []byte, t, m uint32, p uint8, n uint32) []byte {
+	hashes.Add(1)
 	hashSem <- struct{}{}
 	defer func() {
 		<-hashSem
@@ -714,6 +719,23 @@ func HashPassword(pw string) (string, error) {
 	}
 	key := idKey(pw, salt, argonTime, argonMemory, argonThreads, argonKeyLen)
 	return fmt.Sprintf("argon2id$m=%d,t=%d,p=%d$%s$%s", argonMemory, argonTime, argonThreads, base64.RawStdEncoding.EncodeToString(salt), base64.RawStdEncoding.EncodeToString(key)), nil
+}
+
+// dummyHash is what a password is verified against when the account does not exist or has no
+// password (B-233): the refusal then costs the same argon2 run as a wrong password, so the time
+// of the answer does not tell which account names exist. The parameters are the current ones;
+// the key is not the hash of any known password, so nothing ever verifies against it.
+var dummyHash = fmt.Sprintf("argon2id$m=%d,t=%d,p=%d$%s$%s", argonMemory, argonTime, argonThreads,
+	"b2NjdWxpdGVkLWR1bW15", "4ebZYjMVzOmZcI8q4fS8m0V9rJzV2Y3n4Sx6QvS7x1A")
+
+// verifyOrBurn verifies pw against the account's hash, or against dummyHash when there is none,
+// and reports whether it matched: always false without a hash.
+func verifyOrBurn(u *User, ok bool, pw string) bool {
+	if !ok || u == nil || u.Hash == "" {
+		verifyPassword(dummyHash, pw)
+		return false
+	}
+	return verifyPassword(u.Hash, pw)
 }
 
 func verifyPassword(hash, pw string) bool {
@@ -1016,7 +1038,8 @@ func (s *Store) lockedOut(key string) bool {
 	return false
 }
 
-func (s *Store) recordFailure(key string) {
+// recordFailure counts a failed attempt for key and reports whether it started a lockout.
+func (s *Store) recordFailure(key string) bool {
 	now := s.opt.Now()
 	kept := s.failures[key][:0]
 	for _, t := range s.failures[key] {
@@ -1029,31 +1052,69 @@ func (s *Store) recordFailure(key string) {
 	if len(kept) >= s.opt.LockAfter {
 		s.locked[key] = now.Add(s.opt.LockFor)
 		delete(s.failures, key)
+		return true
+	}
+	return false
+}
+
+// Refusal says why a password login was refused, for the log only (B-231): the caller's answer
+// stays the generic one. Nothing in it is a secret.
+type Refusal struct {
+	// Reason is "unknown user", "no password", "wrong password" or "locked".
+	Reason string
+	// LockedUser and LockedRemote are set when this attempt started a lockout of the name or the
+	// address; Until is when it ends.
+	LockedUser, LockedRemote bool
+	Until                    time.Time
+}
+
+// failLogin records a failed attempt for the name and the address and fills the refusal.
+func (s *Store) failLogin(name, remote string, why *Refusal) {
+	why.LockedUser = s.recordFailure("u:" + name)
+	why.LockedRemote = s.recordFailure("r:" + remote)
+	if why.LockedUser || why.LockedRemote {
+		why.Until = s.opt.Now().Add(s.opt.LockFor)
 	}
 }
 
 // Login verifies credentials and opens a session. remote is the client address for lockout and
 // the session list; agent the User-Agent.
 func (s *Store) Login(name, pw, remote, agent string) (*Session, error) {
+	sess, _, err := s.LoginDetail(name, pw, remote, agent)
+	return sess, err
+}
+
+// LoginDetail is Login that also says why a login was refused, for the log (B-231).
+func (s *Store) LoginDetail(name, pw, remote, agent string) (*Session, Refusal, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_ = s.reload()
+	var why Refusal
 	if len(s.users) == 0 {
-		return nil, ErrSetupRequired
+		return nil, why, ErrSetupRequired
 	}
 	if s.lockedOut("u:"+name) || s.lockedOut("r:"+remote) {
-		return nil, ErrLockedOut
+		why.Reason = "locked"
+		return nil, why, ErrLockedOut
 	}
 	u, ok := s.users[name]
 	// an account without a password (the provider's) fails like a wrong password: the page must
 	// not tell an attacker which names exist and how they sign in
-	if !ok || u.Hash == "" || !verifyPassword(u.Hash, pw) {
-		s.recordFailure("u:" + name)
-		s.recordFailure("r:" + remote)
-		return nil, ErrInvalidCredentials
+	if !verifyOrBurn(u, ok, pw) {
+		switch {
+		case !ok:
+			why.Reason = "unknown user"
+		case u.Hash == "":
+			why.Reason = "no password"
+		default:
+			why.Reason = "wrong password"
+		}
+		s.failLogin(name, remote, &why)
+		return nil, why, ErrInvalidCredentials
 	}
 	delete(s.failures, "u:"+name)
-	return s.openSession(name, u.Level, MethodPassword, remote, agent)
+	sess, err := s.openSession(name, u.Level, MethodPassword, remote, agent)
+	return sess, why, err
 }
 
 // openSession opens a session for a user who has just authenticated, mirrors it for the gate and

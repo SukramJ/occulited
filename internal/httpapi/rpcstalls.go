@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log/slog"
 	"net/http"
 	"net/netip"
 	"os"
@@ -354,7 +353,7 @@ func (a *SystemAPI) radioStallDrop(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err != nil {
-		slog.Warn("rpc: ending the connection to a listener that does not answer failed", "user", s.User, "interface", body.Interface, "listener", found.Address, "err", err)
+		reqLog(r).Warn("rpc: ending the connection to a listener that does not answer failed", "interface", body.Interface, "listener", found.Address, "err", err)
 		status := http.StatusBadGateway
 		code := "drop-failed"
 		if errors.Is(err, priv.ErrDropNotAllowed) || strings.Contains(err.Error(), priv.ErrDropNotAllowed.Error()) {
@@ -367,7 +366,7 @@ func (a *SystemAPI) radioStallDrop(w http.ResponseWriter, r *http.Request) {
 		entries = left
 		left = deregister(10 * time.Second)
 	}
-	slog.Info("rpc: connection to a listener that does not answer ended", "user", s.User, "interface", body.Interface, "listener", found.Address, "id", found.ID, "connections", n, "deregistered", len(entries)-len(left))
+	reqLog(r).Info("rpc: connection to a listener that does not answer ended", "interface", body.Interface, "listener", found.Address, "id", found.ID, "connections", n, "deregistered", len(entries)-len(left))
 	// the next read checks afresh
 	a.stalls.mu.Lock()
 	if v, ok := a.stalls.results[body.Interface]; ok {

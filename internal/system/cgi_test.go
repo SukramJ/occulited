@@ -62,7 +62,9 @@ func TestCGIRunner(t *testing.T) {
 	req := httptest.NewRequest("POST", "http://box.lan/addons/mosq/index.cgi/extra/path?sid=@abc@&x=1", strings.NewReader("a=b"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Cookie", "sid=abc")
-	req.Header.Set("X-Forwarded-For", "192.168.1.9")
+	// through lighttpd (B-230): a client-sent element first, lighttpd's last; only the last counts
+	req.RemoteAddr = "127.0.0.1:40000"
+	req.Header.Set("X-Forwarded-For", "10.99.1.1, 192.168.1.9")
 	// B-94: the gate's session header reaches the CGI; a look-alike that maps to the same variable
 	// does not (lighttpd removes those; a raw map entry stands for a caller on the loopback)
 	req.Header.Set("X-Occulite-Session", "ABCDEFGHIJ")

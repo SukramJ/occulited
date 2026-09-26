@@ -68,7 +68,7 @@ func TestRadioSubscriberRemove(t *testing.T) {
 		wantLog     string
 	}{
 		{name: "removed", role: auth.RoleAdmin, body: `{"interface":"BidCos-RF","id":"olt_test","url":"http://127.0.0.1:59999"}`, drop: true,
-			wantStatus: 200, wantRemoved: true, wantCalls: []string{"BidCos-RF http://127.0.0.1:59999 "}, wantLog: `msg="radio: subscription removed" user=u interface=BidCos-RF id=olt_test url=http://127.0.0.1:59999 removed=true`},
+			wantStatus: 200, wantRemoved: true, wantCalls: []string{"BidCos-RF http://127.0.0.1:59999 "}, wantLog: `msg="radio: subscription removed" user=u remote=192.0.2.1 interface=BidCos-RF id=olt_test url=http://127.0.0.1:59999 removed=true`},
 		{name: "the entry stays", role: auth.RoleAdmin, body: `{"interface":"BidCos-RF","id":"olt_test","url":"http://127.0.0.1:59999"}`,
 			wantStatus: 200, wantRemoved: false, wantCalls: []string{"BidCos-RF http://127.0.0.1:59999 "}, wantLog: "removed=false"},
 		{name: "a user", role: auth.RoleUser, body: `{"interface":"BidCos-RF","id":"olt_test","url":"http://127.0.0.1:59999"}`, drop: true,

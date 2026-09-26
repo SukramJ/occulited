@@ -268,7 +268,7 @@ func (a *AuthAPI) pairingSettings(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	a.pairLog().Info("pairing: switched", "enabled", *b.Enabled, "by", byUser(r))
+	withCaller(r, a.pairLog()).Info("pairing: switched", "enabled", *b.Enabled)
 	writeJSON(w, 200, a.pairingView())
 }
 
@@ -310,7 +310,7 @@ func (a *AuthAPI) rotateToken(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, apiError{Error: "not_found", Message: "only a stored token rotates: " + err.Error()})
 		return
 	}
-	a.pairLog().Info("auth: token rotated", "token", name)
+	withCaller(r, a.pairLog()).Info("auth: token rotated", "token", name)
 	writeJSON(w, 200, map[string]any{"token": secret, "name": name, "previous_valid_s": 60})
 }
 

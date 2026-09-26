@@ -103,8 +103,32 @@ func writeErr(w http.ResponseWriter, err error) {
 	writeJSON(w, http.StatusInternalServerError, apiError{Error: "internal", Message: err.Error()})
 }
 
+// smallBody is the limit of a JSON body of a few fields (B-232): more is 413 before the decoder
+// has grown the heap by it.
+const smallBody = 64 << 10
+
 func badBody(w http.ResponseWriter, err error) {
+	if bodyTooLarge(w, err) {
+		return
+	}
 	writeJSON(w, http.StatusUnprocessableEntity, apiError{Error: "invalid-body", Message: err.Error()})
+}
+
+// bodyTooLarge answers 413 too-large with the limit when err is a body over its route's limit
+// (http.MaxBytesReader's error), and reports whether it did.
+func bodyTooLarge(w http.ResponseWriter, err error) bool {
+	var mb *http.MaxBytesError
+	if !errors.As(err, &mb) {
+		return false
+	}
+	writeJSON(w, http.StatusRequestEntityTooLarge, apiError{Error: "too-large", Message: fmt.Sprintf("the body exceeds %d bytes", mb.Limit), Detail: map[string]any{"limit": mb.Limit}})
+	return true
+}
+
+// decodeSmall decodes a JSON body of a few fields, at most smallBody bytes (B-232). Every JSON
+// body goes through this, readJSON or a MaxBytesReader of its own; TestNoUnboundedBody keeps it so.
+func decodeSmall(w http.ResponseWriter, r *http.Request, v any) error {
+	return json.NewDecoder(http.MaxBytesReader(w, r.Body, smallBody)).Decode(v)
 }
 
 func readJSON(r *http.Request, v any) error {
@@ -113,7 +137,7 @@ func readJSON(r *http.Request, v any) error {
 		return err
 	}
 	if len(b) > maxBody {
-		return fmt.Errorf("body exceeds %d bytes", maxBody)
+		return &http.MaxBytesError{Limit: maxBody}
 	}
 	if len(strings.TrimSpace(string(b))) == 0 {
 		return fmt.Errorf("empty body")

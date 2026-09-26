@@ -38,7 +38,7 @@ func (a *SystemAPI) exchangeRetry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s := SessionFrom(r); s != nil {
-		slog.Info("adapter exchange: retry", "user", s.User)
+		reqLog(r).Info("adapter exchange: retry")
 	}
 	writeJSON(w, http.StatusAccepted, a.exchange())
 }

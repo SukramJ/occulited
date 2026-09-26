@@ -67,19 +67,31 @@ local function is_session_header(name)
     return (name:upper():gsub("[^%w]", "_")) == "X_OCCULITE_SESSION"
 end
 
+-- The forwarding headers (openccu-lite B-230): lighttpd's mod_proxy appends the client's address
+-- to an X-Forwarded-For the client sent instead of replacing it, so a client-sent one goes here as
+-- it does everywhere else in the fork's global script (occulite-session-header.lua): the only
+-- element left is lighttpd's own. It appends to a client's Forwarded the same way, and sets
+-- X-Forwarded-Proto and X-Forwarded-Host itself; all four go, whatever the spelling (the session
+-- header's rule).
+local FORWARDING = { X_FORWARDED_FOR = true, X_FORWARDED_PROTO = true, X_FORWARDED_HOST = true, FORWARDED = true }
+local function is_stripped(name)
+    local cgi = (name:upper():gsub("[^%w]", "_"))
+    return cgi == "X_OCCULITE_SESSION" or FORWARDING[cgi] == true
+end
+
 -- Names first, removal after: the table is not changed while pairs() walks it. Then a second walk,
 -- which must find none of them left with a value; lighttpd keeps a removed header as an empty
 -- entry and forwards no empty header.
 local function strip_session_header()
     local names = {}
     for k in pairs(r.req_header) do
-        if is_session_header(k) then names[#names + 1] = k end
+        if is_stripped(k) then names[#names + 1] = k end
     end
     for _, k in ipairs(names) do
         r.req_header[k] = nil
     end
     for k, v in pairs(r.req_header) do
-        if is_session_header(k) and v ~= nil and v ~= "" then return false end
+        if is_stripped(k) and v ~= nil and v ~= "" then return false end
     end
     return true
 end

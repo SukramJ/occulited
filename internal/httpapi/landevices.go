@@ -6,10 +6,8 @@ package httpapi
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net"
 	"net/http"
 	"net/netip"
@@ -318,14 +316,13 @@ func arpComplete(ip netip.Addr) bool {
 // gateway's new address goes into rfd.conf / hs485d.conf and the daemon restarts; afterwards the
 // device is looked for again, and every write is logged (without the password).
 func (a *SystemAPI) lanNetwork(w http.ResponseWriter, r *http.Request) {
-	// system:write (the route's scope) is an administrator's; the user is named in the log
-	user := ""
-	if s := SessionFrom(r); s != nil {
-		user = s.User
-	}
+	// system:write (the route's scope) is an administrator's; the lines name the caller (reqLog)
 	serial := r.PathValue("serial")
 	var b lanNetworkBody
-	if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
+	if err := decodeSmall(w, r, &b); err != nil {
+		if bodyTooLarge(w, err) {
+			return
+		}
 		writeJSON(w, http.StatusBadRequest, apiError{Error: "bad-request", Message: err.Error()})
 		return
 	}
@@ -408,9 +405,9 @@ func (a *SystemAPI) lanNetwork(w http.ResponseWriter, r *http.Request) {
 		oldRun = dev.Runtime.IP
 	}
 	restarts, err := finder.Configure(ctx, to, dev.Type, dev.Serial, cfg, password)
-	logAttrs := []any{"user", user, "device", dev.Type, "serial", serial, "old_ip", oldRun, "old_static_ip", old.IP, "old_dhcp", dev.Config.DHCP, "new_dhcp", cfg.DHCP, "new_ip", cfg.IP, "new_netmask", cfg.Netmask, "new_gateway", cfg.Gateway}
+	logAttrs := []any{"device", dev.Type, "serial", serial, "old_ip", oldRun, "old_static_ip", old.IP, "old_dhcp", dev.Config.DHCP, "new_dhcp", cfg.DHCP, "new_ip", cfg.IP, "new_netmask", cfg.Netmask, "new_gateway", cfg.Gateway}
 	if err != nil {
-		slog.Warn("lan device: the network settings were not taken", append(logAttrs, "err", err)...)
+		reqLog(r).Warn("lan device: the network settings were not taken", append(logAttrs, "err", err)...)
 		switch {
 		case errors.Is(err, eq3disc.ErrWrongPassword):
 			writeJSON(w, http.StatusUnprocessableEntity, apiError{Error: "wrong-password", Message: "the device did not take the password"})
@@ -421,7 +418,7 @@ func (a *SystemAPI) lanNetwork(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	slog.Info("lan device: network settings written", append(logAttrs, "restarts", restarts)...)
+	reqLog(r).Info("lan device: network settings written", append(logAttrs, "restarts", restarts)...)
 	out := map[string]any{"written": true, "restarts": restarts}
 	// a configured gateway keeps its place in rfd.conf / hs485d.conf: the daemon connects to the
 	// address written there, so a new static address goes in, and the daemon restarts
@@ -438,7 +435,7 @@ func (a *SystemAPI) lanNetwork(w http.ResponseWriter, r *http.Request) {
 			out["gateway_file_error"] = err.Error()
 		} else {
 			out["gateway_file"] = true
-			slog.Info("lan device: the gateway's address updated", "serial", serial, "service", class.Service(), "ip", cfg.IP)
+			reqLog(r).Info("lan device: the gateway's address updated", "serial", serial, "service", class.Service(), "ip", cfg.IP)
 			if a.Services != nil {
 				if o, err := a.Services.Control(ctx, class.Service(), "restart"); err != nil {
 					out["restart_error"] = fmt.Sprintf("%v: %s", err, o)

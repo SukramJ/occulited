@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"errors"
-	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -97,7 +96,7 @@ func (a *SystemAPI) sshKeyAdd(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, apiError{Error: "internal", Message: err.Error()})
 		return
 	}
-	slog.Info("ssh: key added", "type", k.Type, "fingerprint", k.Fingerprint, "comment", k.Comment, "by", who(r), "remote", remote(r))
+	reqLog(r).Info("ssh: key added", "type", k.Type, "fingerprint", k.Fingerprint, "comment", k.Comment)
 	writeJSON(w, http.StatusCreated, k)
 }
 
@@ -119,7 +118,7 @@ func (a *SystemAPI) sshKeyRemove(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, apiError{Error: "internal", Message: err.Error()})
 		return
 	}
-	slog.Info("ssh: key removed", "type", k.Type, "fingerprint", k.Fingerprint, "comment", k.Comment, "by", who(r), "remote", remote(r))
+	reqLog(r).Info("ssh: key removed", "type", k.Type, "fingerprint", k.Fingerprint, "comment", k.Comment)
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
@@ -158,7 +157,7 @@ func (a *SystemAPI) sshSessionEnd(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, apiError{Error: "internal", Message: err.Error()})
 		return
 	}
-	slog.Info("ssh: session ended", "user", s.User, "from", s.From, "port", s.Port, "by", who(r), "remote", remote(r))
+	reqLog(r).Info("ssh: session ended", "ssh_user", s.User, "from", s.From, "port", s.Port)
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
@@ -180,6 +179,6 @@ func (a *SystemAPI) sshKeyOnly(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, apiError{Error: "internal", Message: err.Error()})
 		return
 	}
-	slog.Info("ssh: only key login switched", "on", body.On, "by", who(r), "remote", remote(r))
+	reqLog(r).Info("ssh: only key login switched", "on", body.On)
 	a.ssh(w, r)
 }

@@ -109,7 +109,7 @@ func (a *SystemAPI) rpcTracePut(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnprocessableEntity, apiError{Error: "invalid", Message: err.Error()})
 		return
 	}
-	a.liteLog().Info("rpc trace: switched", "mode", b.Mode, "minutes", b.Minutes, "by", SessionFrom(r).User)
+	withCaller(r, a.liteLog()).Info("rpc trace: switched", "mode", b.Mode, "minutes", b.Minutes)
 	writeJSON(w, 200, a.rpcTraceView())
 }
 
@@ -503,7 +503,7 @@ func (a *SystemAPI) liteStreamClose(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, apiError{Error: "not-found", Message: "no such stream (any more)"})
 		return
 	}
-	a.liteLog().Info("lite-rpc: a stream closed from the Interfaces page", "stream", r.PathValue("id"), "by", SessionFrom(r).User)
+	withCaller(r, a.liteLog()).Info("lite-rpc: a stream closed from the Interfaces page", "stream", r.PathValue("id"))
 	w.WriteHeader(http.StatusNoContent)
 }
 

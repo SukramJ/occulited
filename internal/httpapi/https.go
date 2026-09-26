@@ -159,7 +159,7 @@ func (a *SystemAPI) httpsPut(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	got, err := a.HTTPS.Set(r.Context(), s, func(l string) { slog.Info("https: " + l) })
+	got, err := a.HTTPS.Set(r.Context(), s, func(l string) { reqLog(r).Info("https: " + l) })
 	if err != nil {
 		if errors.Is(err, system.ErrHTTPSInvalid) {
 			writeJSON(w, http.StatusUnprocessableEntity, apiError{Error: "invalid", Message: err.Error()})

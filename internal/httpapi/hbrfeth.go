@@ -117,11 +117,7 @@ func (a *SystemAPI) hbRFETHPut(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, apiError{Error: "write-failed", Message: err.Error()})
 		return
 	}
-	by := ""
-	if s := SessionFrom(r); s != nil {
-		by = s.User
-	}
-	a.hbLog().Info("radio: HB-RF-ETH address set", "address", addr, "by", by)
+	withCaller(r, a.hbLog()).Info("radio: HB-RF-ETH address set", "address", addr)
 	a.HBRFETH.Kick()
 	writeJSON(w, 200, a.hbRFETHView(r.Context()))
 }

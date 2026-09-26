@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"errors"
-	"log/slog"
 	"net/http"
 
 	"github.com/hobbyquaker/occulited/internal/firewall"
@@ -183,7 +182,7 @@ func (a *SystemAPI) remoteAccessPut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	want := system.ClassicRPC{Plain: b.Classic.Plain, TLS: b.Classic.TLS, Auth: b.Classic.Auth}
-	if _, err := a.ClassicRPC.Set(r.Context(), want, func(l string) { slog.Info("remote access: " + l) }); err != nil {
+	if _, err := a.ClassicRPC.Set(r.Context(), want, func(l string) { reqLog(r).Info("remote access: " + l) }); err != nil {
 		if errors.Is(err, system.ErrClassicRPCInvalid) {
 			writeJSON(w, http.StatusUnprocessableEntity, apiError{Error: "invalid", Message: err.Error()})
 			return
@@ -220,7 +219,7 @@ func (a *SystemAPI) classicPasswordPut(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnprocessableEntity, apiError{Error: "invalid", Message: "either a password or generate, not both"})
 		return
 	}
-	gen, err := a.ClassicRPC.SetPassword(r.Context(), b.User, b.Password, b.Generate, func(l string) { slog.Info("remote access: " + l) })
+	gen, err := a.ClassicRPC.SetPassword(r.Context(), b.User, b.Password, b.Generate, func(l string) { reqLog(r).Info("remote access: " + l) })
 	if err != nil {
 		if errors.Is(err, system.ErrClassicRPCInvalid) {
 			writeJSON(w, http.StatusUnprocessableEntity, apiError{Error: "invalid", Message: err.Error()})

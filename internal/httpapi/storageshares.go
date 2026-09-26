@@ -118,7 +118,7 @@ func (a *SystemAPI) shareSaved(w http.ResponseWriter, r *http.Request, s shares.
 		applyErr = err.Error()
 		slog.Warn("shares: the mount units were not written", "share", s.ID, "err", err)
 	}
-	slog.Info("shares: saved", "by", who(r), "share", s.ID, "kind", s.Kind, "source", s.Source(), "read_only", s.ReadOnly, "created", created)
+	reqLog(r).Info("shares: saved", "share", s.ID, "kind", s.Kind, "source", s.Source(), "read_only", s.ReadOnly, "created", created)
 	v, err := a.Shares.View(s.ID)
 	if err != nil {
 		writeErr(w, err)
@@ -144,7 +144,7 @@ func (a *SystemAPI) sharesDelete(w http.ResponseWriter, r *http.Request) {
 		writeShareErr(w, err)
 		return
 	}
-	slog.Info("shares: removed (the files on the share stay)", "by", who(r), "share", id)
+	reqLog(r).Info("shares: removed (the files on the share stay)", "share", id)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -157,7 +157,7 @@ func (a *SystemAPI) sharesTest(w http.ResponseWriter, r *http.Request) {
 		writeShareErr(w, err)
 		return
 	}
-	slog.Info("shares: tested", "by", who(r), "share", r.PathValue("id"), "state", res.State, "step", res.Step)
+	reqLog(r).Info("shares: tested", "share", r.PathValue("id"), "state", res.State, "step", res.Step)
 	writeJSON(w, 200, res)
 }
 

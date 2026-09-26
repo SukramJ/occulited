@@ -168,17 +168,13 @@ func (a *SystemAPI) storageUSBFormat(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	by := ""
-	if s := SessionFrom(r); s != nil {
-		by = s.User
-	}
-	slog.Warn("storage: formatting a USB stick", "disk", d.Name, "vendor", d.Vendor, "model", d.Model, "serial", d.Serial, "size_bytes", d.Size, "fs", body.FS, "label", body.Label, "by", by)
+	reqLog(r).Warn("storage: formatting a USB stick", "disk", d.Name, "vendor", d.Vendor, "model", d.Model, "serial", d.Serial, "size_bytes", d.Size, "fs", body.FS, "label", body.Label)
 	if err := h.USBFormat(r.Context(), priv.USBFormatSpec{Device: d.Name, FS: body.FS, Label: body.Label}); err != nil {
 		slog.Error("storage: formatting failed", "disk", d.Name, "err", err)
 		helperError(w, err)
 		return
 	}
-	slog.Info("storage: USB stick formatted", "disk", d.Name, "fs", body.FS, "label", body.Label, "by", by)
+	reqLog(r).Info("storage: USB stick formatted", "disk", d.Name, "fs", body.FS, "label", body.Label)
 	out := a.usbView(r.Context())
 	out["formatted"] = d.Name
 	writeJSON(w, 200, out)
@@ -195,11 +191,7 @@ func (a *SystemAPI) storageUSBEject(w http.ResponseWriter, r *http.Request) {
 		helperError(w, err)
 		return
 	}
-	by := ""
-	if s := SessionFrom(r); s != nil {
-		by = s.User
-	}
-	slog.Info("storage: USB stick removed safely", "disk", d.Name, "model", d.Model, "by", by)
+	reqLog(r).Info("storage: USB stick removed safely", "disk", d.Name, "model", d.Model)
 	out := a.usbView(r.Context())
 	out["ejected"] = d.Name
 	writeJSON(w, 200, out)

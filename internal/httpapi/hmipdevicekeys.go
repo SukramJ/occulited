@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"errors"
-	"log/slog"
 	"net/http"
 
 	"github.com/hobbyquaker/occulited/internal/system"
@@ -111,7 +110,7 @@ func (a *SystemAPI) deviceKeysExport(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	keys := a.HmIPDeviceKeys.Export(r.Context())
-	slog.Info("hmip device keys: exported", "by", sess.User, "remote", remote(r), "keys", len(keys))
+	reqLog(r).Info("hmip device keys: exported", "keys", len(keys))
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, 200, map[string]any{"keys": keys})
 }

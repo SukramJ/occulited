@@ -119,7 +119,7 @@ func (a *SystemAPI) encryptionConfirm(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	slog.Info("backup encryption: recovery key set", "by", who(r), "fingerprint", st.Recovery.Fingerprint, "previous", len(st.Previous))
+	reqLog(r).Info("backup encryption: recovery key set", "fingerprint", st.Recovery.Fingerprint, "previous", len(st.Previous))
 	a.encryptionView(w, r)
 }
 
@@ -143,7 +143,7 @@ func (a *SystemAPI) encryptionPut(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	slog.Info("backup encryption: switched", "by", who(r), "enabled", b.Enabled)
+	reqLog(r).Info("backup encryption: switched", "enabled", b.Enabled)
 	a.encryptionView(w, r)
 }
 
@@ -345,7 +345,7 @@ func (a *SystemAPI) restoreDecrypt(w http.ResponseWriter, r *http.Request) {
 		// openccu-lite B-194: a damaged upload is gone with the refusal (no key will open it);
 		// a wrong key keeps it, the right one may come next
 		if errors.Is(err, backupcrypt.ErrCorrupt) {
-			slog.Info("restore: damaged encrypted upload removed", "by", who(r), "file", body.File, "err", err)
+			reqLog(r).Info("restore: damaged encrypted upload removed", "file", body.File, "err", err)
 			writeJSON(w, http.StatusUnprocessableEntity, apiError{Error: "corrupt", Message: err.Error(), Detail: map[string]any{"upload_removed": true}})
 			return
 		}
@@ -364,7 +364,7 @@ func (a *SystemAPI) restoreDecrypt(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	c := a.Root.CheckBackup(r.Context(), a.Run, out)
-	slog.Info("restore: backup decrypted with the recovery key", "by", who(r), "file", filepath.Base(out), "key", enc.Known)
+	reqLog(r).Info("restore: backup decrypted with the recovery key", "file", filepath.Base(out), "key", enc.Known)
 	writeJSON(w, 200, map[string]any{"file": filepath.Base(out), "check": c, "encryption": enc})
 }
 

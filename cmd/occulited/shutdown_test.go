@@ -132,3 +132,59 @@ func TestStopClosesWhatOutlivesTheLimit(t *testing.T) {
 	}
 	_, _ = io.Copy(io.Discard, body) // closed by the server: returns rather than hangs
 }
+
+// B-232: an idle keep-alive connection is closed after idleTimeout, while a stream that writes
+// less often than that - the SSE streams, the log follow, lite-rpc's events - lives on.
+func TestIdleTimeoutSparesTheStreams(t *testing.T) {
+	old := idleTimeout
+	idleTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { idleTimeout = old })
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /stream", func(w http.ResponseWriter, r *http.Request) {
+		for i := 0; i < 4; i++ {
+			_, _ = io.WriteString(w, "tick\n")
+			w.(http.Flusher).Flush()
+			select {
+			case <-time.After(300 * time.Millisecond): // longer than the idle timeout
+			case <-r.Context().Done():
+				return
+			}
+		}
+	})
+	mux.HandleFunc("GET /ping", func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, "pong") })
+	_, _, base, _ := startServer(t, mux)
+
+	res, err := http.Get(base + "/stream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := io.ReadAll(res.Body)
+	res.Body.Close()
+	if err != nil || strings.Count(string(b), "tick") != 4 {
+		t.Fatalf("the stream ended early: %q %v", b, err)
+	}
+
+	// a raw keep-alive connection: one request, then silence - the server closes it
+	c, err := net.Dial("tcp", strings.TrimPrefix(base, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if _, err := io.WriteString(c, "GET /ping HTTP/1.1\r\nHost: x\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	br := bufio.NewReader(c)
+	res2, err := http.ReadResponse(br, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.ReadAll(res2.Body)
+	_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	start := time.Now()
+	if _, err := br.ReadByte(); err != io.EOF {
+		t.Fatalf("the idle connection was not closed: %v", err)
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Errorf("closed after %v", d)
+	}
+}

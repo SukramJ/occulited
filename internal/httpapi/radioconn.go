@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 
@@ -67,7 +66,7 @@ func (a *SystemAPI) radioConnectionsPreview(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	var b radioConnBody
-	if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
+	if err := decodeSmall(w, r, &b); err != nil {
 		badBody(w, err)
 		return
 	}
@@ -85,7 +84,7 @@ func (a *SystemAPI) putRadioConnections(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var b radioConnBody
-	if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
+	if err := decodeSmall(w, r, &b); err != nil {
 		badBody(w, err)
 		return
 	}

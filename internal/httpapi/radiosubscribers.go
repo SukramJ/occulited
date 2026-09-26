@@ -3,7 +3,6 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
-	"log/slog"
 	"net/http"
 	"time"
 
@@ -66,12 +65,12 @@ func (a *SystemAPI) radioSubscriberRemove(w http.ResponseWriter, r *http.Request
 	err := a.InitInterface(ctx, body.Interface, body.URL, "")
 	cancel()
 	if err != nil {
-		slog.Warn("radio: removing a subscription failed", "user", s.User, "interface", body.Interface, "id", body.ID, "url", body.URL, "err", err)
+		reqLog(r).Warn("radio: removing a subscription failed", "interface", body.Interface, "id", body.ID, "url", body.URL, "err", err)
 		writeJSON(w, http.StatusBadGateway, apiError{Error: "interface-call", Message: body.Interface + ": " + err.Error()})
 		return
 	}
 	removed := waitRemoved(r.Context(), a.Root, body.Interface, body.ID, body.URL)
-	slog.Info("radio: subscription removed", "user", s.User, "interface", body.Interface, "id", body.ID, "url", body.URL, "removed", removed)
+	reqLog(r).Info("radio: subscription removed", "interface", body.Interface, "id", body.ID, "url", body.URL, "removed", removed)
 	writeJSON(w, 200, map[string]any{"removed": removed, "subscribers": a.Root.InterfaceSubscribers(body.Interface)})
 }
 

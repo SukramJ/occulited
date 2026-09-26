@@ -194,7 +194,7 @@ func (a *SystemAPI) saveTarget(w http.ResponseWriter, r *http.Request, t backupt
 			slog.Warn("backup targets: the mount units were not written", "target", saved.ID, "err", err)
 		}
 	}
-	slog.Info("backup targets: saved", "by", who(r), "target", saved.ID, "kind", saved.Kind, "created", created)
+	reqLog(r).Info("backup targets: saved", "target", saved.ID, "kind", saved.Kind, "created", created)
 	v, err := m.View(r.Context(), saved.ID)
 	if err != nil {
 		writeErr(w, err)
@@ -220,7 +220,7 @@ func (a *SystemAPI) targetsDelete(w http.ResponseWriter, r *http.Request) {
 		writeTargetErr(w, err)
 		return
 	}
-	slog.Info("backup targets: removed (the files on the target stay)", "by", who(r), "target", id)
+	reqLog(r).Info("backup targets: removed (the files on the target stay)", "target", id)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -265,7 +265,7 @@ func (a *SystemAPI) startRun(w http.ResponseWriter, r *http.Request, instance st
 		writeTargetErr(w, err)
 		return
 	}
-	slog.Info("backup: back up now", "by", who(r), "instance", instance)
+	reqLog(r).Info("backup: back up now", "instance", instance)
 	writeJSON(w, http.StatusAccepted, map[string]any{"started": true, "instance": instance})
 }
 
@@ -317,7 +317,7 @@ func (a *SystemAPI) targetsKeypair(w http.ResponseWriter, r *http.Request) {
 		writeTargetErr(w, err)
 		return
 	}
-	slog.Info("backup targets: a new SSH key", "by", who(r), "target", r.PathValue("id"))
+	reqLog(r).Info("backup targets: a new SSH key", "target", r.PathValue("id"))
 	writeJSON(w, 200, map[string]any{"public_key": line})
 }
 
@@ -349,7 +349,7 @@ func (a *SystemAPI) targetsHostKeyPut(w http.ResponseWriter, r *http.Request) {
 		writeTargetErr(w, err)
 		return
 	}
-	slog.Info("backup targets: host key trusted", "by", who(r), "target", r.PathValue("id"), "fingerprint", v.Fingerprint)
+	reqLog(r).Info("backup targets: host key trusted", "target", r.PathValue("id"), "fingerprint", v.Fingerprint)
 	writeJSON(w, 200, v)
 }
 
@@ -368,7 +368,7 @@ func (a *SystemAPI) backupNightlyPut(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	slog.Info("backup: nightly run switched", "by", who(r), "enabled", b.Enabled)
+	reqLog(r).Info("backup: nightly run switched", "enabled", b.Enabled)
 	writeJSON(w, 200, map[string]any{"enabled": a.BackupTargets.Store.Nightly(), "time": NightlyTime})
 }
 
@@ -393,7 +393,7 @@ func (a *SystemAPI) openTargetBackup(w http.ResponseWriter, r *http.Request) (io
 		writeTargetErr(w, err)
 		return nil, "", false
 	}
-	slog.Info("restore: a backup from a target", "by", who(r), "target", b.Target, "file", b.Name)
+	reqLog(r).Info("restore: a backup from a target", "target", b.Target, "file", b.Name)
 	return &cancelCloser{ReadCloser: rc, cancel: cancel}, b.Name, true
 }
 

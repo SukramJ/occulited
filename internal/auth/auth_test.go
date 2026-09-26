@@ -3,6 +3,7 @@ package auth
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"golang.org/x/crypto/argon2"
 	"os"
 	"path/filepath"
@@ -601,5 +602,51 @@ func TestConsoleWriteKeepsOwner(t *testing.T) {
 	}
 	if sys := st.Sys().(*syscall.Stat_t); sys.Uid != 4242 || sys.Gid != 4243 {
 		t.Errorf("owner %d:%d", sys.Uid, sys.Gid)
+	}
+}
+
+// B-233: a login for an unknown account or one without a password runs the same argon2 as a wrong
+// password, so the answer's time does not tell which names exist.
+func TestLoginUnknownAccountCostsAHash(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir, Options{SessionDir: filepath.Join(dir, "sessions"), LockAfter: 100}) // no lockout's fast path in the timing
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Setup("admin", "secret123"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateUserWithoutPassword("carol", RoleUser); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"admin", "nobody", "carol"} {
+		before := hashes.Load()
+		if _, err := s.Login(name, "wrong-pw1", "192.0.2."+name[:1], ""); err != ErrInvalidCredentials {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if n := hashes.Load() - before; n != 1 {
+			t.Errorf("%s: %d argon2 runs for a refusal, want 1", name, n)
+		}
+	}
+	// the dummy hash has the current parameters and parses: its run costs what a real one does
+	if !strings.HasPrefix(dummyHash, fmt.Sprintf("argon2id$m=%d,t=%d,p=%d$", argonMemory, argonTime, argonThreads)) {
+		t.Errorf("dummy hash parameters: %s", dummyHash)
+	}
+	// a coarse timing check: the fastest refusal of an unknown name is not faster than half the
+	// fastest refusal of a known one
+	fastest := func(name string) time.Duration {
+		best := time.Hour
+		for i := 0; i < 3; i++ {
+			start := time.Now()
+			_, _ = s.Login(name, "wrong-pw1", fmt.Sprintf("198.51.100.%d", i+10), "")
+			if d := time.Since(start); d < best {
+				best = d
+			}
+		}
+		return best
+	}
+	known, unknown := fastest("admin"), fastest("nobody2")
+	if unknown < known/2 {
+		t.Errorf("unknown account refused in %v, known in %v", unknown, known)
 	}
 }

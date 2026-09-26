@@ -202,6 +202,13 @@ func TestHomematicCGI(t *testing.T) {
 	if st, b := call(live, "192.0.2.1:1234", ""); st != 404 {
 		t.Fatalf("from the LAN: %d %s", st, b)
 	}
+	// B-230: a client-sent X-Forwarded-For comes before lighttpd's element and is never the address
+	if st, b := call(live, "127.0.0.1:5", "127.0.0.1, 192.168.1.9"); st != 404 {
+		t.Fatalf("a forged loopback through lighttpd: %d %s", st, b)
+	}
+	if st, b := call(live, "192.0.2.1:1234", "127.0.0.1"); st != 404 {
+		t.Fatalf("a forged loopback from the LAN directly: %d %s", st, b)
+	}
 	for _, body := range []string{
 		`{"method":"Event.poll","params":{"_session_id_":"WRONGSID"}}`,
 		`{"method":"Session.login","params":{"_session_id_":"` + s.SID() + `"}}`,
