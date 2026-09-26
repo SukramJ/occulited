@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -169,6 +171,58 @@ type LeftoverRun struct {
 	Removed []string `json:"removed"`
 	Paths   []string `json:"paths,omitempty"`
 	Freed   int64    `json:"freed_bytes"`
+	// Hardened lists the world-writable directories under /usr/local/etc/config whose mode was
+	// fixed at first boot, and the removed empty addons/mh leftover (B-257).
+	Hardened []string `json:"hardened,omitempty"`
+}
+
+// hardenConfigDirs (B-257) is the first-boot cleanup of the CCU's world-writable leftover
+// directories under /usr/local/etc/config. The base firmware creates /usr/local/etc/config/addons/mh
+// (the WebUI's mediola/cloudmatic directory) mode 0777 so the ReGa's processes could write it; on
+// lite nothing reads it, so it is the one directory under config any local user may write - a place
+// to drop a file, and a hazard if a later feature ever walks addons/* as root. This removes it when
+// it is empty, and takes the world-writable bit off every directory under config otherwise (a sweep
+// for any 0777 directory, not mh alone). It runs as occulited (occulite) and fixes the mode through
+// the privilege helper; a directory occulite cannot enter (a daemon's 0700 tree) is not world-
+// writable and is skipped. Returns the paths (relative to config) it changed.
+func (r Root) hardenConfigDirs() []string {
+	base := r.join("/usr/local/etc/config")
+	var fixed []string
+	// the empty CCU leftover goes; a non-empty one only loses its world-writable bit below, so no
+	// file a user may still want is deleted behind their back
+	mh := filepath.Join(base, "addons", "mh")
+	if fi, err := os.Lstat(mh); err == nil && fi.IsDir() {
+		if ents, _ := os.ReadDir(mh); len(ents) == 0 {
+			if err := Priv.RemoveAll(mh); err == nil {
+				fixed = append(fixed, "addons/mh (removed, empty)")
+				slog.Info("ccu leftovers: removed the empty world-writable directory", "path", "addons/mh")
+			} else {
+				slog.Warn("ccu leftovers: could not remove addons/mh", "err", err)
+			}
+		}
+	}
+	_ = filepath.WalkDir(base, func(p string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil // a directory occulite cannot enter is not world-writable; skip it
+		}
+		if !d.IsDir() {
+			return nil
+		}
+		fi, err := d.Info()
+		if err != nil || fi.Mode().Perm()&0o002 == 0 {
+			return nil
+		}
+		mode := fi.Mode().Perm() &^ 0o002 // take the world-writable bit off, keep the rest
+		if err := Priv.Chmod(p, mode); err != nil {
+			slog.Warn("ccu leftovers: could not take the world-writable bit off a directory", "path", p, "err", err)
+			return nil
+		}
+		rel := strings.TrimPrefix(strings.TrimPrefix(p, base), "/")
+		fixed = append(fixed, fmt.Sprintf("%s (o-w, now %04o)", rel, mode))
+		slog.Info("ccu leftovers: took the world-writable bit off a directory", "path", rel, "mode", fmt.Sprintf("%04o", mode))
+		return nil
+	})
+	return fixed
 }
 
 // ErrMigrationIncomplete: the first start's own migration has not finished; nothing is removed and
@@ -212,6 +266,8 @@ func (r Root) RemoveLeftoversOnce(stateDir string, importSettled bool, now time.
 	if run.Removed == nil {
 		run.Removed = []string{}
 	}
+	// B-257: fix the CCU's world-writable leftover directories in the same first-boot pass
+	run.Hardened = r.hardenConfigDirs()
 	if err != nil {
 		return run, true, err // no marker: what is left is tried again at the next start
 	}

@@ -83,3 +83,49 @@ func TestRemoveLeftoversOnce(t *testing.T) {
 		t.Fatal("no marker for an empty run")
 	}
 }
+
+// B-257: the first-boot pass removes the empty world-writable CCU leftover addons/mh and takes the
+// world-writable bit off any other 0777 directory under /usr/local/etc/config, and leaves the rest.
+func TestRemoveLeftoversHardensConfig(t *testing.T) {
+	root := Root(t.TempDir())
+	state := t.TempDir()
+	cfg := filepath.Join(string(root), "usr/local/etc/config")
+	mkdir := func(p string, mode os.FileMode) {
+		full := filepath.Join(string(root), p)
+		if err := os.MkdirAll(full, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(full, mode); err != nil { // MkdirAll applies the umask; set it exactly
+			t.Fatal(err)
+		}
+	}
+	mkdir("usr/local/etc/config/addons/mh", 0o777)    // the empty leftover: removed
+	mkdir("usr/local/etc/config/addons/other", 0o777) // world-writable but not empty: chmod
+	_ = os.WriteFile(filepath.Join(cfg, "addons/other/keep"), []byte("x"), 0o644)
+	mkdir("usr/local/etc/config/addons/normal", 0o755) // fine: untouched
+	// addons itself must stay traversable and not world-writable so the walk can reach the leaves
+	_ = os.Chmod(filepath.Join(cfg, "addons"), 0o755)
+
+	run, ran, err := root.RemoveLeftoversOnce(state, true, time.Now(), nil, nil)
+	if err != nil || !ran {
+		t.Fatalf("%v %v", ran, err)
+	}
+	if _, err := os.Lstat(filepath.Join(cfg, "addons/mh")); !os.IsNotExist(err) {
+		t.Error("the empty addons/mh was not removed")
+	}
+	if fi, err := os.Stat(filepath.Join(cfg, "addons/other")); err != nil {
+		t.Error("addons/other was removed, not just hardened")
+	} else if fi.Mode().Perm()&0o002 != 0 {
+		t.Errorf("addons/other is still world-writable: %04o", fi.Mode().Perm())
+	}
+	if fi, _ := os.Stat(filepath.Join(cfg, "addons/normal")); fi == nil || fi.Mode().Perm() != 0o755 {
+		t.Error("addons/normal was changed")
+	}
+	if len(run.Hardened) < 2 {
+		t.Errorf("the run did not record both changes: %v", run.Hardened)
+	}
+	// once only: the marker keeps it from running again
+	if _, ran, _ := root.RemoveLeftoversOnce(state, true, time.Now(), nil, nil); ran {
+		t.Error("the hardening ran twice")
+	}
+}
