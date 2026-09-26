@@ -32,6 +32,11 @@ const (
 	updateDefault = "firmwareUpdateFile"
 )
 
+// MaxSystemUpdate is the ceiling for a staged system-update upload (B-256): the largest release
+// image (the OVA zip is ~700 MB) plus headroom. It caps the copy so a lying or chunked
+// Content-Length cannot run past it. A var so a test can lower it without writing 2 GiB.
+var MaxSystemUpdate int64 = 2 << 30
+
 // StagedUpdate describes the file /usr/local/.firmwareUpdate points to.
 type StagedUpdate struct {
 	File     string    `json:"file"`
@@ -118,6 +123,17 @@ func (r Root) StageSystemUpdate(ctx context.Context, name string, size int64, sr
 	if err := Priv.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
+	// B-256: size is the client's Content-Length claim, -1 for a chunked body and the whole body
+	// for a multipart one. It may not be trusted as the only guard - a chunked upload (size <= 0)
+	// skipped the space check, and the copy below ran until EOF with no cap, so one request could
+	// fill the userfs (where occulited's own state, the backups and the journal live). A claim over
+	// the ceiling is refused before anything is written; when the claim is a plausible size the free
+	// space is checked against it as before; and the copy itself is capped, so a lying or chunked
+	// length cannot run past the ceiling whatever the claim said - the copy fails at ENOSPC and
+	// removes its file if the disk fills first, and the final size is the bytes actually written.
+	if size > MaxSystemUpdate {
+		return nil, fmt.Errorf("the update is larger than %d MB", MaxSystemUpdate>>20)
+	}
 	if size > 0 {
 		var fs syscall.Statfs_t
 		if err := syscall.Statfs(dir, &fs); err == nil {
@@ -129,9 +145,13 @@ func (r Root) StageSystemUpdate(ctx context.Context, name string, size int64, sr
 	r.DiscardSystemUpdate()
 	path := filepath.Join(dir, name)
 	// written into occulited's staging directory (same filesystem), checked, then moved
-	tmp, n, err := stageFile(r, name+".part", readerCtx{ctx, src})
+	tmp, n, err := stageFile(r, name+".part", io.LimitReader(readerCtx{ctx, src}, MaxSystemUpdate+1))
 	if err != nil {
 		return nil, err
+	}
+	if n > MaxSystemUpdate {
+		os.Remove(tmp)
+		return nil, fmt.Errorf("the update is larger than %d MB", MaxSystemUpdate>>20)
 	}
 	kind, err := detectUpdateKind(tmp)
 	if err != nil {

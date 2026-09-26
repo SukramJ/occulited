@@ -137,6 +137,39 @@ func TestStageSystemUpdateRejects(t *testing.T) {
 	}
 }
 
+// B-256: the upload has a ceiling. A Content-Length claim over the cap is refused before anything is
+// written; a body over the cap is refused even when the claim lies small (a chunked upload), and
+// neither leaves a .part behind.
+func TestStageSystemUpdateCap(t *testing.T) {
+	old := MaxSystemUpdate
+	MaxSystemUpdate = 1 << 20 // 1 MiB, so the test writes kilobytes, not gigabytes
+	defer func() { MaxSystemUpdate = old }()
+	staging := func(r Root) int {
+		e, _ := os.ReadDir(r.join(StagingDir))
+		return len(e)
+	}
+	// a Content-Length claim over the cap: refused before any write
+	r := rootWith(t, map[string]string{"usr/local/.keep": ""})
+	if _, err := r.StageSystemUpdate(context.Background(), "f", MaxSystemUpdate+1, bytes.NewReader([]byte("PK"))); err == nil {
+		t.Error("a Content-Length over the cap was accepted")
+	}
+	if staging(r) != 0 || r.StagedSystemUpdate() != nil {
+		t.Error("the over-cap claim left a file or link")
+	}
+	// a body over the cap with a small (lying) Content-Length, and with none at all (chunked):
+	// the copy cap catches it, no .part is left
+	big := bytes.Repeat([]byte("a"), int(MaxSystemUpdate)+4096)
+	for _, size := range []int64{10, 0} {
+		r := rootWith(t, map[string]string{"usr/local/.keep": ""})
+		if _, err := r.StageSystemUpdate(context.Background(), "f", size, bytes.NewReader(big)); err == nil {
+			t.Errorf("size=%d: a body over the cap was accepted", size)
+		}
+		if staging(r) != 0 || r.StagedSystemUpdate() != nil {
+			t.Errorf("size=%d: an over-cap body left a file or link", size)
+		}
+	}
+}
+
 func TestReleaseNames(t *testing.T) {
 	r := rootWith(t, map[string]string{"VERSION": "VERSION=3.89.8.20260719\nPRODUCT=ova\nPLATFORM=ova\nVARIANT=lite\nLITE=0-beta.1\n"})
 	for name, want := range map[string][2]string{

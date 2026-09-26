@@ -126,7 +126,9 @@ func (r Root) storeUpload(content io.Reader, name string) (string, error) {
 		return "", err
 	}
 	path := filepath.Join(dir, "restore-"+name)
-	tmp, _, err := stageFile(r, "restore-"+name+".part", content)
+	// B-256: the callers already cap content (a 2 GiB backup), but stageFile is bounded here too so
+	// no path stages an unbounded reader - the invariant the walker test in staging_test.go checks.
+	tmp, _, err := stageFile(r, "restore-"+name+".part", io.LimitReader(content, MaxSBKUpload))
 	if err != nil {
 		return "", err
 	}
