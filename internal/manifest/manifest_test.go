@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -72,6 +73,13 @@ func TestParseRefuses(t *testing.T) {
 		"start":         `{"format": 1, "id": "x", "name": "X", "runtime": {"start": "late"}}`,
 		"scope":         `{"format": 1, "id": "x", "name": "X", "runtime": {"api_scopes": ["*"]}}`,
 		"not json":      `{`,
+		// B-251: a confined addon (no "root": true) may not declare a root-equivalent capability
+		// or the occulite/root group.
+		"confined cap sys_admin":  `{"format": 1, "id": "x", "name": "X", "runtime": {"capabilities": ["CAP_SYS_ADMIN"]}}`,
+		"confined cap dac read":   `{"format": 1, "id": "x", "name": "X", "runtime": {"capabilities": ["CAP_DAC_READ_SEARCH"]}}`,
+		"confined cap net admin":  `{"format": 1, "id": "x", "name": "X", "runtime": {"capabilities": ["CAP_NET_ADMIN"]}}`,
+		"confined group occulite": `{"format": 1, "id": "x", "name": "X", "runtime": {"groups": ["occulite"]}}`,
+		"confined group root":     `{"format": 1, "id": "x", "name": "X", "runtime": {"groups": ["root"]}}`,
 	}
 	for name, body := range cases {
 		if _, err := Parse([]byte(body)); err == nil {
@@ -80,6 +88,41 @@ func TestParseRefuses(t *testing.T) {
 	}
 	if _, err := Parse(bytes.Repeat([]byte(" "), MaxSize+1)); err == nil {
 		t.Error("an oversized manifest was accepted")
+	}
+}
+
+// TestConfinedDenylist checks the B-251 denylist: a confined addon is refused a root-equivalent
+// capability or group, while the same declaration is accepted for a root addon (the user's *root
+// (unsafe)* choice), and a harmless capability or group is accepted either way.
+func TestConfinedDenylist(t *testing.T) {
+	accepted := []string{
+		// harmless for a confined addon
+		`{"format": 1, "id": "x", "name": "X", "runtime": {"capabilities": ["CAP_NET_BIND_SERVICE", "CAP_NET_RAW"]}}`,
+		`{"format": 1, "id": "x", "name": "X", "runtime": {"groups": ["dialout", "video"]}}`,
+		// a root addon may declare CAP_SYS_ADMIN (D-66) and any group - it runs as root
+		`{"format": 1, "id": "x", "name": "X", "runtime": {"root": true, "capabilities": ["CAP_SYS_ADMIN"]}}`,
+		`{"format": 1, "id": "x", "name": "X", "runtime": {"root": true, "groups": ["occulite"]}}`,
+	}
+	for _, body := range accepted {
+		if _, err := Parse([]byte(body)); err != nil {
+			t.Errorf("refused %s: %v", body, err)
+		}
+	}
+	// every capability on the denylist is refused for a confined addon
+	for _, c := range DeniedConfinedCaps() {
+		body := fmt.Sprintf(`{"format": 1, "id": "x", "name": "X", "runtime": {"capabilities": [%q]}}`, c)
+		if _, err := Parse([]byte(body)); err == nil {
+			t.Errorf("confined addon accepted denied capability %s", c)
+		}
+	}
+	for _, g := range DeniedConfinedGroups() {
+		body := fmt.Sprintf(`{"format": 1, "id": "x", "name": "X", "runtime": {"groups": [%q]}}`, g)
+		if _, err := Parse([]byte(body)); err == nil {
+			t.Errorf("confined addon accepted denied group %s", g)
+		}
+	}
+	if len(DeniedConfinedCaps()) < 14 {
+		t.Errorf("the capability denylist shrank to %d; the maintainer's floor is 14", len(DeniedConfinedCaps()))
 	}
 }
 

@@ -119,9 +119,44 @@ func TestDropInRootMayMount(t *testing.T) {
 			t.Errorf("root drop-in:\n%s", got)
 		}
 	}
-	// a confined addon's set is what it declares, as before
-	if got := renderDropIn(&AddonPolicy{ID: "x", Mode: "confined", UID: 30005, User: "addon-x", Runtime: &AddonRuntime{Capabilities: []string{CapSysAdmin}}}, false); !strings.Contains(got, "AmbientCapabilities=CAP_SYS_ADMIN\nCapabilityBoundingSet=CAP_SYS_ADMIN\n") {
+	// a confined addon's set is what it declares - among the capabilities that are not
+	// root-equivalent (B-251)
+	if got := renderDropIn(&AddonPolicy{ID: "x", Mode: "confined", UID: 30005, User: "addon-x", Runtime: &AddonRuntime{Capabilities: []string{"CAP_NET_BIND_SERVICE"}}}, false); !strings.Contains(got, "AmbientCapabilities=CAP_NET_BIND_SERVICE\nCapabilityBoundingSet=CAP_NET_BIND_SERVICE\n") {
 		t.Errorf("confined:\n%s", got)
+	}
+}
+
+// TestDropInDenylist is B-251's second guard: renderDropIn never renders a root-equivalent
+// capability or group for a confined addon, even when the stored policy carries one, and the
+// harmless declarations beside them survive.
+func TestDropInDenylist(t *testing.T) {
+	p := &AddonPolicy{ID: "x", Mode: "confined", UID: 30005, User: "addon-x", Runtime: &AddonRuntime{
+		Capabilities: []string{"CAP_SYS_ADMIN", "CAP_NET_BIND_SERVICE", "CAP_DAC_READ_SEARCH"},
+		Groups:       []string{"occulite", "dialout", "root"},
+	}}
+	got := renderDropIn(p, false)
+	// the denied names must not appear in the rendered directives (the header comment mentions
+	// "occulited", so check the lines, not the whole string)
+	for _, line := range strings.Split(got, "\n") {
+		if !strings.HasPrefix(line, "AmbientCapabilities=") && !strings.HasPrefix(line, "CapabilityBoundingSet=") && !strings.HasPrefix(line, "SupplementaryGroups=") {
+			continue
+		}
+		for _, denied := range []string{"CAP_SYS_ADMIN", "CAP_DAC_READ_SEARCH", "occulite", "root"} {
+			if strings.Contains(line, denied) {
+				t.Errorf("denied token %q rendered in %q:\n%s", denied, line, got)
+			}
+		}
+	}
+	if !strings.Contains(got, "AmbientCapabilities=CAP_NET_BIND_SERVICE\nCapabilityBoundingSet=CAP_NET_BIND_SERVICE\n") {
+		t.Errorf("the harmless capability was lost:\n%s", got)
+	}
+	if !strings.Contains(got, "SupplementaryGroups=dialout\n") {
+		t.Errorf("the harmless group was lost:\n%s", got)
+	}
+	// a confined addon that declares only denied capabilities ends with an empty bounding set
+	only := renderDropIn(&AddonPolicy{ID: "x", Mode: "confined", UID: 30006, User: "addon-x", Runtime: &AddonRuntime{Capabilities: []string{"CAP_SYS_MODULE"}}}, false)
+	if !strings.Contains(only, "CapabilityBoundingSet=\n") || strings.Contains(only, "AmbientCapabilities=") {
+		t.Errorf("a confined addon with only denied caps must get an empty set:\n%s", only)
 	}
 }
 

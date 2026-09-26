@@ -96,10 +96,17 @@
     "runtime": {
       "type": "object",
       "additionalProperties": false,
+      "if": {"properties": {"root": {"not": {"const": true}}}},
+      "then": {
+        "properties": {
+          "capabilities": {"items": {"not": {"enum": ["CAP_SYS_ADMIN", "CAP_SYS_MODULE", "CAP_SYS_RAWIO", "CAP_SYS_PTRACE", "CAP_SYS_CHROOT", "CAP_SYS_BOOT", "CAP_DAC_OVERRIDE", "CAP_DAC_READ_SEARCH", "CAP_FOWNER", "CAP_CHOWN", "CAP_SETUID", "CAP_SETGID", "CAP_SETPCAP", "CAP_MKNOD", "CAP_BPF", "CAP_MAC_ADMIN", "CAP_MAC_OVERRIDE", "CAP_NET_ADMIN"]}}},
+          "groups": {"items": {"not": {"enum": ["occulite", "root"]}}}
+        }
+      },
       "properties": {
         "root": {"type": "boolean"},
-        "capabilities": {"type": "array", "items": {"type": "string", "pattern": "^CAP_[A-Z_]{1,40}$"}, "uniqueItems": true},
-        "groups": {"type": "array", "items": {"type": "string", "pattern": "^[a-z_][a-z0-9_-]{0,31}$"}, "uniqueItems": true},
+        "capabilities": {"type": "array", "items": {"type": "string", "pattern": "^CAP_[A-Z_]{1,40}$"}, "uniqueItems": true, "description": "confined addons may not declare a root-equivalent capability (B-251); a root addon may"},
+        "groups": {"type": "array", "items": {"type": "string", "pattern": "^[a-z_][a-z0-9_-]{0,31}$"}, "uniqueItems": true, "description": "confined addons may not declare occulite or root (B-251)"},
         "paths": {"type": "array", "items": {"$ref": "#/$defs/abspath"}, "uniqueItems": true},
         "data_dirs": {"type": "array", "items": {"allOf": [{"$ref": "#/$defs/abspath"}, {"pattern": "^/usr/local/"}]}, "uniqueItems": true},
         "ports": {"type": "array", "items": {"type": "integer", "minimum": 1, "maximum": 65535}, "uniqueItems": true},

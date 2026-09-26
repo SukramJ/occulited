@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/hobbyquaker/occulited/internal/manifest"
 	"github.com/hobbyquaker/occulited/internal/priv"
 )
 
@@ -387,16 +388,35 @@ func renderDropIn(p *AddonPolicy, certsGroup bool) string {
 		return b.String()
 	}
 	fmt.Fprintf(&b, "# mode=confined uid=%d\n[Service]\nUser=%s\nGroup=%s\n", p.UID, p.User, p.User)
-	groups := append([]string(nil), rt.Groups...)
+	// B-251/D-119: the second guard. manifest.Validate already refuses a confined manifest that
+	// names a root-equivalent capability or group, but a policy can also reach here without passing
+	// through that check - a policy stored before this fix, or one built some other way - so nothing
+	// on the denylist is ever rendered into a confined addon's unit. What is dropped is logged.
+	groups := make([]string, 0, len(rt.Groups))
+	for _, g := range rt.Groups {
+		if manifest.DeniedConfinedGroup(g) {
+			slog.Warn("addon policy: a root-equivalent group is refused for a confined addon and not rendered", "id", p.ID, "group", g)
+			continue
+		}
+		groups = append(groups, g)
+	}
 	if certsGroup && !slices.Contains(groups, CertsGroup) {
 		groups = append(groups, CertsGroup)
 	}
 	if len(groups) > 0 {
 		fmt.Fprintf(&b, "SupplementaryGroups=%s\n", strings.Join(groups, " "))
 	}
-	if len(rt.Capabilities) > 0 {
-		caps := strings.Join(rt.Capabilities, " ")
-		fmt.Fprintf(&b, "AmbientCapabilities=%s\nCapabilityBoundingSet=%s\n", caps, caps)
+	caps := make([]string, 0, len(rt.Capabilities))
+	for _, c := range rt.Capabilities {
+		if manifest.DeniedConfinedCap(c) {
+			slog.Warn("addon policy: a root-equivalent capability is refused for a confined addon and not rendered", "id", p.ID, "capability", c)
+			continue
+		}
+		caps = append(caps, c)
+	}
+	if len(caps) > 0 {
+		joined := strings.Join(caps, " ")
+		fmt.Fprintf(&b, "AmbientCapabilities=%s\nCapabilityBoundingSet=%s\n", joined, joined)
 	} else {
 		b.WriteString("CapabilityBoundingSet=\n")
 	}

@@ -169,6 +169,86 @@ type PortInfo struct {
 // StartEarly is the one value of runtime.start that means something.
 const StartEarly = "early"
 
+// deniedConfinedCaps are the capabilities a confined addon may not declare: each one is
+// root-equivalent in effect, so granting it to an addon the system calls "confined" would make the
+// label a lie (B-251, D-119). Every name here was checked against capabilities(7):
+//
+//   - CAP_SYS_ADMIN, CAP_SYS_MODULE, CAP_SYS_RAWIO, CAP_MKNOD, CAP_BPF, CAP_SYS_BOOT: mount, load a
+//     kernel module, raw I/O to /dev/mem, make a device node, load BPF, kexec a kernel - the kernel
+//     itself, which is root and more.
+//   - CAP_DAC_OVERRIDE, CAP_DAC_READ_SEARCH, CAP_FOWNER, CAP_CHOWN: bypass or rewrite file
+//     permissions and ownership - read the keys and every other addon's tree, write anywhere.
+//   - CAP_SETUID, CAP_SETGID, CAP_SETPCAP: become uid 0 / any gid, or hand capabilities around -
+//     the confinement's whole point undone.
+//   - CAP_SYS_PTRACE: attach to a root process and inject code.
+//   - CAP_SYS_CHROOT: pivot the root, a building block of a namespace escape.
+//   - CAP_MAC_ADMIN, CAP_MAC_OVERRIDE: configure or bypass mandatory access control (an LSM) - the
+//     policy that would otherwise fence the addon.
+//   - CAP_NET_ADMIN: not filesystem-root, but system-integrity-root. It reconfigures every
+//     interface, the routing table and the packet filter. On lite the firewall is a control
+//     occulited owns (the Firewall page, D-9's "one door"); an addon with CAP_NET_ADMIN could flush
+//     or rewrite it and expose every port to the LAN, or to the internet where a port is forwarded,
+//     put an interface into promiscuous mode and sniff the LAN, or reroute the box's own traffic
+//     (ACME, updates) for a MITM. That crosses the confinement boundary, so it is denied. The real
+//     case - an addon that brings up a VPN interface - runs as *root (unsafe)* by the user's choice
+//     on the Services page, exactly as a mounting addon does with CAP_SYS_ADMIN (D-66).
+//
+// Not on the list, on purpose: CAP_NET_BIND_SERVICE and CAP_NET_RAW (a low port, a ping socket),
+// CAP_SYS_NICE, CAP_SYS_TIME, CAP_KILL, CAP_SYSLOG, CAP_SYS_RESOURCE, CAP_LINUX_IMMUTABLE - each is
+// a nuisance or a narrow DoS at worst, not a path to root or to the keys.
+var deniedConfinedCaps = map[string]bool{
+	"CAP_SYS_ADMIN":       true,
+	"CAP_SYS_MODULE":      true,
+	"CAP_SYS_RAWIO":       true,
+	"CAP_SYS_PTRACE":      true,
+	"CAP_SYS_CHROOT":      true,
+	"CAP_SYS_BOOT":        true,
+	"CAP_DAC_OVERRIDE":    true,
+	"CAP_DAC_READ_SEARCH": true,
+	"CAP_FOWNER":          true,
+	"CAP_CHOWN":           true,
+	"CAP_SETUID":          true,
+	"CAP_SETGID":          true,
+	"CAP_SETPCAP":         true,
+	"CAP_MKNOD":           true,
+	"CAP_BPF":             true,
+	"CAP_MAC_ADMIN":       true,
+	"CAP_MAC_OVERRIDE":    true,
+	"CAP_NET_ADMIN":       true,
+}
+
+// deniedConfinedGroups are the supplementary groups a confined addon may not join: occulite, whose
+// only member reaches the privilege helper's socket (/run/occulite/helper.sock) and so has every
+// operation of the helper's policy - full root by proxy - and root, the GID-0 group, which is root
+// itself. On the image root is the only GID-0 group; a GID-0 alias under another name would be an
+// image change, and the drop-in never names such a group anyway (renderDropIn filters by this list).
+var deniedConfinedGroups = map[string]bool{
+	"occulite": true,
+	"root":     true,
+}
+
+// DeniedConfinedCap reports whether a capability is root-equivalent and so refused for a confined
+// addon (B-251). A root addon - one the user runs as *root (unsafe)* - is not checked: it has root.
+func DeniedConfinedCap(name string) bool { return deniedConfinedCaps[name] }
+
+// DeniedConfinedGroup reports whether a supplementary group is root-equivalent and so refused for a
+// confined addon (B-251).
+func DeniedConfinedGroup(name string) bool { return deniedConfinedGroups[name] }
+
+// DeniedConfinedCaps and DeniedConfinedGroups are the two denylists, sorted, for the docs and the
+// tests.
+func DeniedConfinedCaps() []string   { return sortedKeys(deniedConfinedCaps) }
+func DeniedConfinedGroups() []string { return sortedKeys(deniedConfinedGroups) }
+
+func sortedKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	slices.Sort(out)
+	return out
+}
+
 var (
 	idRe       = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,31}$`)
 	capRe      = regexp.MustCompile(`^CAP_[A-Z_]{1,40}$`)
@@ -257,10 +337,20 @@ func (rt *Runtime) validate() error {
 		if !capRe.MatchString(c) {
 			return fmt.Errorf("runtime.capabilities %q", c)
 		}
+		// B-251/D-119: a confined addon (the default; every addon that does not declare root)
+		// may not hold a root-equivalent capability - the system would render it into the unit
+		// unfiltered and the "confined" label would be a lie. A root addon (root: true) has root
+		// already, so its capabilities are the user's *root (unsafe)* choice and not checked here.
+		if !rt.Root && DeniedConfinedCap(c) {
+			return fmt.Errorf("runtime.capabilities %q is root-equivalent and refused for a confined addon; declare \"root\": true to run as root (shown as unsafe), or drop it", c)
+		}
 	}
 	for _, g := range rt.Groups {
 		if !groupRe.MatchString(g) {
 			return fmt.Errorf("runtime.groups %q", g)
+		}
+		if !rt.Root && DeniedConfinedGroup(g) {
+			return fmt.Errorf("runtime.groups %q is root-equivalent (the privilege helper's group, or root) and refused for a confined addon", g)
 		}
 	}
 	for _, p := range rt.Paths {
