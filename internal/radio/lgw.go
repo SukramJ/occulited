@@ -68,6 +68,56 @@ func LGWConfigured(root string) (rf, wired bool) {
 	return lgwRFRe.MatchString(readFile(d.path("/etc/config/rfd.conf"))), lgwWiredRe.MatchString(readFile(d.path("/etc/config/hs485d.conf")))
 }
 
+// lgwAddresses reads the gateway sections of a daemon's configuration (the [Interface N] blocks
+// whose Type the class regexp matches): the addresses given, and how many gateways have none (rfd
+// finds those by their serial on the LAN, so nothing here can tell whether they answer).
+func lgwAddresses(conf string, class *regexp.Regexp) (addrs []string, unaddressed int) {
+	sections := regexp.MustCompile(`(?m)^\[Interface \d+\]`).Split(conf, -1)
+	for _, sec := range sections[1:] {
+		if !class.MatchString(sec) {
+			continue
+		}
+		addr := ""
+		for _, l := range strings.Split(sec, "\n") {
+			k, v, ok := strings.Cut(l, "=")
+			if ok && strings.TrimSpace(k) == "IP Address" {
+				addr = strings.TrimSpace(v)
+			}
+		}
+		if addr == "" {
+			unaddressed++
+		} else {
+			addrs = append(addrs, addr)
+		}
+	}
+	return addrs, unaddressed
+}
+
+// gatewaysAnswer: at least one of the class's gateways can be reached - one without an address is
+// taken as reachable (rfd finds it by its serial), one with an address must answer a ping, two
+// tries. false with every address that stayed silent: the update has nothing to talk to, and
+// eq3configcmd would only run into its timeouts - three of 120 s, which kept a boot with an
+// unplugged or unreachable gateway in "starting" for minutes and ended in a failed unit.
+func (s LGWStep) gatewaysAnswer(ctx context.Context, conf string, class *regexp.Regexp) (bool, []string) {
+	addrs, unaddressed := lgwAddresses(conf, class)
+	if unaddressed > 0 {
+		return true, nil
+	}
+	var silent []string
+	for _, a := range addrs {
+		answered := false
+		for try := 0; try < 2 && !answered; try++ {
+			if _, err := s.run(ctx, "ping", "-q", "-W", "2", "-c", "1", a); err == nil {
+				answered = true
+			}
+		}
+		if !answered {
+			silent = append(silent, a)
+		}
+	}
+	return len(silent) < len(addrs), silent
+}
+
 // waitForNetwork is S58's waitForIP: the default route's gateway answers a ping, five tries.
 func (s LGWStep) waitForNetwork(ctx context.Context) error {
 	for i := 0; i < 5; i++ {
@@ -103,6 +153,25 @@ func LGWFirmware(ctx context.Context, s LGWStep, logf func(string, ...any)) erro
 	}
 	if err := s.waitForNetwork(ctx); err != nil {
 		return err
+	}
+	// a gateway that does not answer is not an update that failed: the check is skipped, with the
+	// addresses in the journal, and runs again at the next boot (the unit stays a success)
+	if rf {
+		conf := readFile(s.path("/etc/config/rfd.conf"))
+		if ok, silent := s.gatewaysAnswer(ctx, conf, lgwRFRe); !ok {
+			logf("lgw: no RF LAN gateway answers (%s): the firmware check is skipped until the next start", strings.Join(silent, ", "))
+			rf = false
+		}
+	}
+	if wired {
+		conf := readFile(s.path("/etc/config/hs485d.conf"))
+		if ok, silent := s.gatewaysAnswer(ctx, conf, lgwWiredRe); !ok {
+			logf("lgw: no wired LAN gateway answers (%s): the firmware check is skipped until the next start", strings.Join(silent, ", "))
+			wired = false
+		}
+	}
+	if !rf && !wired {
+		return nil
 	}
 	eq3 := s.tool("/bin/eq3configcmd")
 	var failed []string

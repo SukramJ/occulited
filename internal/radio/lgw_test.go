@@ -2,6 +2,7 @@ package radio
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -60,6 +61,34 @@ func TestLGWFirmware(t *testing.T) {
 	sleeps := 0
 	if err := LGWFirmware(ctx, LGWStep{Root: root, Run: rec.run, Sleep: func(time.Duration) { sleeps++ }}, logf); err == nil || sleeps != 5 || rec.called("eq3configcmd") {
 		t.Fatalf("no network: %v sleeps %d", err, sleeps)
+	}
+	// openccu-lite B-229: a gateway with an address that does not answer a ping is not an update
+	// that failed - the check is skipped (two pings, no eq3configcmd, the unit a success), as the
+	// QEMU test's boot 2 seeds one at a documentation address
+	addressed := rfdTemplate + "\n[Interface 1]\nType = HMLGW2\nSerial Number = KEQ0123456\nEncryption Key = 00000000000000000000000000000000\nIP Address = 192.0.2.1\n"
+	root, rec = lgwRoot(t, addressed, "[Interface 0]\nType = HMWLGW\nSerial Number = JEQ0000001\nIP Address = 192.0.2.2\n")
+	rec.fails["ping -q -W 2 -c 1 192.0.2.1"] = true
+	rec.fails["ping -q -W 2 -c 1 192.0.2.2"] = true
+	var lines []string
+	if err := LGWFirmware(ctx, LGWStep{Root: root, Run: rec.run}, func(f string, a ...any) { lines = append(lines, fmt.Sprintf(f, a...)) }); err != nil || rec.called("eq3configcmd") {
+		t.Fatalf("silent gateways: %v %v", err, rec.calls)
+	}
+	want = []string{"ip -4 route get 1", "ping -q -W 5 -c 1 198.51.100.1", "ping -q -W 2 -c 1 192.0.2.1", "ping -q -W 2 -c 1 192.0.2.1", "ping -q -W 2 -c 1 192.0.2.2", "ping -q -W 2 -c 1 192.0.2.2"}
+	if !reflect.DeepEqual(rec.calls, want) || len(lines) != 2 || !strings.Contains(lines[0], "no RF LAN gateway answers (192.0.2.1)") || !strings.Contains(lines[1], "no wired LAN gateway answers (192.0.2.2)") {
+		t.Fatalf("silent gateways:\n%v\n%v", strings.Join(rec.calls, "\n"), lines)
+	}
+	// one of two RF gateways answers: the RF steps run; the wired one stays silent and is skipped
+	two := addressed + "\n[Interface 2]\nType = Lan Interface\nSerial Number = LEQ0000001\nIP Address = 192.0.2.3\n"
+	root, rec = lgwRoot(t, two, "[Interface 0]\nType = HMWLGW\nSerial Number = JEQ0000001\nIP Address = 192.0.2.2\n")
+	rec.fails["ping -q -W 2 -c 1 192.0.2.1"] = true
+	rec.fails["ping -q -W 2 -c 1 192.0.2.2"] = true
+	if err := LGWFirmware(ctx, LGWStep{Root: root, Run: rec.run}, logf); err != nil || !rec.called("eq3configcmd update-coprocessor") || !rec.called("eq3configcmd update-lgw-firmware -m /firmware/fwmap -c /etc/config/rfd.conf") || rec.called("eq3configcmd update-lgw-firmware -m /firmware/fwmap -c /etc/config/hs485d.conf") {
+		t.Fatalf("one answers: %v\n%v", err, strings.Join(rec.calls, "\n"))
+	}
+	// a gateway without an address (found by its serial) is not pinged and the steps run
+	root, rec = lgwRoot(t, rfdTemplate+lgwSection, "")
+	if err := LGWFirmware(ctx, LGWStep{Root: root, Run: rec.run}, logf); err != nil || rec.called("ping -q -W 2") || !rec.called("eq3configcmd") {
+		t.Fatalf("unaddressed: %v\n%v", err, strings.Join(rec.calls, "\n"))
 	}
 	// LAN-gateway mode: skipped
 	root, rec = lgwRoot(t, rfdTemplate+lgwSection, "")

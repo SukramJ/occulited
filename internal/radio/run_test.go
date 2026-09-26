@@ -32,7 +32,7 @@ func (r *recorder) run(ctx context.Context, name string, args ...string) ([]byte
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.calls = append(r.calls, base+" "+strings.Join(args, " "))
-	if r.fails[base] {
+	if r.fails[base] || r.fails[base+" "+strings.Join(args, " ")] {
 		return nil, errors.New(base + ": not found")
 	}
 	if a, ok := r.answers[base]; ok {
