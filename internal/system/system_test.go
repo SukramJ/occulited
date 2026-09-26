@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -216,12 +217,70 @@ func TestReadFileFallsBackToHelper(t *testing.T) {
 	}
 }
 
+// openccu-lite B-253: hmipserver's data directory is closed to the daemon (0700); the names in it
+// come through the helper, and a directory the helper does not answer for is an empty list.
+func TestReadDirFallsBackToHelper(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: a closed directory cannot be produced")
+	}
+	dir := filepath.Join(t.TempDir(), "data")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"3014F711A000041709ADFA5B.ap", "3014F711A000041709ADFA5B.dev"} {
+		if err := os.WriteFile(filepath.Join(dir, f), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chmod(dir, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	if names := readDir(dir); names != nil {
+		t.Fatalf("a closed directory listed without a helper: %v", names)
+	}
+	old := Priv
+	Priv = rootReader{}
+	t.Cleanup(func() { Priv = old })
+	if names := readDir(dir); strings.Join(names, " ") != "3014F711A000041709ADFA5B.ap 3014F711A000041709ADFA5B.dev" {
+		t.Errorf("helper fallback: %v", names)
+	}
+	if names := readDir(filepath.Join(dir, "..", "nothing")); names != nil {
+		t.Errorf("a missing directory: %v", names)
+	}
+}
+
 // rootReader stands in for the helper, which reads as root; the allowlist that decides what it
 // will read is tested in internal/priv.
 type rootReader struct{ priv.Local }
 
+func (rootReader) ListDir(dir string) ([]string, error) {
+	st, err := os.Stat(dir)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return nil, err
+	}
+	defer func() { _ = os.Chmod(dir, st.Mode()) }()
+	return priv.Local{}.ListDir(dir)
+}
+
 func (rootReader) ReadFile(path string) ([]byte, error) {
 	st, err := os.Stat(path)
+	if errors.Is(err, os.ErrPermission) {
+		// a file in a directory closed to the test user (B-253): root sees through both
+		dir := filepath.Dir(path)
+		dst, derr := os.Lstat(dir)
+		if derr != nil {
+			return nil, derr
+		}
+		if err := os.Chmod(dir, 0o700); err != nil {
+			return nil, err
+		}
+		defer func() { _ = os.Chmod(dir, dst.Mode()) }()
+		st, err = os.Stat(path)
+	}
 	if err != nil {
 		return nil, err
 	}

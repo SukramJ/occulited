@@ -337,6 +337,26 @@ func TestPrepReadyStopped(t *testing.T) {
 	}
 	// hmipserver: a stale lock of another user goes, the handler files exist
 	write("run/lock/LCK..mmd_hmip", "1")
+	// openccu-lite B-253: the vendor's process wrote its store 0775/0664 (an older image, a
+	// restored backup); the prep makes it the server's alone, links and owners aside
+	data := filepath.Join(root, "etc/config/crRFD/data")
+	if err := os.MkdirAll(filepath.Join(data, "old_20260101"), 0o775); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"3014F711A000041709ADFA5B.dev", "3014F711A000041709ADFA5B.apkx", "old_20260101/x.dev"} {
+		if err := os.WriteFile(filepath.Join(data, f), []byte("x"), 0o664); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink("/etc/passwd", filepath.Join(data, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(data, 0o775); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(root, "etc/config/crRFD"), 0o775); err != nil {
+		t.Fatal(err)
+	}
 	*calls = nil
 	if err := Prep(context.Background(), d, "hmipserver", p, logf); err != nil {
 		t.Fatal(err)
@@ -346,6 +366,28 @@ func TestPrepReadyStopped(t *testing.T) {
 	}
 	if !has(*calls, "chown /dev/mmd_hmip 0:8123") || !has(*calls, "chown /var/HMSERVER.handlers 8111:8111") || !has(*calls, "chown /etc/config/groups.gson 8111:8111") || !has(*calls, "chown /run/lock 0:54") {
 		t.Fatalf("hmipserver prep: %v", *calls)
+	}
+	for path, want := range map[string]os.FileMode{
+		"etc/config/crRFD": 0o750, "etc/config/crRFD/data": 0o700, "etc/config/crRFD/data/old_20260101": 0o700,
+		"etc/config/crRFD/data/3014F711A000041709ADFA5B.dev": 0o600, "etc/config/crRFD/data/3014F711A000041709ADFA5B.apkx": 0o600,
+		"etc/config/crRFD/data/old_20260101/x.dev": 0o600,
+	} {
+		if st, err := os.Lstat(filepath.Join(root, path)); err != nil || st.Mode().Perm() != want {
+			t.Errorf("%s after prep: %v %v, want %o", path, err, st, want)
+		}
+	}
+	if has(*calls, "chmod /etc/config/crRFD/data/link") || has(*calls, "chmod /etc/passwd") {
+		t.Errorf("a link in the store was changed: %v", *calls)
+	}
+	// a second prep changes no mode (nothing to repair)
+	*calls = nil
+	if err := Prep(context.Background(), d, "hmipserver", p, logf); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range *calls {
+		if strings.HasPrefix(c, "chmod /etc/config/crRFD") {
+			t.Errorf("a mode set twice: %s", c)
+		}
 	}
 	// task 180: the group store starts as the no-groups object (an empty file kills the server's
 	// start thread), and one with groups is left alone

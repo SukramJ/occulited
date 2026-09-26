@@ -86,6 +86,15 @@ func Prep(ctx context.Context, d Detector, daemon string, p Plan, logf func(stri
 			_ = os.MkdirAll(d.path(cfg+sub), 0o755)
 			OwnTree(d.path(cfg+sub), "hmipserver", "hmipserver")
 		}
+		// openccu-lite B-253: the server's key and device files are its own alone, as rfd's AES
+		// device files are rfd's. The unit's UMask=0077 keeps what it writes from now on 0600;
+		// this makes what is there already so - a system that ran an older image, a restored
+		// backup (its archive carries the old 0664), the vendor's 0775 directory - and closes the
+		// crRFD directory itself to everyone but the server and root (its hmip_user.conf and
+		// sgtin.map are 0640 and read through the helper, tasks 149 and 154).
+		Own(d.path(cfg+"/crRFD"), "hmipserver", "hmipserver", 0o750)
+		_ = os.MkdirAll(d.path(cfg+"/crRFD/data"), 0o700)
+		RestrictTree(d.path(cfg+"/crRFD/data"), 0o700, 0o600)
 		Own(d.path(cfg+"/hmip_address.conf"), "hmipserver", "hmipserver", 0o644)
 		Own(d.path(cfg+"/hmip_networkkey.conf"), "hmipserver", "hmipserver", 0o600)
 		// the heating group store (HMServer.conf's groupStorageFilePath, task 180): the server
@@ -357,6 +366,31 @@ func OwnTree(path, userName, groupName string) {
 		}
 		if cur, ok := statIDs(info); !ok || cur[0] != uid || cur[1] != gid {
 			_ = chownFn(p, uid, gid)
+		}
+		return nil
+	})
+}
+
+// RestrictTree gives every directory below and including path dirMode and every regular file
+// fileMode (owners untouched); a link is neither followed nor changed, and an entry that has its
+// mode is not touched. For a daemon's private store, where the owner's own umask wrote wider modes.
+func RestrictTree(path string, dirMode, fileMode os.FileMode) {
+	if !isDir(path) {
+		return
+	}
+	_ = filepath.Walk(path, func(p string, info os.FileInfo, err error) error {
+		if err != nil || info.Mode()&os.ModeSymlink != 0 {
+			return nil
+		}
+		want := fileMode
+		switch {
+		case info.IsDir():
+			want = dirMode
+		case !info.Mode().IsRegular():
+			return nil
+		}
+		if info.Mode().Perm() != want.Perm() || info.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 {
+			_ = chmodFn(p, want)
 		}
 		return nil
 	})

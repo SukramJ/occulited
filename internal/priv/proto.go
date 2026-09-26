@@ -76,6 +76,8 @@ type response struct {
 	Marker string `json:"marker,omitempty"`
 	// Files is listlogs' answer: paths, sizes and times, never content (B-113).
 	Files []LogFileInfo `json:"files,omitempty"`
+	// Names is listdir's answer: the entries' names, nothing else (openccu-lite B-253).
+	Names []string `json:"names,omitempty"`
 	// Errno is the failed open's errno name (shareopen, B-217), so the caller can tell a file
 	// that is not there from one it may not read.
 	Errno string `json:"errno,omitempty"`
@@ -509,6 +511,13 @@ type Policy struct {
 	AddonDataDirs []string
 	// ReadPaths are root-only files the daemon may read through the helper.
 	ReadPaths []string
+	// ReadGlobs are shapes of such files (filepath.Match, one directory level: "*" never crosses a
+	// "/"): hmipserver's access-point identity files, whose names carry the module's SGTIN
+	// (openccu-lite B-253, listdir.go). Nothing else in that directory matches.
+	ReadGlobs []string
+	// ListDirs are the directories whose entry names the daemon may ask for (listdir.go): exact
+	// directories, no path below one. hmipserver's data directory, 0700 since B-253.
+	ListDirs []string
 	// ShadowPaths are the password files whose "root:" line may be rewritten
 	// (SetRootPasswordHash). Exact paths, and deliberately not on ReadPaths: the operation
 	// writes one field of one line and the file itself stays unreadable to the daemon (B-15).
@@ -636,6 +645,15 @@ func DefaultPolicy(root, stateDir string) Policy {
 			// the SSIDs, a change keeps the other networks' keys, and no key leaves occulited
 			"/etc/config/wpa_supplicant.conf", "/usr/local/etc/config/wpa_supplicant.conf",
 		},
+		// openccu-lite B-253: hmipserver's data directory is 0700 with 0600 files. The daemon
+		// lists its names (which devices, which modules) and reads the module's three identity
+		// files for the local key mode's snapshot (task 149, D-103) - never a device file.
+		ReadGlobs: []string{
+			"/etc/config/crRFD/data/*.ap", "/usr/local/etc/config/crRFD/data/*.ap",
+			"/etc/config/crRFD/data/*.apkx", "/usr/local/etc/config/crRFD/data/*.apkx",
+			"/etc/config/crRFD/data/*.bbkx", "/usr/local/etc/config/crRFD/data/*.bbkx",
+		},
+		ListDirs: []string{"/etc/config/crRFD/data", "/usr/local/etc/config/crRFD/data"},
 		// the SSH page's "set root's password": the file is 0640 root:root and stays that way,
 		// and the daemon never reads it - it hands over one hash and the helper puts it in
 		// (B-15). /etc/config is the userfs path on every product; it is not a prefix.
@@ -922,6 +940,11 @@ func (p Policy) readAllowed(path string) bool {
 	}
 	for _, r := range p.ReadPaths {
 		if rel == r {
+			return true
+		}
+	}
+	for _, g := range p.ReadGlobs {
+		if ok, _ := filepath.Match(g, rel); ok {
 			return true
 		}
 	}
@@ -1566,6 +1589,8 @@ func (s *Server) do(ctx context.Context, req request) response {
 		return response{OK: true}
 	case opListLogs:
 		return s.listLogs(req)
+	case opListDir:
+		return s.listDir(req)
 	case opNetMount, opNetUnmount, opNetMountRemove, opWriteTest:
 		return s.netMount(ctx, req)
 	case opShareList:

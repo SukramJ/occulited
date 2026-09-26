@@ -520,3 +520,60 @@ func TestLocalKeyCheckSuperseded(t *testing.T) {
 		t.Fatalf("after a restart: %+v", c)
 	}
 }
+
+// openccu-lite B-253: hmipserver's data directory is 0700 and its files 0600 - the daemon lists it
+// and reads the module's identity files through the helper, and the snapshot, the exchange view and
+// the revert work as before; what the revert puts back is 0600.
+func TestLocalKeyThroughClosedDataDir(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: a closed directory cannot be produced")
+	}
+	fake := &fakeHmIPServer{state: "ok"}
+	k, _, root := lkRig(t, fake.serve(t))
+	data := filepath.Join(root, "etc/config/crRFD/data")
+	for _, ext := range []string{".ap", ".apkx", ".bbkx"} {
+		if err := os.Chmod(filepath.Join(data, lkSGTIN+ext), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(data, exPrevSGTIN+".ap"), []byte("OLD"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(data, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(data, 0o755) })
+	old := Priv
+	Priv = rootReader{}
+	t.Cleanup(func() { Priv = old })
+	if v := k.Exchange(); len(v.Previous) != 1 || v.Previous[0] != exPrevSGTIN {
+		t.Fatalf("the previous identity through the helper: %+v", v)
+	}
+	if err := k.Enable("generate", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	st := lkWait(t, k)
+	if st.Error != "" || !st.Enabled || len(st.Snapshots) != 1 || len(st.Snapshots[0].Files) != 3 {
+		t.Fatalf("on through a closed directory: %+v", st)
+	}
+	if b, _ := os.ReadFile(filepath.Join(k.StateDir, "snapshots", lkSGTIN, lkSGTIN+".apkx")); string(b) != "EQ3-.apkx" {
+		t.Errorf("the snapshot's copy: %q", b)
+	}
+	lkDone(t, k)
+	// the revert writes as root through the helper (the fake cannot): the directory open again
+	if err := os.Chmod(data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(data, lkSGTIN+".ap")); err != nil {
+		t.Fatal(err)
+	}
+	if err := k.Disable(); err != nil {
+		t.Fatal(err)
+	}
+	if st = lkWait(t, k); st.Error != "" || st.Enabled {
+		t.Fatalf("off: %+v", st)
+	}
+	if fi, err := os.Stat(filepath.Join(data, lkSGTIN+".ap")); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Errorf("the restored identity file: %v %v, want 0600", err, fi)
+	}
+}

@@ -189,6 +189,10 @@ type Ops interface {
 	// like logs unless allFiles; no symlink followed. The helper admits a directory of
 	// Policy.LogListDirs only.
 	ListLogFiles(dir string, allFiles bool) ([]LogFileInfo, error)
+	// ListDir answers the names in dir (openccu-lite B-253, listdir.go), nothing about them: the
+	// helper admits a directory of Policy.ListDirs only - hmipserver's data directory, which is
+	// 0700 - so the daemon knows which devices and modules have files there.
+	ListDir(dir string) ([]string, error)
 }
 
 // SmartDeviceRe is the one device shape the SMART read admits: a whole SCSI/SATA/USB disk

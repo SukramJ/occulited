@@ -443,8 +443,9 @@ func (k *HmIPLocalKey) Disable() error {
 				k.end(fmt.Errorf("reading the snapshot's %s: %w", f, err))
 				return
 			}
-			// hmipserver's prep gives the directory back to hmipserver at its start
-			if err := writeFileAtomic(k.Root.join(filepath.Join(crRFDDataDir, f)), b, 0o664); err != nil {
+			// the file is root's for a moment: hmipserver's prep gives the directory and what is
+			// in it back to hmipserver at its start (0600, openccu-lite B-253)
+			if err := writeFileAtomic(k.Root.join(filepath.Join(crRFDDataDir, f)), b, 0o600); err != nil {
 				k.end(fmt.Errorf("restoring %s: %w", f, err))
 				return
 			}
@@ -600,12 +601,8 @@ func (k *HmIPLocalKey) snapshot(sg, conf string) error {
 	_ = os.Chmod(filepath.Join(k.StateDir, "snapshots"), 0o700)
 	_ = os.Chmod(k.StateDir, 0o700)
 	snap := LocalKeySnapshot{SGTIN: sg, At: k.now(), Files: []string{}}
-	for _, ext := range []string{".ap", ".apkx", ".bbkx"} {
-		name := sg + ext
+	for _, name := range k.identityFiles(sg) {
 		src := k.Root.join(filepath.Join(crRFDDataDir, name))
-		if _, err := os.Stat(src); err != nil {
-			continue
-		}
 		b := readFile(src)
 		if b == "" {
 			return fmt.Errorf("%s is empty or unreadable", name)
@@ -623,6 +620,23 @@ func (k *HmIPLocalKey) snapshot(sg, conf string) error {
 	}
 	b, _ := json.MarshalIndent(snap, "", "  ")
 	return os.WriteFile(filepath.Join(dir, "snapshot.json"), b, 0o600)
+}
+
+// identityFiles names the module's identity files that are in hmipserver's data directory - the
+// access point file, the key exchange and the backbone key exchange - in that order. The
+// directory is 0700 (openccu-lite B-253): the names come through the helper, and so do the files.
+func (k *HmIPLocalKey) identityFiles(sg string) []string {
+	present := map[string]bool{}
+	for _, name := range readDir(k.Root.join(crRFDDataDir)) {
+		present[strings.ToUpper(name)] = true
+	}
+	var out []string
+	for _, ext := range []string{".ap", ".apkx", ".bbkx"} {
+		if present[strings.ToUpper(sg+ext)] {
+			out = append(out, sg+ext)
+		}
+	}
+	return out
 }
 
 // DiscardSnapshot removes one module's snapshot.

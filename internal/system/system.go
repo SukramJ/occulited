@@ -295,6 +295,30 @@ func readFile(path string) string {
 	return string(pb)
 }
 
+// readDir lists the names in a directory the daemon may see, falling back to the privilege helper
+// when the directory is closed to it: hmipserver's data directory is 0700 since openccu-lite
+// B-253, and what occulited needs from it are names (which devices, which modules have files
+// there). The helper's ListDirs allowlist decides which directory that may be; any other closed
+// directory, and a missing one, is an empty list.
+func readDir(path string) []string {
+	entries, err := os.ReadDir(path)
+	if err == nil {
+		out := make([]string, 0, len(entries))
+		for _, e := range entries {
+			out = append(out, e.Name())
+		}
+		return out
+	}
+	if !errors.Is(err, fs.ErrPermission) || Priv == nil {
+		return nil
+	}
+	names, perr := Priv.ListDir(path)
+	if perr != nil {
+		return nil
+	}
+	return names
+}
+
 // readKV parses KEY=value and KEY='value' lines (the shell-sourceable files the firmware writes).
 func readKV(path string) map[string]string {
 	out := map[string]string{}

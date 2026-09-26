@@ -71,9 +71,8 @@ func (k *HmIPLocalKey) Exchange() ExchangeView {
 // other than the module in use, sorted.
 func (k *HmIPLocalKey) previousIdentities(sg string) []string {
 	out := []string{}
-	entries, _ := os.ReadDir(k.Root.join(crRFDDataDir))
-	for _, e := range entries {
-		name := strings.ToUpper(e.Name())
+	for _, entry := range readDir(k.Root.join(crRFDDataDir)) {
+		name := strings.ToUpper(entry)
 		if !strings.HasSuffix(name, ".AP") {
 			continue
 		}
@@ -183,12 +182,8 @@ func (k *HmIPLocalKey) moveIdentityAside(sg, conf string) error {
 	_ = os.Chmod(k.StateDir, 0o700)
 	snap := LocalKeySnapshot{SGTIN: sg, At: k.now(), Files: []string{}, Kind: SnapshotFreshStart}
 	var moved []string
-	for _, ext := range []string{".ap", ".apkx", ".bbkx"} {
-		name := sg + ext
+	for _, name := range k.identityFiles(sg) {
 		src := k.Root.join(filepath.Join(crRFDDataDir, name))
-		if _, err := os.Stat(src); err != nil {
-			continue
-		}
 		b := readFile(src)
 		if b == "" {
 			return fmt.Errorf("%s is empty or unreadable", name)

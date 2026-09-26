@@ -363,6 +363,10 @@ func (r Root) ImportRadio(ctx context.Context, sbk, key string, keyCheck KeyChec
 			mode = 0o600
 		case rel == "rfd.conf", rel == "hs485d.conf", rel == "crypttool.cfg":
 			mode = 0o640
+		case strings.HasPrefix(rel, "crRFD/data/"):
+			// hmipserver's device and identity files are its own alone (openccu-lite B-253);
+			// the prep step at its start makes the directory 0700 and owns the files
+			mode = 0o600
 		case strings.HasPrefix(rel, "crRFD/") || strings.HasPrefix(rel, "rfd/") || strings.HasPrefix(rel, "hs485d/"):
 			mode = 0o664
 		}
