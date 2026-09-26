@@ -383,10 +383,12 @@ func TestResolveUsesETag(t *testing.T) {
 	if err != nil || r2.Asset != r1.Asset || calls != 2 {
 		t.Fatalf("second: %v %+v calls=%d", err, r2, calls)
 	}
-	// a rate-limited answer falls back to the cached releases
+	// B-21: a refused answer is an error, never the cached list in its place
 	s.releases["o/x"] = releaseCache{etag: "", rels: s.releases["o/x"].rels}
-	if r3, err := s.Resolve(t.Context(), rel); err != nil || r3.Version != "1.2.0" {
-		t.Fatalf("403 fallback: %v %+v", err, r3)
+	if r3, err := s.Resolve(t.Context(), rel); err == nil {
+		t.Fatalf("a 403 must not answer the cached releases: %+v", r3)
+	} else if re, ok := asReleasesError(err); !ok || re.Status != 403 {
+		t.Fatalf("403: %v", err)
 	}
 	// the latest tag: the first stable release, else the first prerelease
 	if tag, err := s.latestTag(t.Context(), "https://github.com/o/x"); err != nil || tag != "v1.2.0" {

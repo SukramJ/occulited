@@ -1,7 +1,7 @@
 <script lang="ts" module>
     /** a catalogue install run as /catalog/progress answers it */
     import type {InstallOutcome} from './install';
-    export interface Progress { addon_id: string; phase: string; message?: string; bytes?: number; total?: number; percent?: number; started: string; finished?: string; result?: InstallOutcome & {meaning?: string} }
+    export interface Progress { addon_id: string; phase: string; message?: string; bytes?: number; total?: number; percent?: number; started: string; finished?: string; result?: InstallOutcome & {meaning?: string}; error?: string; retry_minutes?: number }
 </script>
 
 <script lang="ts">
@@ -20,6 +20,8 @@
     import {api} from './api';
     import {t} from './i18n.svelte';
     import {askStartStopped} from './install';
+    import {releasesProblemKind} from './catalog';
+    import ReleasesProblem from './ReleasesProblem.svelte';
 
     interface Props {
         /** true while a run is on; the pages read it */
@@ -74,13 +76,19 @@
         const id = setInterval(poll, 1500);
         return () => clearInterval(id);
     });
+    // B-21: a run refused because the release list could not be read says so in the reader's language
+    const refused = $derived(progress?.phase === 'failed' && releasesProblemKind(progress.error, progress.retry_minutes) !== '');
     const pct = $derived(progress?.percent ?? (progress?.total ? Math.round(((progress.bytes ?? 0) / progress.total) * 100) : 0));
     const visible = $derived(!!progress && (showEnded || !progress.finished || keyOf(progress) !== endedAtMount));
 </script>
 
 {#if progress && visible}
     <div class="ol-notice ol-install-progress" class:error={progress.phase === 'failed'} data-phase={progress.phase} role="status">
-        <strong>{progress.addon_id}</strong>: {t(progress.phase)}{progress.message ? ` — ${progress.message}` : ''}
+        {#if refused}
+            <strong>{progress.addon_id}</strong>: {t(progress.phase)} — <span data-refused={progress.error}><ReleasesProblem code={progress.error} minutes={progress.retry_minutes} /> {t('Nothing was installed.')}</span>
+        {:else}
+            <strong>{progress.addon_id}</strong>: {t(progress.phase)}{progress.message ? ` — ${progress.message}` : ''}
+        {/if}
         {#if busy && progress.phase === 'downloading' && progress.total} <span class="ol-muted">{Math.round((progress.bytes ?? 0) / 1048576)} / {Math.round(progress.total / 1048576)} MB</span>{/if}
         {#if progress.result?.reboot_required} <strong>{t('An addon asked for a reboot to finish its installation.')}</strong>{/if}
         {#if busy || progress.phase === 'done'}

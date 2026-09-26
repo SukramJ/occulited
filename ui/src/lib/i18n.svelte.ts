@@ -343,6 +343,12 @@ const CATALOGUE: Record<string, {de: string; en?: string}> = {
         de: 'Seine Beschreibung kommt mit der nächsten Suche nach Updates, die das Manifest des Addons aus seinem Repository liest.',
     },
     'The last check could not read its manifest: {error}': {de: 'Die letzte Prüfung konnte sein Manifest nicht lesen: {error}'},
+    // B-21: a release list that could not be read - the install refuses, the check says why its versions are old
+    'GitHub rate limit, try again in {n} min.': {de: 'GitHub-Ratenlimit, in {n} Min. erneut versuchen.'},
+    'GitHub rate limit, try again later.': {de: 'GitHub-Ratenlimit, später erneut versuchen.'},
+    'The list of releases could not be read from GitHub.': {de: 'Die Liste der Releases konnte nicht von GitHub gelesen werden.'},
+    'Nothing was installed.': {de: 'Es wurde nichts installiert.'},
+    'The last check could not read the releases of {repo}: the versions and updates shown are from before it.': {de: 'Die letzte Prüfung konnte die Releases von {repo} nicht lesen: Die angezeigten Versionen und Updates stammen von davor.'},
     community: {de: 'Community'},
     incompatible: {de: 'inkompatibel'},
     'first-class': {de: 'erstklassig'},

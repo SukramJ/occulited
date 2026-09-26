@@ -29,8 +29,9 @@
     import AddonSessionSettings from '../lib/AddonSessionSettings.svelte';
     import AddonStartSettings from '../lib/AddonStartSettings.svelte';
     import {addonIconSrc} from '../lib/addonicon';
-    import {compareEntries, formatStars, httpURL, repoURL} from '../lib/catalog';
+    import {compareEntries, formatStars, httpURL, releasesProblemKind, repoURL} from '../lib/catalog';
     import {askStartStopped, installFromCatalog, type StoppedAddon} from '../lib/install';
+    import ReleasesProblem from '../lib/ReleasesProblem.svelte';
     import {statusDot, statusKind} from '../lib/units';
     import {scrollToAnchor} from '../lib/anchor';
     import CheckDaily from '../lib/CheckDaily.svelte';
@@ -50,7 +51,9 @@
     }
     interface FwAddon { id: string; ports: {port: number}[] }
 
-    let catalogue = $state<{addons: Entry[]; checked?: string} | null>(null);
+    // releases_error (B-21): a release list the last check could not read - the versions shown are from before it
+    interface ReleasesError { code: string; repo: string; message: string; at: string; retry_minutes?: number }
+    let catalogue = $state<{addons: Entry[]; checked?: string; releases_error?: ReleasesError} | null>(null);
     let installedVersions = $state<Record<string, string>>({});
     let arch = $state('');
     let addons = $state<Addon[] | null>(null);
@@ -102,7 +105,7 @@
             error = (e as Error).message;
         }
         try {
-            const r = await api.get<{catalog: {addons: Entry[]; checked?: string}; installed: Record<string, string>; arch: string; daily?: boolean}>(`/api/system/v1/catalog${refresh ? '?refresh=1' : ''}`);
+            const r = await api.get<{catalog: {addons: Entry[]; checked?: string; releases_error?: ReleasesError}; installed: Record<string, string>; arch: string; daily?: boolean}>(`/api/system/v1/catalog${refresh ? '?refresh=1' : ''}`);
             catalogue = r.catalog;
             daily = r.daily ?? null;
             installedVersions = r.installed;
@@ -540,6 +543,13 @@
         {/if}
         <span class="ol-muted ad-meta">{arch}{catalogue.checked ? ` · ${t('checked {when}', {when: new Date(catalogue.checked).toLocaleString(lang)})}` : ` · ${t('not checked yet')}`}</span>
     </div>
+    {#if catalogue.releases_error}
+        {@const re = catalogue.releases_error}
+        <div class="ol-notice ol-warn" data-releases-error={re.code}>
+            {t('The last check could not read the releases of {repo}: the versions and updates shown are from before it.', {repo: re.repo})}
+            {#if releasesProblemKind(re.code, re.retry_minutes)}<ReleasesProblem code={re.code} minutes={re.retry_minutes} />{:else}{re.message}{/if}
+        </div>
+    {/if}
     {#if shown.length === 0}
         <div class="ol-notice">{installedOnly && !filter ? t('No addons installed. Install a frontend such as homematic-manager to pair devices.') : t('Nothing matches the filter.')}</div>
     {/if}

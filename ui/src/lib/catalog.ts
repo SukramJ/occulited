@@ -66,3 +66,18 @@ export function pendingUpdates(
     for (const c of checks) if (c.info?.update_available) ids.add(c.id);
     return [...ids].sort();
 }
+
+/**
+ * B-21 (maintainer, 2026-09-26): a catalogue install that cannot read the addon's release list
+ * refuses and installs nothing, and the page says why. The box names it with a code - on a failed
+ * run's progress (`error`, `retry_minutes`) and on the last check (`releases_error`) - and this is
+ * which sentence `ReleasesProblem.svelte` shows for it: the rate limit with GitHub's wait, without
+ * one, or no answer; '' for a code this page does not know (the box's English message stands then).
+ */
+export type ReleasesProblemKind = 'rate-limit-wait' | 'rate-limit' | 'unreachable' | '';
+
+export function releasesProblemKind(code: string | undefined, minutes: number | undefined): ReleasesProblemKind {
+    if (code === 'github-rate-limit') return minutes && minutes > 0 ? 'rate-limit-wait' : 'rate-limit';
+    if (code === 'releases-unreachable') return 'unreachable';
+    return '';
+}

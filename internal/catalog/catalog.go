@@ -92,6 +92,20 @@ type View struct {
 	Addons []Item `json:"addons"`
 	// Checked is when the user last ran a check that loaded everything; nil before the first.
 	Checked *time.Time `json:"checked,omitempty"`
+	// ReleasesError is why the last check could not read a release list (B-21): the versions and
+	// update hints shown are the ones from before it. Nil when the last check read them all.
+	ReleasesError *CheckNotice `json:"releases_error,omitempty"`
+}
+
+// CheckNotice is a release list the last check could not read (B-21).
+type CheckNotice struct {
+	Code    string     `json:"code"` // CodeRateLimit or CodeUnreachable
+	Repo    string     `json:"repo"`
+	Message string     `json:"message"`
+	At      time.Time  `json:"at"`
+	RetryAt *time.Time `json:"retry_at,omitempty"`
+	// RetryMinutes is counted from the moment the view is answered; 0 = unknown or already past.
+	RetryMinutes int `json:"retry_minutes,omitempty"`
 }
 
 // Latest is the newest release the resolver picked for this architecture.
@@ -121,6 +135,11 @@ type Progress struct {
 	Started  time.Time  `json:"started"`
 	Finished *time.Time `json:"finished,omitempty"`
 	Result   any        `json:"result,omitempty"`
+	// Error is set on a failed run whose release list could not be read (B-21): CodeRateLimit or
+	// CodeUnreachable; RetryMinutes is GitHub's wait, in whole minutes (0 = unknown). Nothing was
+	// installed then.
+	Error        string `json:"error,omitempty"`
+	RetryMinutes int    `json:"retry_minutes,omitempty"`
 	// Percent (30.2) is one bar from 0 to 100 over the whole run: the download by bytes against
 	// the content length, the install by elapsed time against a duration learned from the last
 	// install of the same addon (or estimated from the archive size), never reaching 100 before
@@ -162,6 +181,9 @@ type cacheFile struct {
 	// page load and the start of the service read instead of the network. file:// URLs are read
 	// from disk every time and are not kept here.
 	Catalogs map[string]*Catalog `json:"catalogs,omitempty"`
+	// ReleasesError is the last check's unread release list (B-21), kept across a restart so that
+	// the page still says why its versions are old.
+	ReleasesError *CheckNotice `json:"releases_error,omitempty"`
 }
 
 // Service loads the catalogue, fetches manifests and installs from them.
@@ -196,6 +218,7 @@ type Service struct {
 	timings  map[string]float64 // addon id -> install seconds
 	phaseAt  time.Time          // when the current phase began
 	progress *Progress
+	now      func() time.Time // the clock for rate-limit waits; nil = time.Now
 }
 
 // New returns a service for the catalogue URLs.
@@ -467,6 +490,17 @@ func (s *Service) view() *View {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	v := &View{Format: Format, Checked: s.cache.Checked, Addons: []Item{}}
+	if n := s.cache.ReleasesError; n != nil {
+		c := *n
+		if c.RetryAt != nil {
+			re := &ReleasesError{Repo: c.Repo, RateLimited: c.Code == CodeRateLimit, RetryAt: *c.RetryAt}
+			c.RetryMinutes = re.RetryMinutes(s.clock())
+			if re.RateLimited {
+				c.Message = re.message(s.clock())
+			}
+		}
+		v.ReleasesError = &c
+	}
 	if s.catalog == nil {
 		return v
 	}
@@ -538,6 +572,7 @@ func (s *Service) Refresh(ctx context.Context) error {
 	}
 	s.mu.Lock()
 	cat, sources := s.catalog, s.sources
+	s.cache.ReleasesError = nil // this check says anew what it could not read
 	s.mu.Unlock()
 	for _, e := range cat.Addons {
 		if ctx.Err() != nil {
@@ -587,6 +622,13 @@ func (s *Service) fetchManifest(ctx context.Context, e Entry, source string) cac
 	} else {
 		var tag string
 		if tag, err = s.latestTag(ctx, e.Git); err != nil {
+			s.noteReleasesError(err)
+			if re, ok := asReleasesError(err); ok && re.RateLimited && prev.Manifest != nil {
+				// the manifest of the last check stays, with its tag; the page's notice names the
+				// limit once instead of every card (B-21)
+				out.Error = prev.Error
+				return out
+			}
 			return fail(err)
 		}
 		etagIn := ""
@@ -724,8 +766,9 @@ func (s *Service) refreshStars(ctx context.Context, repo string) {
 }
 
 // RefreshReleases resolves every known manifest's newest release once and remembers what it
-// picked, so that the page can show a version and an update hint. Resolve is conditional (ETag)
-// and falls back to the last answer when the shared address is rate-limited.
+// picked, so that the page can show a version and an update hint. Resolve is conditional (ETag);
+// a list it cannot read (the shared address rate-limited, no network) keeps the version the page
+// had and is named in the view's ReleasesError (B-21), never answered from an older list.
 func (s *Service) RefreshReleases(ctx context.Context) {
 	v := s.view()
 	changed := false
@@ -738,6 +781,7 @@ func (s *Service) RefreshReleases(ctx context.Context) {
 		}
 		r, err := s.Resolve(ctx, it.Release)
 		if err != nil {
+			s.noteReleasesError(err)
 			continue // no package for this box, or GitHub said no: keep whatever we had
 		}
 		s.mu.Lock()
@@ -753,6 +797,27 @@ func (s *Service) RefreshReleases(ctx context.Context) {
 		s.mu.Lock()
 		s.saveLocked()
 		s.mu.Unlock()
+	}
+}
+
+// noteReleasesError keeps the first release list a check could not read for the page (B-21); a
+// rate limit wins over a network error, since it says when to try again. Other errors (no package
+// for this architecture, a cancelled check) are not about reading the list.
+func (s *Service) noteReleasesError(err error) {
+	re, ok := asReleasesError(err)
+	if !ok {
+		return
+	}
+	now := s.clock()
+	n := &CheckNotice{Code: re.Code(), Repo: re.Repo, Message: re.message(now), At: now}
+	if !re.RetryAt.IsZero() {
+		at := re.RetryAt
+		n.RetryAt = &at
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if cur := s.cache.ReleasesError; cur == nil || (cur.Code != CodeRateLimit && n.Code == CodeRateLimit) {
+		s.cache.ReleasesError = n
 	}
 }
 
@@ -774,17 +839,29 @@ func (s *Service) Run(ctx context.Context) {
 				continue
 			}
 			if _, err := s.Fetch(ctx, true); err == nil {
-				s.RefreshReleases(ctx)
+				s.dailyReleases(ctx)
 			}
 		case <-time.After(24*time.Hour + time.Duration(rand.Int64N(int64(2*time.Hour)))):
 			if !daily() {
 				continue
 			}
 			if _, err := s.Fetch(ctx, true); err == nil {
-				s.RefreshReleases(ctx)
+				s.dailyReleases(ctx)
 			}
 		}
 	}
+}
+
+// dailyReleases is Run's release refresh: it says anew what it could not read (B-21), and the
+// cache is written either way, so the notice survives a restart.
+func (s *Service) dailyReleases(ctx context.Context) {
+	s.mu.Lock()
+	s.cache.ReleasesError = nil
+	s.mu.Unlock()
+	s.RefreshReleases(ctx)
+	s.mu.Lock()
+	s.saveLocked()
+	s.mu.Unlock()
 }
 
 // Item finds an addon by its manifest id in the view - what the system holds, nothing fetched;
@@ -838,7 +915,8 @@ var repoRe = regexp.MustCompile(`^[\w.-]+/[\w.-]+$`)
 
 // releasesOf lists a repository's releases: conditional requests are free of GitHub's 60/h
 // budget, which this box shares with every addon CGI that asks the same API and with everything
-// else behind the same public address.
+// else behind the same public address. A list it cannot read is a *ReleasesError, never the last
+// answer in its place (B-21).
 func (s *Service) releasesOf(ctx context.Context, repo string) ([]ghRelease, error) {
 	if !repoRe.MatchString(repo) {
 		return nil, fmt.Errorf("%q is not owner/repo", repo)
@@ -856,7 +934,10 @@ func (s *Service) releasesOf(ctx context.Context, repo string) ([]ghRelease, err
 	}
 	res, err := s.HTTP.Do(req)
 	if err != nil {
-		return nil, err
+		if ctx.Err() != nil {
+			return nil, err // cancelled by the caller, not a failing GitHub
+		}
+		return nil, &ReleasesError{Repo: repo, Err: err}
 	}
 	defer res.Body.Close()
 	var rels []ghRelease
@@ -865,7 +946,7 @@ func (s *Service) releasesOf(ctx context.Context, repo string) ([]ghRelease, err
 		rels = cached.rels
 	case res.StatusCode == 200:
 		if err := json.NewDecoder(io.LimitReader(res.Body, 4<<20)).Decode(&rels); err != nil {
-			return nil, err
+			return nil, &ReleasesError{Repo: repo, Status: res.StatusCode, Err: err}
 		}
 		s.mu.Lock()
 		if s.releases == nil {
@@ -873,12 +954,24 @@ func (s *Service) releasesOf(ctx context.Context, repo string) ([]ghRelease, err
 		}
 		s.releases[repo] = releaseCache{etag: res.Header.Get("ETag"), rels: rels}
 		s.mu.Unlock()
-	case res.StatusCode == http.StatusForbidden && ok:
-		rels = cached.rels // rate limited: the last answer is better than none
 	default:
-		return nil, fmt.Errorf("GitHub releases: HTTP %d", res.StatusCode)
+		// B-21: no fallback to the last answer. A rate-limited 403 used to answer the cached list,
+		// and an install then resolved the release it held - an older one than asked for, installed
+		// with exit 0 and no word. The caller says it instead: an install refuses, a check keeps
+		// what it showed and names the limit.
+		body, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
+		limited, retry := rateLimited(res, body, s.clock())
+		return nil, &ReleasesError{Repo: repo, RateLimited: limited, RetryAt: retry, Status: res.StatusCode}
 	}
 	return rels, nil
+}
+
+// clock is the time rate-limit waits are counted from; a test sets now.
+func (s *Service) clock() time.Time {
+	if s.now != nil {
+		return s.now()
+	}
+	return time.Now()
 }
 
 // Resolve picks the release and the asset for this architecture from a manifest's release source.
@@ -1048,6 +1141,12 @@ func (s *Service) Install(ctx context.Context, id string) (*Progress, error) {
 		now := time.Now()
 		s.mu.Lock()
 		s.progress.Phase, s.progress.Message, s.progress.Finished = "failed", err.Error(), &now
+		if re, ok := asReleasesError(err); ok {
+			// B-21: the list could not be read, so nothing was resolved and nothing installed -
+			// said with a code the page translates and GitHub's wait
+			s.progress.Error, s.progress.RetryMinutes = re.Code(), re.RetryMinutes(s.clock())
+			s.progress.Message = re.message(s.clock()) + "; nothing was installed"
+		}
 		p := *s.progress
 		s.mu.Unlock()
 		return &p, err
@@ -1059,8 +1158,13 @@ func (s *Service) Install(ctx context.Context, id string) (*Progress, error) {
 	if !it.SupportsArch(s.Arch) {
 		return fail(fmt.Errorf("%s is not available for %s", it.Name.In("en"), s.Arch))
 	}
+	// the release list is read now, never taken from an earlier answer (B-21): an install that
+	// cannot read it refuses instead of installing whatever release the last list named
 	r, err := s.Resolve(ctx, it.Release)
 	if err != nil {
+		if _, ok := asReleasesError(err); ok {
+			slog.Warn("catalog: install refused, the release list could not be read", "addon", id, "err", err)
+		}
 		return fail(err)
 	}
 	s.setPhase("downloading", r.Asset)

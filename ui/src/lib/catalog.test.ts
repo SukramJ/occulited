@@ -1,6 +1,6 @@
 import {describe, expect, it} from 'vitest';
 
-import {compareEntries, formatStars, httpURL, pendingUpdates, repoURL} from './catalog';
+import {compareEntries, formatStars, httpURL, pendingUpdates, releasesProblemKind, repoURL} from './catalog';
 
 // task 56: the catalogue cards sort by stars, ties by name, unknown counts last; the star count
 // as the card writes it; the repository link with its GitHub fallback; the update count
@@ -59,5 +59,17 @@ describe('pendingUpdates', () => {
         const checks = [{id: 'redmatic', info: {update_available: true}}, {id: 'hm2mqtt', info: {update_available: true}}, {id: 'jp', info: {update_available: false}}, {id: 'x'}];
         expect(pendingUpdates(cat, checks)).toEqual(['hm2mqtt', 'redmatic']);
         expect(pendingUpdates([], [])).toEqual([]);
+    });
+});
+
+// B-21: the sentence for a release list the box could not read
+describe('releasesProblemKind', () => {
+    it('tells the rate limit with and without a wait from no answer', () => {
+        expect(releasesProblemKind('github-rate-limit', 23)).toBe('rate-limit-wait');
+        expect(releasesProblemKind('github-rate-limit', 0)).toBe('rate-limit');
+        expect(releasesProblemKind('github-rate-limit', undefined)).toBe('rate-limit');
+        expect(releasesProblemKind('releases-unreachable', 4)).toBe('unreachable');
+        expect(releasesProblemKind('something-else', 4)).toBe('');
+        expect(releasesProblemKind(undefined, undefined)).toBe('');
     });
 });
