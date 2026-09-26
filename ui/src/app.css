@@ -709,6 +709,11 @@ a.ol-badge-accent:hover { background: var(--hmm-accent); color: var(--hmm-bg); }
 .ol-seg > :is(a, button):hover { background: var(--hmm-control-bg-hover); }
 .ol-seg > :is([aria-current='page'], [aria-selected='true']) { color: var(--hmm-accent); background: var(--hmm-accent-bg); font-weight: 600; }
 .ol-seg > :is(a, button):focus-visible { outline: 2px solid var(--hmm-focus); outline-offset: -2px; }
+/* lib/Tabs.svelte (task 267): a tab row never wider than the page - on a phone it scrolls sideways;
+   a tab's count after its label, quieter than the label */
+.ol-tabs { max-width: 100%; overflow-x: auto; scrollbar-width: thin; }
+.ol-tabs > button { flex-shrink: 0; }
+.ol-tab-count { color: var(--hmm-fg-muted); font-weight: 400; font-size: var(--hmm-font-size-small); font-variant-numeric: tabular-nums; }
 .ol-actions { display: inline-flex; gap: 4px; }
 /* …but not on a table cell: `inline-flex` there takes the cell out of the table's own layout, the
    browser wraps it in an anonymous cell of its own, and the row's hairline and hover background

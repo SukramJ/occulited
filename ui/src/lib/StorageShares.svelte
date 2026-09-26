@@ -106,23 +106,22 @@
     let formErr = $state('');
     const taken = $derived((view?.shares ?? []).map((s) => s.id));
     const draftNameErr = $derived(draft && !draft.editing ? nameError(draft.id) : '');
-    // the button under the heading opens the panel for a new share, and closes it again
+    // task 268: the button that opens the panel is hidden while it is open (the Disclosure hides
+    // the one it is given); the panel's Cancel closes it
+    let addButton = $state<HTMLButtonElement | null>(null);
+    let editButtons = $state<Record<string, HTMLButtonElement>>({});
+    let formTrigger = $state<HTMLElement | null>(null);
+    // the button under the heading opens the panel for a new share
     function add() {
-        if (formOpen && draft && !draft.editing) {
-            formOpen = false;
-            return;
-        }
+        formTrigger = addButton;
         formErr = '';
         const kind: ShareKind = view?.kinds.cifs ? 'nfs' : 'cifs';
         draft = {editing: false, id: suggestName('', taken), kind, server: '', path: '', version: '', seal: false, read_only: false, user: '', domain: '', password: '', has_password: false, named: false};
         formOpen = true;
     }
-    // a card's Edit opens the same panel for that share (a second click closes it)
+    // a card's Edit opens the same panel for that share
     function edit(s: Share) {
-        if (formOpen && draft?.editing && draft.id === s.id) {
-            formOpen = false;
-            return;
-        }
+        formTrigger = editButtons[s.id] ?? null;
         formErr = '';
         draft = {editing: true, id: s.id, kind: s.kind, server: s.server, path: s.path, version: s.version, seal: !!s.seal, read_only: s.read_only, user: s.user ?? '', domain: s.domain ?? '', password: '', has_password: s.has_password, named: true};
         formOpen = true;
@@ -163,11 +162,11 @@
     }
 </script>
 
-{#snippet addButton()}
-    <button type="button" class="hmm-button" aria-expanded={formOpen && !draft?.editing} onclick={add} disabled={busy !== '' || !view || (!!view.kinds.nfs && !!view.kinds.cifs)} data-action="add-share">{t('Add share')}</button>
+{#snippet addAction()}
+    <button type="button" class="hmm-button" aria-expanded={formOpen && !draft?.editing} onclick={add} bind:this={addButton} disabled={busy !== '' || !view || (!!view.kinds.nfs && !!view.kinds.cifs)} data-action="add-share">{t('Add share')}</button>
 {/snippet}
-<SectionHead id="shares" title={t('Network shares')} help={t('SMB and NFS shares on a NAS or a server. The system mounts a share when something uses it - a backup, the journal\'s copies - and unmounts it when it has been idle for five minutes, so a server that is down never holds up the boot. The journal and the backups name a share by its name.')} actions={admin && view && !view.container ? addButton : undefined} />
-<Disclosure title={draft?.editing ? t('Edit share {name}', {name: draft.id}) : t('Add a network share')} bind:open={formOpen}>
+<SectionHead id="shares" title={t('Network shares')} help={t('SMB and NFS shares on a NAS or a server. The system mounts a share when something uses it - a backup, the journal\'s copies - and unmounts it when it has been idle for five minutes, so a server that is down never holds up the boot. The journal and the backups name a share by its name.')} actions={admin && view && !view.container ? addAction : undefined} />
+<Disclosure title={draft?.editing ? t('Edit share {name}', {name: draft.id}) : t('Add a network share')} bind:open={formOpen} trigger={formTrigger}>
     {#if draft}
         <form class="sh-form" onsubmit={(e) => { e.preventDefault(); void save(); }} data-share-form={draft.kind}>
             <fieldset class="sh-kind" disabled={draft.editing}>
@@ -264,7 +263,7 @@
                                     <button type="button" class="hmm-button" onclick={() => void act(s, 'mount')} disabled={busy !== ''} data-action="mount">{busy === s.id + 'mount' ? t('Mounting…') : t('Mount')}</button>
                                 {/if}
                             {/if}
-                            <button type="button" class="hmm-button" aria-expanded={formOpen && !!draft?.editing && draft.id === s.id} onclick={() => edit(s)} disabled={busy !== ''} data-action="edit">{t('Edit')}</button>
+                            <button type="button" class="hmm-button" aria-expanded={formOpen && !!draft?.editing && draft.id === s.id} onclick={() => edit(s)} disabled={busy !== ''} bind:this={editButtons[s.id]} data-action="edit">{t('Edit')}</button>
                             <button type="button" class="hmm-button" onclick={() => void remove(s)} disabled={busy !== '' || !!s.uses?.length} title={s.uses?.length ? t('In use: pick another location there first.') : undefined} data-action="remove">{t('Remove')}</button>
                         </div>
                     {/if}

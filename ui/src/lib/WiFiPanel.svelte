@@ -13,6 +13,7 @@
     import {t} from './i18n.svelte';
     import Icon from './Icon.svelte';
     import Help from './Help.svelte';
+    import Disclosure from './Disclosure.svelte';
     import Loading from './Loading.svelte';
     import {band, bars, COUNTRIES, joinable, type ScanResult, type WiFiSettings, type WiFiView} from './wifi';
     import {parseWifiCode} from './devicekeys';
@@ -140,6 +141,8 @@
     // a network's QR code (WIFI:T:WPA;S:…;P:…;;), from a router's sticker or a phone's share
     // screen, read by task 154's scanner: the name, the password and hidden in one go
     let qrOpen = $state(false);
+    // task 268: QR code… becomes the scanner's panel; its Cancel brings the button back
+    let qrButton = $state<HTMLButtonElement | null>(null);
     let qrNote = $state('');
     async function wifiScanned(text: string): Promise<boolean> {
         const code = parseWifiCode(text);
@@ -265,15 +268,15 @@
                 <div class="ol-toolbar">
                     <button type="button" class="hmm-button" disabled={busy !== '' || view.state === 'starting'} onclick={doScan}>{busy === 'scan' ? t('Scanning…') : t('Scan')}</button>
                     <button type="button" class="hmm-button" disabled={busy !== ''} onclick={connectHidden}>{t('Hidden network…')}</button>
-                    <button type="button" class="hmm-button" disabled={busy !== ''} onclick={() => ((qrOpen = !qrOpen), (qrNote = ''))} aria-expanded={qrOpen} data-action="wifi-qr">{t('QR code…')}</button>
+                    <button type="button" class="hmm-button" disabled={busy !== ''} onclick={() => ((qrOpen = true), (qrNote = ''))} aria-expanded={qrOpen} bind:this={qrButton} data-action="wifi-qr">{t('QR code…')}</button>
                 </div>
-                {#if qrOpen}
+                <Disclosure title={t('Scan a QR code')} bind:open={qrOpen} trigger={qrButton}>
                     <div class="wifi-qr" data-panel="wifi-qr">
                         <p class="ol-muted">{t("A router's sticker or a phone's \"share Wi-Fi\" screen shows the network as a QR code.")}</p>
                         <QrScanner onresult={wifiScanned} />
                         {#if qrNote}<p class="ol-warn" data-note="wifi-qr">{qrNote}</p>{/if}
                     </div>
-                {/if}
+                </Disclosure>
                 {#if scan}
                     <ul class="wifi-list" data-list="scan">
                         {#each scan.filter((s) => !s.hidden) as s (s.ssid)}

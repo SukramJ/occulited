@@ -46,6 +46,7 @@
     // the add form is for a thing one does once, when a gateway arrives: not on the page until it
     // is asked for (maintainer, 2026-09-07), its trigger the button under the section's heading
     let addOpen = $state(false);
+    let addButton = $state<HTMLButtonElement | null>(null);
     // task 220: an unconfigured gateway the LAN find lists is taken into the add form
     function pickGateway(cls: Cls, type: string, serial: string, ip: string) {
         gwClass = cls;
@@ -121,14 +122,14 @@
 {:else}
     <!-- task 199, the maintainer: "a heading 'BidCoS Gateways', the add gateway button ... and every
          configured gateway as a panel"; task 222: the button under the heading -->
-    {#snippet addButton()}
-        <!-- it closes the panel again, like the USB button (the maintainer, 2026-09-22) -->
-        <button type="button" class="hmm-button" aria-expanded={addOpen} disabled={busy !== ''} onclick={() => (addOpen = !addOpen)} data-gw-add>{t('Add gateway')}</button>
+    {#snippet addAction()}
+        <!-- task 268: the button becomes the panel - hidden while it is open, the panel's Cancel closes it -->
+        <button type="button" class="hmm-button" aria-expanded={addOpen} disabled={busy !== ''} onclick={() => (addOpen = true)} bind:this={addButton} data-gw-add>{t('Add gateway')}</button>
     {/snippet}
-    <SectionHead id="gateways" title={t('BidCoS Gateways')} help={t('A LAN gateway carries the radio of another room or another building. BidCos-RF gateways belong to rfd, BidCos-Wired ones to hs485d; both are configured here and reached over the network.')} actions={admin ? addButton : undefined} />
+    <SectionHead id="gateways" title={t('BidCoS Gateways')} help={t('A LAN gateway carries the radio of another room or another building. BidCos-RF gateways belong to rfd, BidCos-Wired ones to hs485d; both are configured here and reached over the network.')} actions={admin ? addAction : undefined} />
     {#if notice}<div class="ol-notice">{notice}</div>{/if}
     <div class="ol-cards ol-cards-radio ol-panelrow">
-        <Disclosure title={t('Add a gateway')} bind:open={addOpen}>
+        <Disclosure title={t('Add a gateway')} bind:open={addOpen} trigger={addButton}>
             {#snippet help()}{t('Written to rfd.conf / hs485d.conf exactly as the CCU WebUI did. Without an address the gateway is found by its serial on the LAN. The access key is the one printed on the gateway.')}{/snippet}
             <div class="ol-form">
                 <!-- the class belongs to the thing being added: it decides which daemon owns the

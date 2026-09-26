@@ -13,6 +13,7 @@
      * for stay until they are used.
      */
     import {untrack} from 'svelte';
+    import Tabs from './Tabs.svelte';
     import {api, type DataStoreConfig, type HistoryListConfig, type JournalConfig, type JournalStorage, type LogLevels} from './api';
     import {levelsKey, multimacdLevel, OCCULITED_AREAS, OCCULITED_LEVELS, occulitedDebugOn, toggleArea} from './loglevels';
     import {i18n, t} from './i18n.svelte';
@@ -34,16 +35,6 @@
         {id: 'journal', label: 'Journal'},
         {id: 'history', label: 'History'},
     ];
-    // a tablist: the arrow keys, Home and End move between the tabs and choose them (WAI-ARIA)
-    let tabButtons = $state<HTMLButtonElement[]>([]);
-    function tabKey(ev: KeyboardEvent, i: number) {
-        const n = TABS.length;
-        const to = ev.key === 'ArrowRight' ? (i + 1) % n : ev.key === 'ArrowLeft' ? (i - 1 + n) % n : ev.key === 'Home' ? 0 : ev.key === 'End' ? n - 1 : -1;
-        if (to < 0) return;
-        ev.preventDefault();
-        tab = TABS[to]!.id;
-        tabButtons[to]?.focus();
-    }
 
     // task 23, task 85: where the journal lives and how big it may get. One file, one script at
     // boot, re-run on save. RAM only, RAM copied to the userfs (ram-sync), or persistent on the
@@ -361,21 +352,7 @@
 </script>
 
 <ModalDialog {open} title={t('Log settings')} size="large" onclose={close} {dirty}>
-    <div class="ol-seg ls-tabs" role="tablist" aria-label={t('Log settings')}>
-        {#each TABS as tb, i (tb.id)}
-            <button
-                type="button"
-                role="tab"
-                id={`ls-tab-${tb.id}`}
-                aria-selected={tab === tb.id}
-                aria-controls={`ls-panel-${tb.id}`}
-                tabindex={tab === tb.id ? 0 : -1}
-                bind:this={tabButtons[i]}
-                onclick={() => (tab = tb.id)}
-                onkeydown={(ev) => tabKey(ev, i)}>{t(tb.label)}</button
-            >
-        {/each}
-    </div>
+    <Tabs tabs={TABS.map((tb) => ({id: tb.id, label: t(tb.label)}))} bind:value={tab} label={t('Log settings')} idPrefix="ls" class="ls-tabs" />
     {#if tab === 'levels'}
         <div class="ls-panel" role="tabpanel" id="ls-panel-levels" aria-labelledby="ls-tab-levels">
             {#if levelsErr}<div class="ol-warn">{levelsErr}</div>{/if}
@@ -744,7 +721,7 @@
 </ModalDialog>
 
 <style>
-    .ls-tabs { align-self: flex-start; margin: 2px 0 14px; flex-shrink: 0; /* a tall panel must not squeeze the tabs away (task 228) */ }
+    :global(.ls-tabs) { align-self: flex-start; margin: 2px 0 14px; flex-shrink: 0; /* a tall panel must not squeeze the tabs away (task 228) */ }
     .ls-panel { padding-bottom: 16px; }
     /* 27.8: the level grid, one card per daemon */
     .lv-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); gap: 12px 20px; margin-bottom: 10px; }

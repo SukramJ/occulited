@@ -89,6 +89,7 @@
     // the radio.
     let usb = $state<USBDevice[] | null>(null);
     let usbOpen = $state(false);
+    let usbButton = $state<HTMLButtonElement | null>(null);
     let usbErr = $state('');
     let usbBusy = $state(false);
     let showHubs = $state(false);
@@ -187,14 +188,15 @@
     <!-- the section's heading and its own action (task 199; the maintainer, 2026-09-24, task 222:
          "move the usb-devices, add gateway and search again buttons below the area headings"). The
          USB list is the modules' diagnostic, so its trigger stands here, its panel above the cards. -->
-    {#snippet usbButton()}
-        <button type="button" class="hmm-button" aria-expanded={usbOpen} onclick={() => (usbOpen = !usbOpen)} data-usb-toggle>{t('USB devices')}</button>
+    {#snippet usbAction()}
+        <!-- task 268: the button becomes the panel; its Close brings the button back -->
+        <button type="button" class="hmm-button" aria-expanded={usbOpen} onclick={() => (usbOpen = true)} bind:this={usbButton} data-usb-toggle>{t('USB devices')}</button>
     {/snippet}
-    <SectionHead id="modules" title={t('Modules')} actions={usbButton} />
+    <SectionHead id="modules" title={t('Modules')} actions={usbAction} />
     <div class="ol-cards ol-cards-radio ol-panelrow">
         <!-- task 42: the USB list, collapsed - a diagnostic for the moment a stick is plugged in
              and the box does not see it, or sees it as something else -->
-        <Disclosure title={t('USB devices')} bind:open={usbOpen} readOnly>
+        <Disclosure title={t('USB devices')} bind:open={usbOpen} readOnly trigger={usbButton}>
             {#snippet help()}{t('Read from /sys/bus/usb/devices - what the kernel says about each device, its driver and the device nodes it produced. A stick that carries a radio module is marked with the protocols the firmware gave it.')}{/snippet}
             {#if usbErr}<div class="ol-warn">{usbErr}</div>{/if}
             {#if usb}

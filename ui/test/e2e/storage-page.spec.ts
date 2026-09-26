@@ -1,5 +1,6 @@
 import {expect, test, type Page} from '@playwright/test';
 import {fitsWindow} from './scroll';
+import {buttonBecomesPanel} from './panels';
 
 // openccu-lite task 228, phase 1: System → Storage - the USB sticks, what uses them, Format (an in-page panel since task 247)
 // (exFAT by default, a required label, one danger click) and Safely remove.
@@ -72,10 +73,8 @@ test('a blank stick gets OPENCCU; Cancel changes nothing', async ({page, baseURL
     await expect(page.locator('[data-format-label]')).toHaveValue('OPENCCU');
     await disk(page, 'sdb').getByRole('group', {name: 'Format the USB stick'}).getByRole('button', {name: 'Cancel'}).click();
     await expect(page.locator('[data-format-dialog]')).toHaveCount(0);
-    // the button opens it and closes it again
-    await button.click();
-    await expect(button).toHaveAttribute('aria-expanded', 'true');
-    await button.click();
+    // task 268: the button becomes the panel and comes back after Cancel
+    await buttonBecomesPanel(disk(page, 'sdb').locator('[data-action="format"]'), disk(page, 'sdb').getByRole('group', {name: 'Format the USB stick'}));
     await expect(page.locator('[data-format-dialog]')).toHaveCount(0);
     await expect(disk(page, 'sdb').locator('[data-no-fs]')).toBeVisible();
 });

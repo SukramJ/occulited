@@ -70,13 +70,11 @@
     let fs = $state<FS>('exfat');
     let label = $state('');
     const labelProblem = $derived(labelError(fs, label));
-    // task 247: the card's button opens the panel in the card, and closes it again
+    // task 247: the card's button opens the panel in the card; task 268: the button is hidden while
+    // the panel is open (the Disclosure hides it), the panel's Cancel closes it
     let fmtOpen = $state(false);
+    let fmtButtons = $state<Record<string, HTMLButtonElement>>({});
     function openFormat(d: Disk) {
-        if (fmtOpen && formatting?.name === d.name) {
-            fmtOpen = false;
-            return;
-        }
         fmtOpen = true;
         formatting = d;
         fs = view?.filesystems.includes('exfat') ? 'exfat' : 'ext4';
@@ -210,14 +208,14 @@
                     {/if}
                     {#if admin}
                         <div class="ol-form-buttons st-actions">
-                            <button type="button" class="hmm-button" aria-expanded={fmtOpen && formatting?.name === d.name} onclick={() => openFormat(d)} disabled={busy !== '' || view.filesystems.length === 0} data-action="format">{t('Format')}</button>
+                            <button type="button" class="hmm-button" aria-expanded={fmtOpen && formatting?.name === d.name} onclick={() => openFormat(d)} disabled={busy !== '' || view.filesystems.length === 0} bind:this={fmtButtons[d.name]} data-action="format">{t('Format')}</button>
                             <button type="button" class="hmm-button" onclick={() => eject(d)} disabled={busy !== ''} data-action="eject">{busy === 'eject:' + d.name ? t('Removing…') : t('Safely remove')}</button>
                         </div>
                     {/if}
                     <!-- task 247 (the maintainer): the format form opens in the stick's card as an in-page panel;
                          the erase itself still asks first -->
                     {#if admin}
-                        <Disclosure title={t('Format the USB stick')} bind:open={() => fmtOpen && formatting?.name === d.name, (v) => { if (!v && formatting?.name === d.name && busy === '') fmtOpen = false; }}>
+                        <Disclosure title={t('Format the USB stick')} trigger={fmtButtons[d.name]} bind:open={() => fmtOpen && formatting?.name === d.name, (v) => { if (!v && formatting?.name === d.name && busy === '') fmtOpen = false; }}>
                             {#if formatting?.name === d.name}{@render formatForm(formatting)}{/if}
                         </Disclosure>
                     {/if}

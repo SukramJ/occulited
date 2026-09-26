@@ -230,6 +230,38 @@ test.describe('a panel that opens in the page', () => {
         await expect(add).toBeFocused();
     });
 
+    // task 268: the heading's button is hidden while its panel is open - what it leaves behind is
+    // taken up in the same motion, so what lies below the panel does not jump at the first or the
+    // last frame
+    test('the hidden trigger moves nothing below the panel', async ({page}) => {
+        await holdMotion(page);
+        await page.goto('/system/lan-devices');
+        const add = headButton(page, 'Add gateway');
+        const below = page.getByRole('heading', {level: 2}).nth(1);
+        await expect(below).toBeVisible();
+        const before = await rectOf(below);
+
+        await hold(page);
+        await add.click();
+        await at(page, 0);
+        expectNear(await rectOf(below), before, 'the heading below at the first frame');
+        await release(page);
+        await still(page);
+        await expect(add).toBeHidden();
+        const open = await rectOf(below);
+
+        await hold(page);
+        await panel(page, 'Add a gateway').getByRole('button', {name: 'Cancel'}).click();
+        await at(page, 0);
+        expectNear(await rectOf(below), open, 'the heading below at the first frame of the closing');
+        await at(page, 1);
+        expectNear(await rectOf(below), before, 'the heading below at the last frame of the closing');
+        await release(page);
+        await still(page);
+        await expect(add).toBeVisible();
+        expectNear(await rectOf(below), before, 'the heading below once closed');
+    });
+
     test('is there at once, and gone at once, under reduced motion', async ({page}) => {
         await page.emulateMedia({reducedMotion: 'reduce'});
         await watchMotion(page, '.ol-disclosure-slot, .ol-disclosure, .ol-disclosure-body, .ol-disclosure-ghost');

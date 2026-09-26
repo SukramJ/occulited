@@ -41,8 +41,9 @@ test('the gateways are cards on the LAN devices page, the add button below the h
 });
 
 // The maintainer, 2026-09-22: the panels of the section buttons are two of the three card columns
-// wide and open above the cards; each button closes its panel again.
-test('the add panel lines up with the cards, and the button closes it', async ({page}) => {
+// wide and open above the cards. Task 268: the button is hidden while its panel is open; the panel's
+// Cancel / Close closes it and brings the button back.
+test('the add panel lines up with the cards, and Cancel brings the button back', async ({page}) => {
     await page.setViewportSize({width: 1280, height: 1000});
     await page.goto('/system/lan-devices');
     const addButton = page.locator('.ol-headrow', {has: page.locator('h2#gateways')}).getByRole('button', {name: 'Add gateway'});
@@ -57,8 +58,10 @@ test('the add panel lines up with the cards, and the button closes it', async ({
     expect(Math.round(w.panel.left)).toBe(Math.round(w.first.left));
     expect(Math.round(w.panel.right)).toBe(Math.round(w.second.right));
     expect(w.panel.bottom).toBeLessThan(w.first.top);
-    await addButton.click();
+    await expect(page.locator('[data-gw-add]')).toBeHidden();
+    await page.getByRole('group', {name: 'Add a gateway'}).getByRole('button', {name: 'Cancel'}).click();
     await expect(page.getByRole('group', {name: 'Add a gateway'})).toHaveCount(0);
+    await expect(addButton).toBeVisible();
 });
 
 test('the USB devices button stands under the Modules heading on Interfaces, and opens its panel above the cards, full width (task 249)', async ({page}) => {
@@ -88,8 +91,10 @@ test('the USB devices button stands under the Modules heading on Interfaces, and
     // read-only: Close, not Cancel
     await expect(page.getByRole('group', {name: 'USB devices'}).getByRole('button', {name: 'Close'})).toBeVisible();
     expect(w.usb.top).toBeLessThan(w.card.top);
-    await usbButton.click();
+    await expect(page.locator('[data-usb-toggle]')).toBeHidden();
+    await page.getByRole('group', {name: 'USB devices'}).getByRole('button', {name: 'Close'}).click();
     await expect(page.locator('table.ol-usb')).toHaveCount(0);
+    await expect(usbButton).toBeVisible();
 });
 
 test('rename writes the list back with the name changed and the keys kept', async ({page}) => {

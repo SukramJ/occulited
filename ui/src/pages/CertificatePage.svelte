@@ -12,8 +12,9 @@
     import {untrack} from 'svelte';
     import Loading from '../lib/Loading.svelte';
     import Help from '../lib/Help.svelte';
+    import ACMETrustList from '../lib/ACMETrustList.svelte';
     import RunLog from '../lib/RunLog.svelte';
-    import {CLOSE_MS, reveal} from '../lib/reveal';
+    import Disclosure from '../lib/Disclosure.svelte';
     import HTTPSSettings from '../lib/HTTPSSettings.svelte';
 
     /*
@@ -44,6 +45,8 @@
     // the form: the settings as the API answered them, plus the secrets typed here
     let mode = $state<'self-signed' | 'acme' | 'manual'>('self-signed');
     let form = $state<CertSettings | null>(null);
+    // task 231: bumps after a save, so the ACME trust list below the CA root field re-reads
+    let savedTick = $state(0);
     let namesText = $state('');
     let eabHmac = $state('');
     let creds = $state<Record<string, string>>({});
@@ -184,6 +187,7 @@
             // they are empty and a certificate is already installed by hand)
             if (b.mode === 'manual' && !forTest) return await saveManual(b);
             status = await api.put<CertStatus>('/api/system/v1/certificate/settings', b);
+            savedTick++; // task 231: a pasted CA root is in the ACME trust store now
             fill(status);
             if (forTest) mode = 'acme';
             notice = t('Saved.');
@@ -270,6 +274,7 @@
         if (!anyFile && !anyPaste) {
             if (status?.settings.mode === 'manual') {
                 status = await api.put<CertStatus>('/api/system/v1/certificate/settings', b);
+            savedTick++; // task 231: a pasted CA root is in the ACME trust store now
                 fill(status);
                 notice = t('Saved.');
                 noticeError = false;
@@ -313,6 +318,8 @@
     let keySANs = $state('');
     let keyOrg = $state('');
     let csrOpen = $state(false);
+    // task 268: Show text becomes the panel with the request's text; the panel's Close brings it back
+    let csrButton = $state<HTMLButtonElement | null>(null);
     let copied = $state(false);
     const pending = $derived<CertPending | null>(status?.pending ?? null);
     $effect(() => {
@@ -451,8 +458,10 @@
                     <label><span>{t('Directory URL')}</span><input class="hmm-input hmm-mono" bind:value={form.directory_url} placeholder="https://ca.lan:9000/acme/acme/directory" /></label>
                     <!-- a label with a ? in it names the field by `for`: without it the ? would be
                          the first labelable child, and the label would name that -->
-                    <label class="tall" for="ol-cert-ca-root"><span>{t('CA root (PEM)')}<Help>{t('The CA\'s root certificate, trusted for this connection only; the system\'s own trust store is not changed. Empty when the CA\'s certificate is publicly trusted.')}</Help></span><textarea id="ol-cert-ca-root" class="hmm-input hmm-mono pem ol-pem" rows="30" bind:value={form.ca_root} placeholder="-----BEGIN CERTIFICATE-----" spellcheck="false"></textarea></label>
+                    <label class="tall" for="ol-cert-ca-root"><span>{t('CA root (PEM)')}<Help>{t('The CA\'s root certificate: saved into the ACME trust store, which the directory connection trusts besides occulited\'s own store; the system-wide store is not changed. Empty when the CA\'s certificate is one occulited trusts already.')}</Help></span><textarea id="ol-cert-ca-root" class="hmm-input hmm-mono pem ol-pem" rows="30" bind:value={form.ca_root} placeholder="-----BEGIN CERTIFICATE-----" spellcheck="false"></textarea></label>
                     <div class="hint">{@render certPreview(rootPreview, form.ca_root, 'certificate')}</div>
+                    <!-- openccu-lite task 231: what the ACME store holds, the same list as System → Trust stores -->
+                    {#if auth.role === 'admin'}<div class="hint"><ACMETrustList refresh={savedTick} /></div>{/if}
                 {/if}
                 <label><span>{t('E-mail')}</span><input class="hmm-input" bind:value={form.email} placeholder="admin@example.org" /></label>
                 <label for="ol-cert-names"><span>{t('Names')}<Help>{t('The DNS names the system is reached by, the first one the subject. An ACME certificate cannot carry an address.')}</Help></span><input id="ol-cert-names" class="hmm-input hmm-mono" bind:value={namesText} placeholder={suggested.length ? suggested.join(', ') : 'ccu.example.org, ccu.lan'} /></label>
@@ -526,10 +535,14 @@
                     <div class="ol-actions pend-actions">
                         <a class="hmm-button primary" href="/api/system/v1/certificate/csr" download={`${pending.cn}.csr`}>{t('Download CSR')}</a>
                         <button class="hmm-button" onclick={copyCSR}>{copied ? t('Copied') : t('Copy CSR')}</button>
-                        <button class="hmm-button" onclick={() => (csrOpen = !csrOpen)}>{csrOpen ? t('Hide text') : t('Show text')}</button>
+                        {#if pending.csr}<button class="hmm-button" aria-expanded={csrOpen} onclick={() => (csrOpen = true)} bind:this={csrButton} data-action="csr-text">{t('Show text')}</button>{/if}
                     </div>
-                    <!-- task 98: the request's text opens and closes in place -->
-                    {#if csrOpen && pending.csr}<textarea in:reveal out:reveal={{duration: CLOSE_MS}} class="hmm-input hmm-mono pem ol-pem csr" rows="16" readonly value={pending.csr} aria-label={t('Certificate request (PEM)')}></textarea>{/if}
+                    <!-- task 98: the request's text opens and closes in place; task 268: as the button's panel -->
+                    {#if pending.csr}
+                        <Disclosure title={t('The request as text')} bind:open={csrOpen} readOnly trigger={csrButton}>
+                            <textarea class="hmm-input hmm-mono pem ol-pem csr" rows="16" readonly value={pending.csr} aria-label={t('Certificate request (PEM)')}></textarea>
+                        </Disclosure>
+                    {/if}
                 </div>
             {/if}
             <div class="ol-form ol-certform">

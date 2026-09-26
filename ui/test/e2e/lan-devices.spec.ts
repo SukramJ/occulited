@@ -1,4 +1,5 @@
 import {expect, test} from '@playwright/test';
+import {buttonBecomesPanel} from './panels';
 
 // openccu-lite task 220 (the maintainer, Q&A 2026-09-24): a LAN devices section (on its own page
 // since task 222) - eQ-3's LAN devices as NetFinder finds them, the network settings of the gateways and the
@@ -33,6 +34,12 @@ test('the found devices, each with what the system knows about it', async ({page
 });
 
 test('the network settings of an access point: the sticker password, the rails, the result', async ({page}) => {
+    // what this page posted, not the stub's shared log: the tests run in parallel, and the next one
+    // writes the gateway's settings at the same time
+    const posted: {url: string; body: Record<string, unknown>}[] = [];
+    page.on('request', (r) => {
+        if (r.method() === 'POST' && /\/radio\/lan-devices\/[^/]+\/network$/.test(r.url())) posted.push({url: new URL(r.url()).pathname, body: r.postDataJSON()});
+    });
     await page.goto('/system/lan-devices');
     await card(page, '30150377DC0003DB3393B323').locator('[data-lan-edit]').click();
     // task 247: an in-page panel in the device's card, not a dialog
@@ -58,8 +65,12 @@ test('the network settings of an access point: the sticker password, the rails, 
     await dialog.locator('[data-lan-save]').click();
     await expect(page.locator('[data-lan-result]')).toContainText('the network settings were taken. It answers with 192.0.2.160 now.');
     await expect(dialog).toHaveCount(0);
-    const writes = await (await page.request.get('/api/stub/lan-writes')).json();
-    expect(writes.at(-1)).toMatchObject({serial: '30150377DC0003DB3393B323', dhcp: false, ip: '192.0.2.160', netmask: '255.255.255.0', password: 'stickerpw'});
+    // three posts - the wrong password, the other subnet, the one taken - all to this device
+    expect(posted.map((p) => p.url)).toEqual(Array(3).fill('/api/system/v1/radio/lan-devices/30150377DC0003DB3393B323/network'));
+    expect(posted.at(-1)!.body).toMatchObject({dhcp: false, ip: '192.0.2.160', netmask: '255.255.255.0', password: 'stickerpw'});
+    // and the stub took exactly that for this device
+    const writes: Record<string, unknown>[] = await (await page.request.get('/api/stub/lan-writes')).json();
+    expect(writes.filter((w) => w.serial === '30150377DC0003DB3393B323').at(-1)).toMatchObject({dhcp: false, ip: '192.0.2.160', netmask: '255.255.255.0', password: 'stickerpw'});
 });
 
 test('a configured gateway: no password asked, the configuration follows', async ({page}) => {
@@ -173,19 +184,17 @@ test('the network settings open in the card and close again', async ({page}) => 
     const hap = card(page, '30150377DC0003DB3393B323');
     const gw = card(page, 'LEQ0636432');
     const button = hap.locator('[data-lan-edit]');
-    await button.click();
-    await expect(button).toHaveAttribute('aria-expanded', 'true');
     const panel = hap.getByRole('group', {name: 'Network settings'});
+    // task 268: the button becomes the panel, Cancel brings it back
+    await buttonBecomesPanel(button, panel);
+    // another card's button while one is open: that card's panel, this one's button back
+    await button.click();
     await expect(panel).toBeVisible();
-    await button.click();
-    await expect(panel).toHaveCount(0);
-    await button.click();
-    await panel.getByRole('button', {name: 'Cancel'}).click();
-    await expect(panel).toHaveCount(0);
-    await button.click();
     await gw.locator('[data-lan-edit]').click();
     await expect(gw.getByRole('group', {name: 'Network settings'})).toBeVisible();
+    await expect(gw.locator('[data-lan-edit]')).toBeHidden();
     await expect(panel).toHaveCount(0);
+    await expect(button).toBeVisible();
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
     expect(overflow).toBe(false);
 });

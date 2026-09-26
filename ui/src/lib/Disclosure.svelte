@@ -28,7 +28,15 @@
      * back into it; without a trigger to measure it fades in while the slot grows. Under reduced
      * motion there is no motion at all.
      *
-     * The focus: opening moves it to the panel's first field (the panel itself while it has none -
+     * Task 268 (the maintainer: "buttons that open panels in the page should transform to the panel
+ * itself (so the button is not visible anymore when a panel gets opened)"): a button that opens the
+ * panel is never beside the open panel. With `label` that is the component's own button; a caller
+ * whose button stands elsewhere - under a section's heading, in a card's row of actions - passes it
+ * as `trigger`, and the component hides it while the panel is open, grows the panel out of it and
+ * shrinks it back into it, as with its own. What the hidden button leaves behind (the row it stood
+ * in) is taken up by the slot's margin in the same motion, so the page below does not jump.
+ *
+ * The focus: opening moves it to the panel's first field (the panel itself while it has none -
      * the USB list is still loading); closing gives it back to the button that opened the panel -
      * this one, or the caller's own - unless the reader has since moved on to something else.
      */
@@ -50,9 +58,11 @@
         help?: Snippet;
         /** a view without an action to drop (task 249, the maintainer): its button says Close, not Cancel */
         readOnly?: boolean;
+        /** the caller's own button that opens the panel: hidden while it is open (task 268) */
+        trigger?: HTMLElement | null;
         children: Snippet;
     }
-    let {label, title, open = $bindable(false), disabled = false, help, readOnly = false, children}: Props = $props();
+    let {label, title, open = $bindable(false), disabled = false, help, readOnly = false, trigger: external = null, children}: Props = $props();
     const uid = $props.id();
 
     type Phase = 'closed' | 'opening' | 'open' | 'closing';
@@ -63,6 +73,8 @@
     let panel = $state<HTMLElement | null>(null);
     let body = $state<HTMLElement | null>(null);
     let trigger = $state<HTMLButtonElement | null>(null);
+    /** the caller's trigger while this component keeps it hidden (task 268) */
+    let hidden: HTMLElement | null = null;
     /** the focused element outside the panel when a caller opened it: its trigger, if it has one */
     let opener: HTMLElement | null = null;
     let wanted = untrack(() => open);
@@ -123,6 +135,35 @@
         body?.style.removeProperty('width');
     }
 
+    function hideTrigger(el: HTMLElement) {
+        hidden = el;
+        el.style.display = 'none';
+    }
+    /** the caller's trigger back in the flow, still unseen while the panel shrinks onto it */
+    function showTriggerUnseen() {
+        if (!hidden) return;
+        hidden.style.removeProperty('display');
+        hidden.style.visibility = 'hidden';
+    }
+    function releaseTrigger() {
+        if (!hidden) return;
+        hidden.style.removeProperty('display');
+        hidden.style.removeProperty('visibility');
+        hidden = null;
+    }
+    /** how far the slot moves down while the hidden trigger is back in the flow */
+    function triggerShift(s: HTMLElement): number {
+        if (!hidden) return 0;
+        const el = hidden;
+        const was = el.style.display;
+        el.style.display = 'none';
+        const a = s.getBoundingClientRect().top;
+        el.style.removeProperty('display');
+        const b = s.getBoundingClientRect().top;
+        el.style.display = was;
+        return b - a;
+    }
+
     function settleOpen() {
         unstyle();
         ghost = '';
@@ -130,6 +171,7 @@
     }
     function settleClosed(focus: HTMLElement | null) {
         unstyle();
+        releaseTrigger();
         ghost = '';
         phase = 'closed';
         if (focus)
@@ -142,11 +184,12 @@
         const mine = ++generation;
         stop();
         const active = document.activeElement;
-        opener = !label && elsewhere(active) ? active : null;
+        opener = label ? null : measurable(external) ? external : elsewhere(active) ? active : null;
         const from = label ? trigger : opener;
         const start: Look | null = measurable(from) ? lookOf(from) : null;
         const closedHeight = slot?.getBoundingClientRect().height ?? 0;
         ghost = start ? (label ?? from?.textContent?.trim() ?? '') : '';
+        if (!label && external && opener === external) hideTrigger(external);
         phase = 'opening';
         await tick();
         if (mine !== generation) return;
@@ -157,18 +200,20 @@
         }
         const s = slot;
         const p = panel;
+        // the hidden trigger's row: the slot starts where it was with the trigger still there
+        const shift = withoutMargins(s, () => triggerShift(s));
         const closedSlot = withoutMargins(s, () => s.getBoundingClientRect());
         const openSlot = s.getBoundingClientRect();
         const {marginTop, marginBottom} = getComputedStyle(s);
         const end = lookOf(p);
         const animations = [
-            run(s, [{height: `${closedHeight}px`, marginTop: '0px', marginBottom: '0px'}, {height: `${openSlot.height}px`, marginTop, marginBottom}], MORPH_OPEN_MS),
+            run(s, [{height: `${closedHeight}px`, marginTop: `${shift}px`, marginBottom: '0px'}, {height: `${openSlot.height}px`, marginTop, marginBottom}], MORPH_OPEN_MS),
         ];
         if (start) {
             // the content keeps its final width while the box is narrower, so no line reflows
             body.style.width = `${body.getBoundingClientRect().width}px`;
             p.style.overflow = 'clip';
-            animations.push(run(p, [boxFrame(start, moved(end, openSlot, closedSlot)), boxFrame(end, end)], MORPH_OPEN_MS));
+            animations.push(run(p, [boxFrame(start, moved(end, openSlot, {left: closedSlot.left, top: closedSlot.top + shift})), boxFrame(end, end)], MORPH_OPEN_MS));
             animations.push(run(body, CONTENT_IN, MORPH_OPEN_MS));
             const g = p.querySelector('.ol-disclosure-ghost');
             if (g) animations.push(run(g, LABEL_OUT, MORPH_OPEN_MS));
@@ -201,12 +246,15 @@
         if (mine !== generation) return;
         const to = label ? trigger : back;
         const focus = giveBack ? to : null;
+        showTriggerUnseen();
         if (!panel || !body || reducedMotion() || typeof s.animate !== 'function') {
             settleClosed(focus);
             return;
         }
         const p = panel;
         let end: Look | null = null;
+        // the trigger back in its row pushes the slot down: the motion starts where the slot was
+        const shift = s.getBoundingClientRect().top - openSlot.top;
         const closedSlot = withoutMargins(s, () => {
             if (measurable(to)) end = lookOf(to);
             return s.getBoundingClientRect();
@@ -215,7 +263,7 @@
         p.style.width = `${start.width}px`;
         body.style.width = `${bodyWidth}px`;
         const animations = [
-            run(s, [{height: `${openSlot.height}px`, marginTop, marginBottom}, {height: `${closedSlot.height}px`, marginTop: '0px', marginBottom: '0px'}], MORPH_CLOSE_MS),
+            run(s, [{height: `${openSlot.height}px`, marginTop: `${parseFloat(marginTop) - shift}px`, marginBottom}, {height: `${closedSlot.height}px`, marginTop: '0px', marginBottom: '0px'}], MORPH_CLOSE_MS),
         ];
         if (end) {
             p.style.overflow = 'clip';
@@ -239,12 +287,28 @@
             void (want ? grow() : shrink());
         });
     });
+    // one panel for several triggers (a share's Add and each card's Edit): opened again from another
+    // button while open, that one hides and the previous one comes back; and a trigger that appears
+    // only after the panel was opened from elsewhere (the Certificate page's Show text, whose panel
+    // the key's generation opens) is hidden too
+    $effect(() => {
+        const el = external;
+        untrack(() => {
+            if (label || phase === 'closed' || phase === 'closing' || hidden === el) return;
+            releaseTrigger();
+            if (el && el.isConnected) {
+                hideTrigger(el);
+                opener = el;
+            }
+        });
+    });
     // a page left in the middle of a motion: nothing settles into a component that is gone
     $effect(() => () => {
         generation++;
         const r = running;
         running = null;
         for (const a of r?.animations ?? []) a.cancel();
+        releaseTrigger();
     });
 </script>
 

@@ -80,6 +80,11 @@ test('a key and request made on the box, the CSR downloaded', async ({page}) => 
     await expect(pend).toContainText('P-384');
     // the request as text, and as a download with the CN as the file name
     await expect(page.getByLabel('Certificate request (PEM)')).toHaveValue(/^-----BEGIN CERTIFICATE REQUEST-----/);
+    // task 268: Show text is the panel while it is open; Close brings it back
+    await expect(page.locator('[data-action="csr-text"]')).toBeHidden();
+    await page.getByRole('group', {name: 'The request as text'}).getByRole('button', {name: 'Close'}).click();
+    await expect(page.getByLabel('Certificate request (PEM)')).toHaveCount(0);
+    await expect(page.locator('[data-action="csr-text"]')).toBeVisible();
     const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('link', {name: 'Download CSR'}).click()]);
     expect(download.suggestedFilename()).toBe('ccu.example.org.csr');
     const stream = await download.createReadStream();

@@ -51,6 +51,8 @@
     let result = $state('');
     // task 247: the button opens the panel in its card, and closes it again
     let panelOpen = $state(false);
+    // task 268: each card's Network settings button, hidden while its panel is open
+    let editButtons = $state<Record<string, HTMLButtonElement>>({});
     function edit(d: LANDevice) {
         if (panelOpen && editing?.serial === d.serial) {
             panelOpen = false;
@@ -180,7 +182,7 @@
                 </dl>
                 <div class="ol-actions lan-actions">
                     {#if d.link}<a class="hmm-button" href={d.link} target="_blank" rel="noopener noreferrer">{t('Open its web UI')}</a>{/if}
-                    {#if admin && d.writable}<button type="button" class="hmm-button" aria-expanded={editing?.serial === d.serial} onclick={() => edit(d)} data-lan-edit>{t('Network settings')}</button>{/if}
+                    {#if admin && d.writable}<button type="button" class="hmm-button" aria-expanded={editing?.serial === d.serial && panelOpen} onclick={() => edit(d)} bind:this={editButtons[d.serial]} data-lan-edit>{t('Network settings')}</button>{/if}
                     {#if admin && d.kind === 'gateway' && !d.configured && onpick}
                         <button type="button" class="hmm-button" data-lan-pick onclick={() => onpick(d.type === 'eQ3-HMW-LGW-App' ? 'wired' : 'rf', d.type === 'eQ3-HMW-LGW-App' ? 'HMWLGW' : 'HMLGW2', d.serial, runningIP(d))}>{t('Add as gateway')}</button>
                     {/if}
@@ -188,7 +190,7 @@
                 <!-- task 247 (the maintainer): the settings open in the card, as an in-page panel that grows
                      out of the button, not a dialog -->
                 {#if admin && d.writable}
-                    <Disclosure title={t('Network settings')} bind:open={() => editing?.serial === d.serial && panelOpen, (v) => { if (!v && editing?.serial === d.serial) panelOpen = false; }}>
+                    <Disclosure title={t('Network settings')} trigger={editButtons[d.serial]} bind:open={() => editing?.serial === d.serial && panelOpen, (v) => { if (!v && editing?.serial === d.serial) panelOpen = false; }}>
                         {#if editing?.serial === d.serial}{@render settingsForm(d)}{/if}
                     </Disclosure>
                 {/if}

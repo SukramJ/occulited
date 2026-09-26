@@ -160,8 +160,8 @@ test('a share in use: its uses linked, Remove waits', async ({page, baseURL}) =>
 });
 
 // task 241 (the maintainer: "use the same concept like everywhere else"): Add share and Edit open an
-// in-page panel under the heading, as Add gateway does - no dialog; it opens and closes again from
-// its button, Cancel closes it, Save closes it; German, phone width.
+// in-page panel under the heading, as Add gateway does - no dialog; task 268: the button is hidden
+// while the panel is open, Cancel and Save close it and bring it back; German, phone width.
 test('Add share and Edit are an in-page panel, not a dialog', async ({page, baseURL}) => {
     await own(page, baseURL);
     const addBtn = page.getByRole('button', {name: 'Add share'});
@@ -171,27 +171,27 @@ test('Add share and Edit are an in-page panel, not a dialog', async ({page, base
     await expect(panel).toBeVisible();
     await expect(page.getByRole('dialog')).toHaveCount(0);
     await expect(panel.getByRole('heading', {name: 'Add a network share'})).toBeVisible();
-    await expect(addBtn).toHaveAttribute('aria-expanded', 'true');
     // under the heading, above the shares
     const y = async (l: ReturnType<Page['locator']>) => (await l.boundingBox())!.y;
     expect(await y(panel)).toBeLessThan(await y(share(page, 'nas')));
     expect(await y(panel)).toBeGreaterThan(await y(page.getByRole('heading', {level: 2, name: 'Network shares'})));
-    // the button closes it again, Cancel too
-    await addBtn.click();
-    await expect(panel).toHaveCount(0);
-    await addBtn.click();
-    await expect(panel).toBeVisible();
+    // task 268: the button is the panel while it is open; Cancel brings it back
+    await expect(addBtn).toBeHidden();
     await panel.getByRole('button', {name: 'Cancel'}).click();
     await expect(panel).toHaveCount(0);
-    // Edit: the same panel for that share; a second click closes it; another share's Edit switches it
+    await expect(addBtn).toBeVisible();
+    // Edit: the same panel for that share, its Edit hidden; another share's Edit switches it
     await share(page, 'nas').getByRole('button', {name: 'Edit'}).click();
     await expect(panel.getByRole('heading', {name: 'Edit share nas'})).toBeVisible();
-    await expect(share(page, 'nas').getByRole('button', {name: 'Edit'})).toHaveAttribute('aria-expanded', 'true');
+    await expect(share(page, 'nas').locator('[data-action="edit"]')).toBeHidden();
     await share(page, 'media').getByRole('button', {name: 'Edit'}).click();
     await expect(panel.getByRole('heading', {name: 'Edit share media'})).toBeVisible();
     await expect(panel.locator('[data-field="server"]')).toHaveValue('192.168.1.20');
-    await share(page, 'media').getByRole('button', {name: 'Edit'}).click();
+    await expect(share(page, 'nas').locator('[data-action="edit"]')).toBeVisible();
+    await expect(share(page, 'media').locator('[data-action="edit"]')).toBeHidden();
+    await panel.getByRole('button', {name: 'Cancel'}).click();
     await expect(panel).toHaveCount(0);
+    await expect(share(page, 'media').locator('[data-action="edit"]')).toBeVisible();
     // Save closes it
     await share(page, 'media').getByRole('button', {name: 'Edit'}).click();
     await panel.locator('[data-field="server"]').fill('192.168.1.21');
