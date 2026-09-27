@@ -224,6 +224,7 @@ func (a *SystemAPI) warningSources() []warnings.Source {
 		{IDs: []string{"addon-ownership"}, Lists: true, Eval: a.ownershipWarning},
 		{IDs: []string{"security-key"}, Eval: a.securityKeyWarning},
 		{IDs: []string{"hmip-adapter"}, Eval: a.hmipAdapterWarning},
+		{IDs: []string{"devices-import"}, Eval: a.devicesImportWarning},
 		{IDs: []string{"hb-rf-eth"}, Eval: a.hbRFETHWarning},
 		{IDs: []string{"radio-module-unusable", "radio-firmware"}, Eval: a.radioFirmwareWarnings},
 		{IDs: []string{"addon-update"}, Eval: a.addonUpdateWarning},
@@ -807,6 +808,23 @@ func (a *SystemAPI) hmipAdapterWarning(context.Context) ([]warnings.Warning, boo
 		return nil, true
 	}
 	return []warnings.Warning{{ID: "hmip-adapter", Variant: f.Code, Severity: warnings.SeverityError, Href: "/system/interfaces#connections", Params: map[string]any{"adapter": f.Adapter, "line": f.Line, "cause": f.Cause}}}, true
+}
+
+// devices-import (openccu-lite task 275): a device import brought an HmIP identity of another
+// module, and hmipserver has not taken it over onto this one yet - it is starting, the key server
+// was not reached, or the devices have not answered. The variant is the state, so a state that
+// changes is a new warning; the rejected case is hmip-adapter's. Gone with the record's dismissal.
+func (a *SystemAPI) devicesImportWarning(ctx context.Context) ([]warnings.Warning, bool) {
+	rec := a.ImportRecord.Read()
+	if rec == nil || !rec.HmIP.ModuleChanged {
+		return nil, true
+	}
+	out := a.ImportRecord.Outcome(ctx, *rec)
+	switch out.HmIP.State {
+	case system.ImportPending, system.ImportUnknown, system.ImportNoModule:
+		return []warnings.Warning{{ID: "devices-import", Variant: out.HmIP.State, Severity: warnings.SeverityWarning, Href: "/system/interfaces#connections", Params: map[string]any{"from": rec.HmIP.FromSGTIN, "module": out.HmIP.ModuleNow, "count": rec.HmIP.Devices}}}, true
+	}
+	return nil, true
 }
 
 // firewall (B-152, task 157): a family's INPUT chain has no jump to lite-input - the rules were not

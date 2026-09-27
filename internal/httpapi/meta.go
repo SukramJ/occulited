@@ -775,6 +775,38 @@ func (a *MetaAPI) importRegadom(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, out)
 }
 
+// NamesImportResult is what the device import reports about the ReGa names it took from the same
+// backup (openccu-lite task 281): the counts, or the error - a names failure never stops the
+// device import.
+type NamesImportResult struct {
+	OK        bool   `json:"ok"`
+	Objects   int    `json:"objects"`
+	Rooms     int    `json:"rooms"`
+	Functions int    `json:"functions"`
+	Changed   bool   `json:"changed"`
+	Error     string `json:"error,omitempty"`
+}
+
+// ImportNamesFromSBK imports the names, rooms and functions of a checked backup's ReGa database
+// into the store, merging (existing objects and nodes stay) - the same path as POST
+// /import/regadom with source restore:<file>, for the device import that runs it before its reboot
+// (openccu-lite task 281: one action takes the devices, the keys and the names).
+func (a *MetaAPI) ImportNamesFromSBK(path string) NamesImportResult {
+	dump, err := regaimport.RegadomFromSBK(path)
+	if err != nil {
+		return NamesImportResult{Error: err.Error()}
+	}
+	res := regaimport.Convert(dump, a.Store.Snapshot().Enums)
+	_, changed, err := a.Store.Import(nil, res.Document, meta.ImportMerge)
+	if err != nil {
+		return NamesImportResult{Error: err.Error()}
+	}
+	if changed && a.AfterImport != nil {
+		a.AfterImport()
+	}
+	return NamesImportResult{OK: true, Objects: len(res.Document.Objects), Rooms: res.Rooms, Functions: res.Functions, Changed: changed}
+}
+
 // RegadomPath is the box's ReGa database (under --root for development).
 func (a *MetaAPI) RegadomPath() string { return filepath.Join(a.Root, "etc/config/homematic.regadom") }
 

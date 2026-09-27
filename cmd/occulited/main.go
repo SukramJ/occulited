@@ -719,6 +719,11 @@ func run(opts daemonOptions) error {
 	radioBusy := func() bool { return radioConn.Busy() || radioFW.Status().Running != nil }
 	hmipRestarts := &system.HmIPRestartLock{} // B-198: one lock for every hmipserver rewrite and restart
 	localKey := &system.HmIPLocalKey{Root: root, Services: services, StateDir: filepath.Join(cfg.StateDir, "hmip-local-key"), Plan: radioConn.BootPlan, Busy: radioBusy, Restarts: hmipRestarts, Log: area("hmip-local-key")}
+	// openccu-lite task 275: the record of the last device import, read by the Interfaces page
+	importRecord := &system.ImportRecord{Path: filepath.Join(cfg.StateDir, "devices-import.json"), Root: root, Plan: radioConn.BootPlan}
+	if *rootDir == "/" {
+		importRecord.Interfaces = radioIfs
+	}
 	if *rootDir == "/" {
 		localKey.HmIP = func() (interfaces.Interface, bool) {
 			for _, i := range radioIfs() {
@@ -828,7 +833,7 @@ func run(opts daemonOptions) error {
 	}, OnSystemUpdateToggle: func(on bool) error {
 		cfg.SystemUpdate.Enabled = on
 		return config.Save(*cfgPath, cfg)
-	}, WebBase: "http://" + cfg.Listen, MetaRecovered: loaded.RecoveredFromBackup, NetTx: netTx, IPv6: ipv6Tx, Run: run, RunStdin: runStdin, Firewall: fwm, Health: sampler, Updates: updates, FirstBoot: firstBoot, ChangeKey: changeKey, SetLogLevel: setLogLevel, InitInterface: initInterface, AddonCtl: addonCtl, Feed: feed, Cert: certSvc, RadioFirmware: radioFW, RadioConnections: radioConn, HmIPLocalKey: localKey, HmIPDeviceKeys: deviceKeys, ConfirmTicket: users.RedeemConfirmed, FirewallRules: fwRules, HTTPS: httpsCfg, ClassicRPC: &system.ClassicRPCConfig{Root: root, Run: run, Systemd: root.HasSystemd()}, WiFi: wifiService(root, root.HasSystemd()), Power: &system.Power{Root: root, Systemd: root.HasSystemd(), Run: run}, RadioInterfaces: radioIfs, Storage: storage, Clock: &system.ClockCheck{Root: root}, BootTiming: bootTiming, Version: version}
+	}, WebBase: "http://" + cfg.Listen, MetaRecovered: loaded.RecoveredFromBackup, NetTx: netTx, IPv6: ipv6Tx, Run: run, RunStdin: runStdin, Firewall: fwm, Health: sampler, Updates: updates, FirstBoot: firstBoot, ChangeKey: changeKey, SetLogLevel: setLogLevel, InitInterface: initInterface, AddonCtl: addonCtl, Feed: feed, Cert: certSvc, RadioFirmware: radioFW, RadioConnections: radioConn, HmIPLocalKey: localKey, HmIPDeviceKeys: deviceKeys, ImportRecord: importRecord, NamesImport: metaAPI.ImportNamesFromSBK, ConfirmTicket: users.RedeemConfirmed, FirewallRules: fwRules, HTTPS: httpsCfg, ClassicRPC: &system.ClassicRPCConfig{Root: root, Run: run, Systemd: root.HasSystemd()}, WiFi: wifiService(root, root.HasSystemd()), Power: &system.Power{Root: root, Systemd: root.HasSystemd(), Run: run}, RadioInterfaces: radioIfs, Storage: storage, Clock: &system.ClockCheck{Root: root}, BootTiming: bootTiming, Version: version}
 	sysAPI.BackupCrypt = backupStore
 	sysAPI.DataStore = &dataStore{path: *cfgPath, stateDir: cfg.StateDir, m: dataStoreMgr, h: dpHistory, root: root}
 	// openccu-lite task 86: the backup targets - the USB directory, NFS, SMB, SFTP

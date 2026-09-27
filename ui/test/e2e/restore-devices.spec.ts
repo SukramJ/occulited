@@ -4,8 +4,10 @@ import {expect, test, type Page} from '@playwright/test';
 // that devices pairings (hmip, bidcos-rf and -wired) and possibly keys that are present are
 // imported"): on the Backup page, after a checked CCU backup, what it holds of the three radios and
 // the import onto a system without paired devices - refused with the reason when devices are
-// paired here or an interface did not answer, a security key asked when one is involved, the danger
-// question, then the POST and the reboot notice.
+// paired here or an interface did not answer, the danger question, then the POST and the reboot
+// notice. Task 275: the notice that HmIP re-keys when the backup's identity belongs to another
+// module; task 278 (option B): no passphrase - the notice that a non-default BidCos key comes
+// along, and the word to replace this system's own key store.
 
 const CHECK = {ok: true, output: '1) Checking sbk backup file consistency:\n   generated on 3.89.11.20260919, applying to 3.89.11.20260919, OK\n   backup or system NOT protected by security key, OK', backup_version: '3.89.11.20260919', running_version: '3.89.11.20260919', needs_key: false, has_rega: true};
 const BACKUP = {
@@ -16,7 +18,8 @@ const BACKUP = {
     files: ['ids', 'rfd/JEQ9000001.dev'],
     version: '3.89.11.20260919',
 };
-const FREE = {paired: {'BidCos-RF': {devices: 0, known: true}, 'HmIP-RF': {devices: 0, known: true}}, devices: 0, unknown: [], user_key: false, importable: true};
+const MODULE = {hardware: 'RPI-RF-MOD', serial: '0000000A01', sgtin: '3014F711A000040000000A01'};
+const FREE = {paired: {'BidCos-RF': {devices: 0, known: true}, 'HmIP-RF': {devices: 0, known: true}}, devices: 0, unknown: [], user_key: false, importable: true, hmip_module: MODULE, bidcos_module: {hardware: 'RPI-RF-MOD', serial: '0000000A01'}};
 
 async function upload(page: Page) {
     await page.locator('input[type="file"][accept=".sbk,.age"]').setInputFiles({name: 'ccu.sbk', mimeType: 'application/octet-stream', buffer: Buffer.from('ustar')});
@@ -25,11 +28,11 @@ async function upload(page: Page) {
 
 test('the backup\'s devices, a free system, the import asks in red and posts the file, then the reboot notice', async ({page}) => {
     await page.route('**/api/system/v1/restore/check', (r) => r.fulfill({json: {file: 'restore-ccu.sbk', check: CHECK, encryption: {encrypted: false}}}));
-    await page.route('**/api/system/v1/restore/devices?**', (r) => r.fulfill({json: {backup: BACKUP, target: FREE}}));
+    await page.route('**/api/system/v1/restore/devices?**', (r) => r.fulfill({json: {backup: BACKUP, target: FREE, module_changed: true, non_default_key: false}}));
     const posts: unknown[] = [];
     await page.route('**/api/system/v1/restore/import-devices', (r) => {
         posts.push(JSON.parse(r.request().postData() ?? '{}'));
-        return r.fulfill({json: {ok: true, imported: {backup: BACKUP, written: ['ids'], aside: '/etc/config/.import-devices-aside/x', key_set: false}, rebooting: true}});
+        return r.fulfill({json: {ok: true, imported: {backup: BACKUP, written: ['ids'], aside: '/etc/config/.import-devices-aside/x', non_default_key: false, target_key_replaced: false}, names: {ok: true, objects: 109, rooms: 11, functions: 10, changed: true}, rebooting: true}});
     });
     await page.goto('/system/backup');
     await upload(page);
@@ -40,12 +43,22 @@ test('the backup\'s devices, a free system, the import asks in red and posts the
     await expect(block.locator('[data-devices="wired"]')).toHaveText('1 devices');
     await expect(block.locator('[data-devices-target="free"]')).toContainText('This system has no paired devices');
     await expect(block.locator('[data-input="devices-key"]')).toHaveCount(0);
+    // task 275: the identity belongs to another module - the notice before the import
+    const mc = block.locator('[data-notice="module-change"]');
+    await expect(mc).toContainText('Another radio module: HmIP re-keys.');
+    await expect(mc).toContainText('belongs to module 3014F711A0001F0000000A03; this system runs HmIP-RF on RPI-RF-MOD 0000000A01 (3014F711A000040000000A01)');
+    await expect(mc).toContainText('press a button on it if it stays silent');
+    await expect(block.locator('[data-notice="bidcos-key"]')).toHaveCount(0);
+    await expect(block.locator('[data-input="replace-key"]')).toHaveCount(0);
     const button = block.locator('[data-action="import-devices"]');
     await expect(button).toBeEnabled();
     await button.click();
     const dlg = page.getByRole('dialog');
     await expect(dlg).toContainText('2 BidCos-RF devices, 3 HmIP devices, 1 BidCos-Wired devices');
     await expect(dlg).toContainText('adapter exchange');
+    await expect(dlg).toContainText('hmipserver takes it over onto RPI-RF-MOD 0000000A01');
+    // task 281: the names of the same file go first
+    await expect(dlg).toContainText('names, rooms and functions of the backup\'s ReGa database are imported first');
     await expect(dlg.getByRole('button', {name: 'Import and reboot'})).toHaveClass(/danger/);
     await dlg.getByRole('button', {name: 'Cancel'}).click();
     expect(posts).toHaveLength(0);
@@ -53,14 +66,22 @@ test('the backup\'s devices, a free system, the import asks in red and posts the
     await page.getByRole('dialog').getByRole('button', {name: 'Import and reboot'}).click();
     await expect(page.locator('.ol-restorenotice')).toContainText('the system reboots now');
     await expect(page.locator('.ol-restorenotice pre')).toContainText('The paired devices are imported.');
-    expect(posts).toEqual([{file: 'restore-ccu.sbk', key: ''}]);
+    await expect(page.locator('.ol-restorenotice pre')).toContainText('HmIP: the identity of module 3014F711A0001F0000000A03 is moved onto RPI-RF-MOD 0000000A01');
+    await expect(page.locator('.ol-restorenotice pre')).toContainText('Names: 109 named objects, 11 rooms, 10 functions imported from the backup.');
+    expect(posts).toEqual([{file: 'restore-ccu.sbk', replace_key: false}]);
 });
 
-test('refused with devices paired here, waiting while an interface is silent, the key asked when one is involved', async ({page}) => {
+test('refused with devices paired here, waiting while an interface is silent, a non-default key is said and never asked, the own key is replaced on the word only', async ({page}) => {
     await page.route('**/api/system/v1/restore/check', (r) => r.fulfill({json: {file: 'restore-ccu.sbk', check: CHECK, encryption: {encrypted: false}}}));
     let target: Record<string, unknown> = {paired: {'BidCos-RF': {devices: 2, known: true}, 'HmIP-RF': {devices: 1, known: true}}, devices: 3, unknown: [], user_key: false, importable: false};
     let backup: Record<string, unknown> = BACKUP;
-    await page.route('**/api/system/v1/restore/devices?**', (r) => r.fulfill({json: {backup, target}}));
+    let nonDefaultKey = false;
+    const posts: unknown[] = [];
+    await page.route('**/api/system/v1/restore/devices?**', (r) => r.fulfill({json: {backup, target, module_changed: false, non_default_key: nonDefaultKey}}));
+    await page.route('**/api/system/v1/restore/import-devices', (r) => {
+        posts.push(JSON.parse(r.request().postData() ?? '{}'));
+        return r.fulfill({json: {ok: true, imported: {backup, written: ['ids'], aside: '/etc/config/.import-devices-aside/x', non_default_key: true, target_key_replaced: true}, names: {ok: false, error: 'no ReGa database in the backup'}, rebooting: true}});
+    });
     await page.goto('/system/backup');
     await upload(page);
     const block = page.locator('[data-restore="devices"]');
@@ -71,26 +92,52 @@ test('refused with devices paired here, waiting while an interface is silent, th
     await upload(page);
     await expect(block.locator('[data-devices-target="unknown"]')).toContainText('BidCos-RF did not answer');
     await expect(block.locator('[data-action="import-devices"]')).toBeDisabled();
-    // a backup with an individual security key onto a free system: the key is asked, the button
-    // waits for it
-    target = FREE;
-    backup = {...BACKUP, key_index: 2, bidcos_rf: {...BACKUP.bidcos_rf, has_key: true}};
-    await upload(page);
-    await expect(block.locator('[data-devices="bidcos-rf"]')).toContainText('an individual security key');
-    await expect(block.locator('[data-action="import-devices"]')).toBeDisabled();
-    await block.locator('[data-input="devices-key"]').fill('secret1');
-    await expect(block.locator('[data-action="import-devices"]')).toBeEnabled();
     // nothing to import
+    const full = backup;
     backup = {bidcos_rf: {devices: 0, has_key: false, gateways: 0}, hmip: {devices: 0, local_key: false, device_key_map: false}, bidcos_wired: {devices: 0, gateways: 0}, key_index: 0, files: []};
+    target = FREE;
     await upload(page);
     await expect(block.locator('[data-devices="none"]')).toContainText('None: the backup holds no paired device');
     await expect(block.locator('[data-action="import-devices"]')).toHaveCount(0);
+    backup = full;
+    // task 278: a backup with a non-default security key onto a free system - said, not asked;
+    // the same module, so no module-change notice
+    target = FREE;
+    backup = {...BACKUP, key_index: 2, bidcos_rf: {...BACKUP.bidcos_rf, has_key: true}};
+    nonDefaultKey = true;
+    await upload(page);
+    await expect(block.locator('[data-devices="bidcos-rf"]')).toContainText('an individual security key');
+    const keyNotice = block.locator('[data-notice="bidcos-key"]');
+    await expect(keyNotice).toContainText('Non-default BidCos security key.');
+    await expect(keyNotice).toContainText('no passphrase is asked here');
+    await expect(keyNotice).toContainText('Keep that system\'s passphrase safe');
+    await expect(block.locator('[data-input="devices-key"]')).toHaveCount(0);
+    await expect(block.locator('[data-notice="module-change"]')).toHaveCount(0);
+    await expect(block.locator('[data-action="import-devices"]')).toBeEnabled();
+    // this system has a key store of its own: the button waits for the word to replace it, and the
+    // POST carries it; the reboot notice repeats the key hint
+    target = {...FREE, user_key: true};
+    await upload(page);
+    await expect(block.locator('[data-action="import-devices"]')).toBeDisabled();
+    const replace = block.locator('[data-input="replace-key"]');
+    await expect(replace).toBeVisible();
+    await replace.check();
+    await expect(block.locator('[data-action="import-devices"]')).toBeEnabled();
+    await block.locator('[data-action="import-devices"]').click();
+    const dlg = page.getByRole('dialog');
+    await expect(dlg).toContainText('not the default key');
+    await expect(dlg).toContainText('This system\'s own security key is replaced by the backup\'s.');
+    await dlg.getByRole('button', {name: 'Import and reboot'}).click();
+    await expect(page.locator('.ol-restorenotice pre')).toContainText('non-default BidCos security key came along');
+    // task 281: a names failure is said and does not stop the devices
+    await expect(page.locator('.ol-restorenotice pre')).toContainText('The names could not be imported from the backup: no ReGa database in the backup');
+    expect(posts).toEqual([{file: 'restore-ccu.sbk', replace_key: true}]);
 });
 
 test('German: the heading and the refusal', async ({page}) => {
     await page.addInitScript(() => localStorage.setItem('ol.language', 'de'));
     await page.route('**/api/system/v1/restore/check', (r) => r.fulfill({json: {file: 'restore-ccu.sbk', check: CHECK, encryption: {encrypted: false}}}));
-    await page.route('**/api/system/v1/restore/devices?**', (r) => r.fulfill({json: {backup: BACKUP, target: {paired: {'HmIP-RF': {devices: 1, known: true}}, devices: 1, unknown: [], user_key: false, importable: false}}}));
+    await page.route('**/api/system/v1/restore/devices?**', (r) => r.fulfill({json: {backup: BACKUP, target: {paired: {'HmIP-RF': {devices: 1, known: true}}, devices: 1, unknown: [], user_key: false, importable: false, hmip_module: MODULE}, module_changed: true, non_default_key: true}}));
     await page.goto('/system/backup');
     await page.locator('input[type="file"][accept=".sbk,.age"]').setInputFiles({name: 'ccu.sbk', mimeType: 'application/octet-stream', buffer: Buffer.from('ustar')});
     await page.getByRole('button', {name: 'Prüfen', exact: true}).click();
@@ -99,4 +146,8 @@ test('German: the heading and the refusal', async ({page}) => {
     await expect(block.locator('[data-devices="hmip"]')).toContainText('3 Geräte · Identität des Funkmoduls');
     await expect(block.locator('[data-devices-target="paired"]')).toContainText('An diesem System sind 1 Geräte angelernt (HmIP-RF: 1)');
     await expect(block.locator('[data-action="import-devices"]')).toHaveText('Angelernte Geräte importieren und neu starten');
+    await expect(block.locator('[data-notice="module-change"]')).toContainText('Anderes Funkmodul: HmIP schlüsselt um.');
+    await expect(block.locator('[data-notice="module-change"]')).toContainText('drücken Sie eine Taste daran');
+    await expect(block.locator('[data-notice="bidcos-key"]')).toContainText('Eigener BidCos-Sicherheitsschlüssel.');
+    await expect(block.locator('[data-notice="bidcos-key"]')).toContainText('Bewahren Sie die Passphrase jenes Systems sicher auf');
 });

@@ -242,6 +242,12 @@ type SystemAPI struct {
 	// RadioInterfaces are the XML-RPC clients of the interfaces in InterfacesList.xml (the daemon's
 	// radioIfs); the factory reset's warning lists their devices (task 109). nil = unknown.
 	RadioInterfaces func() []interfaces.Interface
+	// ImportRecord is the record of the last device import (openccu-lite task 275); nil = none is
+	// kept, GET /radio/import answers {imported: false}.
+	ImportRecord *system.ImportRecord
+	// NamesImport imports the ReGa names of a checked backup before the device import reboots
+	// (openccu-lite task 281): MetaAPI.ImportNamesFromSBK; nil = no names are imported.
+	NamesImport func(sbkPath string) NamesImportResult
 	// LAN finds eQ-3's LAN devices and writes their network settings (openccu-lite task 220); nil =
 	// an eq3disc.Client. LANNetworks and AddressInUse are test seams (nil = this system's).
 	LAN          LANFinder

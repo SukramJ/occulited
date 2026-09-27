@@ -35,7 +35,7 @@ export interface Warning {
     id: string;
     variant: string;
     severity: Severity;
-    params?: {addons?: WarnAddon[]; account?: string; at?: string; path?: string; days?: number; verdict?: string; reasons?: StorageReason[]; devices?: WarnDevice[]; mode?: string; reason?: string; adapter?: string; cause?: string; line?: string; families?: string[]; unreachable?: number; total?: number; port?: number; addresses?: string; sgtin?: string; address?: string; name?: string; detail?: string; label?: string; dir?: string; target?: string; share?: string; reconnecting?: boolean; interface?: string; kind?: string; since?: string; checked?: boolean; listeners?: StallListener[]; folder?: string; device?: string; running?: string; newest?: string; node?: string; drops_off?: boolean; hosts?: string[]; issuer?: string; store?: string; candidate?: boolean};
+    params?: {addons?: WarnAddon[]; account?: string; at?: string; path?: string; days?: number; verdict?: string; reasons?: StorageReason[]; devices?: WarnDevice[]; mode?: string; reason?: string; adapter?: string; cause?: string; line?: string; families?: string[]; unreachable?: number; total?: number; port?: number; addresses?: string; sgtin?: string; address?: string; name?: string; detail?: string; label?: string; dir?: string; target?: string; share?: string; reconnecting?: boolean; interface?: string; kind?: string; since?: string; checked?: boolean; listeners?: StallListener[]; folder?: string; device?: string; running?: string; newest?: string; node?: string; drops_off?: boolean; hosts?: string[]; issuer?: string; store?: string; candidate?: boolean; from?: string; module?: string; count?: number};
     href?: string;
     /** this administrator's own silence (D-64) */
     silenced?: Silence;
@@ -185,6 +185,10 @@ export function warningText(w: Warning, words: Words): string {
             const which = w.variant === 'plain,tls' ? t('the plain and the TLS ports') : w.variant === 'tls' ? t('the TLS ports') : t('the plain ports');
             return t('Classic RPC is on without a login ({ports}): anyone the firewall lets in controls every device.', {ports: which});
         }
+        case 'devices-import':
+            // openccu-lite task 275: an imported HmIP identity of another module, not taken over yet
+            if (w.variant === 'no-module') return t('The HmIP devices imported from the backup ({n}) belong to module {from}; this system has no HmIP module to take them over.', {n: p.count ?? 0, from: p.from ?? ''});
+            return t('The HmIP devices imported from the backup ({n}) belong to module {from} and are not on {module} yet: hmipserver moves them at its start; battery devices answer when they wake up. The Interfaces page shows the state and offers a retry.', {n: p.count ?? 0, from: p.from ?? '', module: p.module ?? ''});
         case 'hmip-port-open':
             // B-89: hmipserver's HTTP port is not held on the loopback - the bind shim did not load
             return t("hmipserver's port {port} listens on {addresses}, not only on this system: the image's loopback shim did not take. The firewall still closes it.", {port: String(p.port ?? ''), addresses: p.addresses ?? ''});
@@ -260,6 +264,7 @@ const LINK_LABELS: Record<string, string> = {
     'addon-failed': 'Addons',
     'security-key': 'Set security key',
     'hmip-adapter': 'Interfaces',
+    'devices-import': 'Interfaces',
     'hb-rf-eth': 'LAN devices',
     'radio-firmware': 'Radio firmware',
     'addon-update': 'Manage addons',

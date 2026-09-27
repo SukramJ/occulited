@@ -106,6 +106,26 @@ func (k *HmIPLocalKey) RetryExchange() error {
 	return nil
 }
 
+// RestartExchange restarts HmIP-RF for an imported identity whose move onto this module is still
+// pending (openccu-lite task 275): hmipserver attempts the adapter exchange at every start, so a
+// restart is the retry when the first attempt did not get through (the key server not reached,
+// devices not yet answering). A marker of a rejected exchange goes too, as RetryExchange does.
+func (k *HmIPLocalKey) RestartExchange() error {
+	ctx, err := k.begin("retry")
+	if err != nil {
+		return err
+	}
+	go func() {
+		if err := k.clearFatal(); err != nil {
+			k.end(err)
+			return
+		}
+		k.log().Info("adapter exchange: HmIP-RF restarted for the imported identity", "module", k.sgtin())
+		k.end(k.restart(ctx))
+	}()
+	return nil
+}
+
 // FreshStart sets HmIP up afresh with the module in use: every other module's identity files
 // (<SGTIN>.ap, .apkx, .bbkx) move into a snapshot of their own, with hmip_user.conf as it is now,
 // so nothing is deleted; with localKey the two keys are generated and written as the switch does

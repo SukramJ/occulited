@@ -163,54 +163,6 @@ func TestRadioMemberOK(t *testing.T) {
 	}
 }
 
-func TestCheckBackupKey(t *testing.T) {
-	answers := map[string]string{
-		"both match":       "1) Checking sbk backup file consistency:\n   backup and/or system protected by security key...\n   Enter security key:    system protected with a key, matches, OK\n   backup protected with a key, matches, OK\n",
-		"backup only":      "   backup and/or system protected by security key...\n   system NOT protected with a key, OK\n   backup protected with a key, matches, OK\n",
-		"backup mismatch":  "   backup and/or system protected by security key...\n   system NOT protected with a key, OK\n   backup protected with a key, WARNING: security key does NOT match key in backup, aborting\n",
-		"system mismatch":  "   backup and/or system protected by security key...\n   system protected with a key, WARNING: security key does NOT match system key, aborting\n",
-		"no key anywhere":  "   backup or system NOT protected by security key, OK\n\nConfig check processing only, exiting.\n",
-		"nothing readable": "ERROR: could not untar backup file.\n",
-	}
-	var stdin string
-	mk := func(out string, fail bool) StdinRunner {
-		return func(_ context.Context, in []byte, name string, args ...string) ([]byte, error) {
-			stdin = string(in)
-			if !strings.HasSuffix(name, "/bin/restoreBackup.sh") || len(args) != 2 || args[0] != "-c" {
-				t.Fatalf("call: %s %v", name, args)
-			}
-			if fail {
-				return []byte(out), errors.New("exit 1")
-			}
-			return []byte(out), nil
-		}
-	}
-	r := Root("/")
-	c, err := r.CheckBackupKey(context.Background(), mk(answers["both match"], false), "/usr/local/tmp/restore-x.sbk", "secret")
-	if err != nil || !c.BackupHasKey || !c.SystemHasKey || !c.BackupMatches || !c.SystemMatches || stdin != "secret\n" {
-		t.Errorf("both match: %+v %v stdin %q", c, err, stdin)
-	}
-	c, err = r.CheckBackupKey(context.Background(), mk(answers["backup only"], false), "x", "s")
-	if err != nil || !c.BackupHasKey || c.SystemHasKey || !c.BackupMatches || c.SystemMatches {
-		t.Errorf("backup only: %+v %v", c, err)
-	}
-	c, err = r.CheckBackupKey(context.Background(), mk(answers["backup mismatch"], true), "x", "wrong")
-	if err != nil || !c.BackupHasKey || c.BackupMatches {
-		t.Errorf("backup mismatch: %+v %v", c, err)
-	}
-	c, err = r.CheckBackupKey(context.Background(), mk(answers["system mismatch"], true), "x", "wrong")
-	if err != nil || !c.SystemHasKey || c.SystemMatches {
-		t.Errorf("system mismatch: %+v %v", c, err)
-	}
-	c, err = r.CheckBackupKey(context.Background(), mk(answers["no key anywhere"], false), "x", "")
-	if err != nil || c.BackupHasKey || c.SystemHasKey {
-		t.Errorf("no key: %+v %v", c, err)
-	}
-	if _, err := r.CheckBackupKey(context.Background(), mk(answers["nothing readable"], true), "x", ""); err == nil {
-		t.Error("a broken archive is an error")
-	}
-}
-
 func TestImportRadio(t *testing.T) {
 	old := Priv
 	Priv = priv.Local{}
@@ -232,11 +184,13 @@ func TestImportRadio(t *testing.T) {
 	}
 	_ = os.MkdirAll(filepath.Join(cfg, "rfd"), 0o755)
 	sbk := sbkFixture(t, ccuFiles(), "2")
-	res, err := r.ImportRadio(context.Background(), sbk, "", KeyCheck{})
+	res, err := r.ImportRadio(context.Background(), sbk)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Written) != 19 || res.Backup.HmIP.Devices != 3 || res.KeySet {
+	// task 278: the backup's key store (key_index 2) comes along and is said so; the target had
+	// no key store of its own
+	if len(res.Written) != 19 || res.Backup.HmIP.Devices != 3 || !res.NonDefaultKey || res.TargetKeyReplaced || !res.Backup.NonDefaultKey() {
 		t.Fatalf("result: %+v", res)
 	}
 	// the backup's files are in place, the target's aside, the rest untouched
@@ -282,18 +236,32 @@ func TestImportRadio(t *testing.T) {
 	root2 := t.TempDir()
 	_ = os.MkdirAll(filepath.Join(root2, "etc/config"), 0o755)
 	_ = os.WriteFile(filepath.Join(root2, "etc/config/ids"), []byte("x"), 0o644)
-	if _, err := Root(root2).ImportRadio(context.Background(), sbkFixture(t, map[string]string{"usr/local/etc/config/netconfig": "x"}, "0"), "", KeyCheck{}); err == nil {
+	if _, err := Root(root2).ImportRadio(context.Background(), sbkFixture(t, map[string]string{"usr/local/etc/config/netconfig": "x"}, "0")); err == nil {
 		t.Error("an empty backup went through")
 	}
 	if b, _ := os.ReadFile(filepath.Join(root2, "etc/config/ids")); string(b) != "x" {
 		t.Error("the target's ids moved for an empty backup")
+	}
+	// a target with a key store of its own: the import says it was replaced (set aside)
+	root4 := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(root4, "etc/config"), 0o755)
+	_ = os.WriteFile(filepath.Join(root4, "etc/config/keys"), []byte("the target's own store"), 0o600)
+	res4, err := Root(root4).ImportRadio(context.Background(), sbkFixture(t, ccuFiles(), "1"))
+	if err != nil || !res4.TargetKeyReplaced || !res4.NonDefaultKey {
+		t.Fatalf("target with a key: %+v %v", res4, err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(root4, res4.Aside, "keys")); string(b) != "the target's own store" {
+		t.Errorf("the target's key store is not aside: %q", b)
+	}
+	if b, _ := os.ReadFile(filepath.Join(root4, "etc/config/keys")); string(b) != "not-a-real-key-store-just-bytes" {
+		t.Errorf("the backup's key store is not in place: %q", b)
 	}
 	// a hostile member never lands
 	files := ccuFiles()
 	files["usr/local/etc/config/rfd/../../../../../tmp/evil"] = "evil"
 	root3 := t.TempDir()
 	_ = os.MkdirAll(filepath.Join(root3, "etc/config"), 0o755)
-	if _, err := Root(root3).ImportRadio(context.Background(), sbkFixture(t, files, "0"), "", KeyCheck{}); err != nil {
+	if _, err := Root(root3).ImportRadio(context.Background(), sbkFixture(t, files, "0")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(root3, "tmp/evil")); !errors.Is(err, os.ErrNotExist) {

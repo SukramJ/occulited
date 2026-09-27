@@ -15,6 +15,7 @@
     import Help from './Help.svelte';
     import Icon from './Icon.svelte';
     import HmIPExchange from './HmIPExchange.svelte';
+    import DevicesImportNotice from './DevicesImportNotice.svelte';
 
     // paths (task 150): how hmipserver can reach an HmIP option - "direct" on its node, "multimacd" through /dev/mmd_hmip
     interface Option { id: string; hardware: string; node?: string; device_type?: string; sgtin?: string; version?: string; paths?: string[] }
@@ -276,6 +277,9 @@
             {/if}
         </div>
     {/if}
+    <!-- openccu-lite task 275: after a device import from another module's backup, how hmipserver's
+         move of the identity onto this module went, with the retry and the battery hint -->
+    <DevicesImportNotice {admin} fatal={!!st.hmip_fatal} onretry={() => { exchangeDone = 'retry'; void load(); }} />
     {#if p.missing_hmip}<div class="ol-notice error" data-notice="missing-hmip">{t('The module chosen for HmIP-RF ({id}) is missing. hmipserver runs its virtual devices only until it is back.', {id: p.missing_hmip})}</div>{/if}
     {#if p.missing_bidcos}<div class="ol-notice error" data-notice="missing-bidcos">{t('The module chosen for BidCos-RF ({id}) is missing. rfd runs without a local radio until it is back.', {id: p.missing_bidcos})}</div>{/if}
     {#if st.mode === 'HM-LGW'}

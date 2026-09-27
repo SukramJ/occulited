@@ -29,8 +29,11 @@
         files: string[];
         version?: string;
     }
-    interface RestoreTarget { paired: Record<string, {devices: number; known: boolean; error?: string}>; devices: number; unknown?: string[]; user_key: boolean; importable: boolean }
-    interface DevicesView { backup: RadioBackup; target: RestoreTarget }
+    interface RestoreModule { hardware: string; serial: string; sgtin?: string }
+    interface RestoreTarget { paired: Record<string, {devices: number; known: boolean; error?: string}>; devices: number; unknown?: string[]; user_key: boolean; importable: boolean; hmip_module?: RestoreModule; bidcos_module?: RestoreModule }
+    // task 275: module_changed - the backup's HmIP identity belongs to another module than this system's;
+    // task 278: non_default_key - the backup's BidCos key store is not the factory key and comes along
+    interface DevicesView { backup: RadioBackup; target: RestoreTarget; module_changed?: boolean; non_default_key?: boolean }
     // task 91: what the upload's age header said, and whether the recovery key is still needed
     interface Encryption { encrypted: boolean; format?: string; armored?: boolean; box_fingerprint?: string; recovery_fingerprint?: string; known?: 'current' | 'previous' | 'unknown'; key_created?: string; opened_with?: 'box' | 'recovery'; needs_recovery_key: boolean; passphrase?: boolean; created_here: boolean }
     let encryption = $state<EncryptionView | null>(null);
@@ -103,10 +106,14 @@
     // task 251: the paired devices of the checked backup, loaded after a check for an administrator
     let devices = $state<DevicesView | null>(null);
     let devicesMsg = $state('');
+    // task 278: this system has a key store of its own - the backup's replaces it, on the user's word
+    let replaceKey = $state(false);
     const backupEmpty = (b: RadioBackup) => b.bidcos_rf.devices === 0 && b.hmip.devices === 0 && b.bidcos_wired.devices === 0 && !b.hmip.identity_sgtin && !b.bidcos_rf.address;
+    const moduleName = (m?: RestoreModule) => m ? `${m.hardware} ${m.serial}`.trim() + (m.sgtin ? ` (${m.sgtin})` : '') : '';
     async function loadDevices() {
         devices = null;
         devicesMsg = '';
+        replaceKey = false;
         if (!uploaded || auth.role !== 'admin') return;
         try {
             const v = await api.get<DevicesView>(`/api/system/v1/restore/devices?file=${encodeURIComponent(uploaded)}`);
@@ -125,11 +132,15 @@
             t('{n} HmIP devices', {n: b.hmip.devices}),
             t('{n} BidCos-Wired devices', {n: b.bidcos_wired.devices}),
         ].join(', ');
-        const message = [
+        const lines = [
             t('The paired devices of this backup - {parts} - come onto this system with the radio identity they are bound to: the BidCos address and security key, the HmIP identity, the LAN gateways.', {parts}),
-            t('This system\'s own radio identity is set aside and it reboots. HmIP devices are taken over by the adapter exchange on this system\'s module at the start - with eQ-3\'s key server, or offline in local key mode.'),
-        ].join('\n\n');
-        if (!(await ask({title: t('Import the paired devices'), message, confirm: t('Import and reboot'), danger: true}))) return;
+            t('This system\'s own radio identity is set aside and it reboots.'),
+        ];
+        if (devices.module_changed) lines.push(t('The HmIP identity belongs to module {from}; hmipserver takes it over onto {to} at the start (the adapter exchange). The Interfaces page shows how it went.', {from: b.hmip.identity_sgtin ?? '', to: moduleName(devices.target.hmip_module)}));
+        if (devices.non_default_key) lines.push(t('The backup\'s BidCos security key is not the default key: it comes along as it is.'));
+        if (devices.target.user_key) lines.push(t('This system\'s own security key is replaced by the backup\'s.'));
+        if (check?.has_rega) lines.push(t('The names, rooms and functions of the backup\'s ReGa database are imported first (merged with what this system has), then the system reboots.'));
+        if (!(await ask({title: t('Import the paired devices'), message: lines.join('\n\n'), confirm: t('Import and reboot'), danger: true}))) return;
         busy = 'devices';
         error = '';
         devicesMsg = '';
@@ -140,9 +151,18 @@
             watchBoot({entry, before, onUpdate: (e) => (restoring = e), onBack: () => setTimeout(() => location.reload(), EASE_MS)});
         };
         try {
-            const r = await api.post<{ok: boolean; rebooting: boolean; message?: string}>('/api/system/v1/restore/import-devices', {file: uploaded, key});
+            const r = await api.post<{ok: boolean; rebooting: boolean; message?: string; names?: {ok: boolean; objects: number; rooms: number; functions: number; error?: string}}>('/api/system/v1/restore/import-devices', {file: uploaded, replace_key: replaceKey});
+            // task 281: the names of the same file came first; a failure is said, and the names
+            // import above still works while the file is there (until the reboot)
+            const namesLine = r.names ? (r.names.ok ? t('Names: {o} named objects, {r} rooms, {f} functions imported from the backup.', {o: r.names.objects, r: r.names.rooms, f: r.names.functions}) : t('The names could not be imported from the backup: {error}', {error: r.names.error ?? ''})) : '';
+            if (r.names && !r.names.ok) namesMsg = namesLine;
             if (r.rebooting) {
-                applied = t('The paired devices are imported.');
+                applied = [
+                    t('The paired devices are imported.'),
+                    namesLine,
+                    devices.module_changed ? t('HmIP: the identity of module {from} is moved onto {to} when hmipserver starts. The outcome is shown on the Interfaces page; battery devices are re-keyed when they wake up.', {from: b.hmip.identity_sgtin ?? '', to: moduleName(devices.target.hmip_module)}) : '',
+                    devices.non_default_key ? t('The backup\'s non-default BidCos security key came along. Keep the other system\'s passphrase safe: it is needed to change the key later, or to pair a device that still holds it.') : '',
+                ].filter(Boolean).join('\n');
                 wait();
             } else {
                 removeEntry();
@@ -346,7 +366,7 @@
             {@const b = devices.backup}
             {@const tg = devices.target}
             <div class="ol-panel ol-devices" data-restore="devices">
-                <h3>{t('Paired devices in this backup')}<Help>{t('The pairings of the CCU or OpenCCU the backup came from: rfd\'s and hs485d\'s device files with the BidCos address and the security key, hmipserver\'s devices with the HmIP identity (and local key mode, if it was on), the LAN gateways. They come across together, or not at all, and only onto a system that has no device paired yet: the import takes over that system\'s radio identity, so devices paired here would be orphaned.')}</Help></h3>
+                <h3>{t('Paired devices in this backup')}<Help>{t('The pairings of the CCU or OpenCCU the backup came from: rfd\'s and hs485d\'s device files with the BidCos address and the security key, hmipserver\'s devices with the HmIP identity (and local key mode, if it was on), the LAN gateways. They come across together, or not at all, and only onto a system that has no device paired yet: the import takes over that system\'s radio identity, so devices paired here would be orphaned.')} {t('One action takes all three: the names, rooms and functions of the backup\'s ReGa database are imported first, then the devices with their keys, then the system reboots.')}</Help></h3>
                 {#if backupEmpty(b)}
                     <p class="ol-muted" data-devices="none">{t('None: the backup holds no paired device and no radio identity.')}</p>
                 {:else}
@@ -362,11 +382,32 @@
                     {:else}
                         <p class="ol-muted" data-devices-target="free">{t('This system has no paired devices: the import can take over the backup\'s.')}</p>
                     {/if}
-                    {#if (b.key_index > 0 || b.bidcos_rf.has_key || tg.user_key) && !check.needs_key}
-                        <label>{t('Security key')} <input class="hmm-input" type="password" bind:value={key} autocomplete="off" data-input="devices-key" /></label>
+                    <!-- openccu-lite task 275: the backup's HmIP identity belongs to another module - hmipserver
+                         moves it onto this one at the start after the import (the adapter exchange); the user is
+                         told before what happens, how long, what can fail -->
+                    {#if devices.module_changed}
+                        <div class="ol-notice" data-notice="module-change">
+                            <strong>{t('Another radio module: HmIP re-keys.')}</strong>
+                            {t('The HmIP identity in this backup belongs to module {from}; this system runs HmIP-RF on {to}. When hmipserver starts after the import, it takes the identity over onto this module - the adapter exchange: offline in local key mode, otherwise through eQ-3\'s key server, which needs an internet connection and has to know this module.', {from: b.hmip.identity_sgtin ?? '', to: moduleName(tg.hmip_module)})}
+                            {t('Every HmIP device is then re-keyed for the new module; a battery device only when it wakes up, so press a button on it if it stays silent. The Interfaces page shows how the move went and offers a retry. A module the key server refuses keeps HmIP-RF stopped: then put the previous module back, or start fresh with this one.')}
+                        </div>
+                    {:else if b.hmip.identity_sgtin && !tg.hmip_module}
+                        <div class="ol-notice" data-notice="module-change">{t('This system has no HmIP module: the HmIP identity of module {from} is imported and waits for one.', {from: b.hmip.identity_sgtin})}</div>
+                    {/if}
+                    <!-- openccu-lite task 278 (option B): the backup's BidCos key store comes along as it is, no
+                         passphrase asked - the user is told that it is not the default key and to keep the other
+                         system's passphrase; a system with a key store of its own says yes to the replacement -->
+                    {#if devices.non_default_key}
+                        <div class="ol-notice" data-notice="bidcos-key">
+                            <strong>{t('Non-default BidCos security key.')}</strong>
+                            {t('This backup uses its own BidCos security key (the system security key of the other system). It comes along with the import - the BidCos devices paired with it know it - and no passphrase is asked here. Keep that system\'s passphrase safe: it is needed to change the key later, or to pair a device that still holds it.')}
+                        </div>
+                    {/if}
+                    {#if tg.user_key}
+                        <label class="ol-replace-key"><input type="checkbox" bind:checked={replaceKey} data-input="replace-key" /> {t('Replace this system\'s own BidCos security key with the backup\'s (no device is paired here that could be orphaned)')}</label>
                     {/if}
                     <div class="ol-actions" style="margin-top:8px">
-                        <button class="hmm-button danger" onclick={importDevices} disabled={busy !== '' || !tg.importable || ((b.key_index > 0 || b.bidcos_rf.has_key || tg.user_key) && !key)} data-action="import-devices">{t('Import the paired devices and reboot')}</button>
+                        <button class="hmm-button danger" onclick={importDevices} disabled={busy !== '' || !tg.importable || (tg.user_key && !replaceKey)} data-action="import-devices">{t('Import the paired devices and reboot')}</button>
                     </div>
                 {/if}
                 {#if devicesMsg}<div class="ol-notice error" data-notice="devices">{devicesMsg}</div>{/if}

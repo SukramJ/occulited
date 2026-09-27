@@ -80,6 +80,13 @@ func (b RadioBackup) Empty() bool {
 	return b.BidCosRF.Devices == 0 && b.HmIP.Devices == 0 && b.BidCosWired.Devices == 0 && b.HmIP.IdentitySGTIN == "" && b.BidCosRF.Address == ""
 }
 
+// NonDefaultKey says whether the backup's BidCos-RF key store is not the factory key (openccu-lite
+// task 278): its key_index counts the key changes since the factory key, and rfd's key store is
+// persisted only once a key was set. The import takes the store as it is, without the passphrase
+// that derived it (rfd reads the derived key; nothing on this system needs the passphrase later),
+// and tells the user so.
+func (b RadioBackup) NonDefaultKey() bool { return b.KeyIndex > 0 || b.BidCosRF.HasKey }
+
 // configPrefix is where the radio files live inside usr_local.tar.gz.
 const configPrefix = "usr/local/etc/config/"
 
@@ -227,37 +234,6 @@ func InspectRadioBackup(sbk string) (RadioBackup, error) {
 	return b, nil
 }
 
-// KeyCheck is what restoreBackup.sh -c says about the security keys when a key is offered.
-type KeyCheck struct {
-	// BackupHasKey and SystemHasKey: an individual security key protects the backup / this system
-	BackupHasKey bool `json:"backup_has_key"`
-	SystemHasKey bool `json:"system_has_key"`
-	// BackupMatches and SystemMatches: the key given is the backup's / this system's
-	BackupMatches bool   `json:"backup_matches"`
-	SystemMatches bool   `json:"system_matches"`
-	Output        string `json:"output,omitempty"`
-}
-
-// CheckBackupKey runs the script's check with the key on its standard input and reads its
-// verdicts, one per protected side. With no key involved every flag is false and OK is what the
-// consistency check said.
-func (r Root) CheckBackupKey(ctx context.Context, run StdinRunner, path, key string) (KeyCheck, error) {
-	if run == nil {
-		run = ExecStdinRunner
-	}
-	out, err := run(ctx, []byte(key+"\n"), r.join("/bin/restoreBackup.sh"), "-c", path)
-	c := KeyCheck{Output: strings.TrimSpace(string(out))}
-	o := c.Output
-	c.SystemHasKey = strings.Contains(o, "system protected with a key")
-	c.BackupHasKey = strings.Contains(o, "backup protected with a key")
-	c.SystemMatches = c.SystemHasKey && !strings.Contains(o, "does NOT match system key")
-	c.BackupMatches = c.BackupHasKey && !strings.Contains(o, "does NOT match key in backup")
-	if err != nil && !c.SystemHasKey && !c.BackupHasKey {
-		return c, fmt.Errorf("restoreBackup.sh -c: %w", err)
-	}
-	return c, nil
-}
-
 // RadioImportResult is what the import did.
 type RadioImportResult struct {
 	Backup RadioBackup `json:"backup"`
@@ -265,8 +241,10 @@ type RadioImportResult struct {
 	// own radio files went.
 	Written []string `json:"written"`
 	Aside   string   `json:"aside,omitempty"`
-	// KeySet: the backup's security key was set as this system's (crypttool -S)
-	KeySet bool `json:"key_set"`
+	// NonDefaultKey: the backup's BidCos-RF key store is not the factory key and came along as it
+	// is (task 278); TargetKeyReplaced: this system had a key store of its own, now aside.
+	NonDefaultKey     bool `json:"non_default_key"`
+	TargetKeyReplaced bool `json:"target_key_replaced"`
 }
 
 // asideDir is where the target's own radio files are moved before the import: under /etc/config
@@ -279,16 +257,21 @@ const asideDir = "/etc/config/.import-devices-aside"
 var radioOwners = map[string]string{"rfd": "rfd", "crRFD": "hmipserver", "hs485d": "hs485d", "keys": "rfd", "hmip_address.conf": "hmipserver"}
 
 // ImportRadio puts the backup's radio files onto this system: the target's own moved aside, the
-// backup's written, owned by the daemons, and - when the backup carries an individual security
-// key and this system has none - that key set with crypttool under the backup's index. The caller
-// has checked that nothing is paired here and, when a key is involved, that key matches (KeyCheck).
-// It does not reboot.
-func (r Root) ImportRadio(ctx context.Context, sbk, key string, keyCheck KeyCheck) (RadioImportResult, error) {
+// backup's written, owned by the daemons. The backup's key store (keys, crypttool.cfg) comes as it
+// is - rfd reads the derived key from it, and no passphrase is needed on this system (task 278:
+// the stock CCU's restore asks for it as a proof of possession only; the import says instead that
+// a non-default key came along). The caller has checked that nothing is paired here and, when this
+// system has a key store of its own, that the user wants it replaced. It does not reboot.
+func (r Root) ImportRadio(ctx context.Context, sbk string) (RadioImportResult, error) {
+	_ = ctx // the import has no command to run; the context stays for the boundary's sake
 	b, err := InspectRadioBackup(sbk)
 	if err != nil {
 		return RadioImportResult{}, err
 	}
-	res := RadioImportResult{Backup: b, Written: []string{}}
+	res := RadioImportResult{Backup: b, Written: []string{}, NonDefaultKey: b.NonDefaultKey()}
+	if st, err := os.Stat(r.join("/etc/config/keys")); err == nil && st.Size() > 0 {
+		res.TargetKeyReplaced = true
+	}
 	if b.Empty() {
 		return res, errors.New("the backup holds no paired device and no radio identity")
 	}
@@ -402,17 +385,6 @@ func (r Root) ImportRadio(ctx context.Context, sbk, key string, keyCheck KeyChec
 		}
 		if ids, ok := lookup(radioOwners[strings.TrimSuffix(name, ".conf")]); ok {
 			_ = Priv.Chown(p, 0, ids[1], false)
-		}
-	}
-	// the security key: the backup's becomes this system's when this system had none, under the
-	// backup's index, as restoreBackup.sh does before a restore
-	if keyCheck.BackupHasKey && !keyCheck.SystemHasKey && key != "" {
-		tool := r.join("/bin/crypttool")
-		if _, err := os.Stat(tool); err == nil {
-			if out, err := run(ctx, tool, "-S", "-i", strconv.Itoa(b.KeyIndex), "-k", key); err != nil {
-				return res, fmt.Errorf("crypttool -S: %w: %s", err, strings.TrimSpace(string(out)))
-			}
-			res.KeySet = true
 		}
 	}
 	sort.Strings(res.Written)

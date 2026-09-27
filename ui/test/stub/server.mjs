@@ -746,6 +746,8 @@ function exView(jar) {
     const fatal = connFatal(jar);
     return {...(fatal ? {fatal} : {}), module: CONN_MODULE.sgtin, previous: jar['stub-conn-fatal-none'] === '1' ? [] : [EX_PREVIOUS], replaces_snapshots: lk.snapshots.some((x) => x.sgtin === EX_PREVIOUS) ? [EX_PREVIOUS] : undefined, local_key: lk.enabled, exchange_id: false, hostname: 'lab-ccu'};
 }
+const importDismissed = new Set();
+const importRetried = new Set();
 function exRoute(req, u, res) {
     const jar = cookieJar(req);
     if (req.method === 'GET') return sendJSON(res, exView(jar));
@@ -2125,6 +2127,27 @@ function variant(req, u, res) {
     if (key === 'GET /api/system/v1/restore/devices') {
         sendJSON(res, {backup: {bidcos_rf: {devices: 0, has_key: false, gateways: 0}, hmip: {devices: 0, local_key: false, device_key_map: false}, bidcos_wired: {devices: 0, gateways: 0}, key_index: 0, files: []}, target: {paired: {}, devices: 0, unknown: [], user_key: false, importable: true}});
         return true;
+    }
+    // openccu-lite task 275: the record of the last device import; stub-import=pending|done|rejected|
+    // no-module shows one (the cookie a test sets), retry answers 202, a dismissal 204 and forgets it
+    if (u.pathname === '/api/system/v1/radio/import' || u.pathname === '/api/system/v1/radio/import/retry') {
+        const jar = cookieJar(req);
+        // stub-import=<state>[.<anything>]: the suffix keeps one test's retry and dismissal apart
+        // from another's while the projects run in parallel
+        const cookie = jar['stub-import'] ?? '';
+        const state = cookie.split('.')[0];
+        const view = () => {
+            if (!state || importDismissed.has(cookie)) return {imported: false};
+            const record = {at: '2026-09-27T16:40:00Z', file: 'restore-ccu.sbk', version: '3.89.11',
+                hmip: {from_sgtin: '3014F711A0001F5F000000AF', to_sgtin: '3014F711A0001F0000000A03', to_module: 'RPI-RF-MOD 0000000A03', module_changed: true, local_key: false, devices: 2},
+                bidcos_rf: {address: '0xFF97AF', serial: '1709ADFA00', devices: 1, non_default_key: true, key_index: 1, target_key_replaced: false, module: 'RPI-RF-MOD 0000000A03'}};
+            const outcome = {hmip: {state, module_now: state === 'no-module' ? '' : '3014F711A0001F0000000A03', ...(state === 'rejected' ? {cause: 'unreachable'} : {}), ...(state === 'done' ? {line: 'Adapter exchange successful.'} : {})},
+                bidcos_rf: {took: true, interface: 'CCU2 1709ADFA00', connected: true}};
+            return {imported: true, record, outcome, switching: importRetried.has(cookie) ? 'retry' : ''};
+        };
+        if (req.method === 'GET') { sendJSON(res, view()); return true; }
+        if (req.method === 'DELETE') { importDismissed.add(cookie); res.writeHead(204); res.end(); return true; }
+        if (req.method === 'POST') { req.resume(); req.on('end', () => { importRetried.add(cookie); sendJSON(res, view(), 202); }); return true; }
     }
     if (key === 'POST /api/system/v1/restore/import-devices') {
         req.resume();
