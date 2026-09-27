@@ -3,7 +3,9 @@ package system
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -12,11 +14,26 @@ import (
 	"github.com/hobbyquaker/occulited/internal/firewall"
 )
 
+// classicPriv records the chowns instead of making them: a chown to root works only as root, and
+// the test must say the same as root and as a user (B-7: the runner runs the tests as uid 0).
+type classicPriv struct {
+	*fwPriv
+	mu     sync.Mutex
+	chowns []string
+}
+
+func (p *classicPriv) Chown(path string, uid, gid int, recursive bool) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.chowns = append(p.chowns, fmt.Sprintf("%s %d:%d", filepath.Base(path), uid, gid))
+	return nil
+}
+
 func classicRig(t *testing.T) (*ClassicRPCConfig, func() []string, *[]string) {
 	t.Helper()
 	r := rootWith(t, map[string]string{"etc/config/.keep": ""})
 	old := Priv
-	Priv = &fwPriv{}
+	Priv = &classicPriv{fwPriv: &fwPriv{}}
 	t.Cleanup(func() { Priv = old })
 	var cmds, logs []string
 	var mu sync.Mutex
@@ -90,8 +107,13 @@ func TestClassicRPC(t *testing.T) {
 	if user != "ccu-client" || hash != sha512Crypt("a typed password", salt) {
 		t.Fatalf("htpasswd %q", b)
 	}
+	// no www-data in this system's /etc/group (the busybox products): root's 0600, no chown -
+	// whatever the host's groups and the test's uid (B-7)
 	if st, _ := os.Stat(c.Root.join(ClassicRPCHtpasswd)); st.Mode().Perm() != 0o600 {
 		t.Errorf("mode %v", st.Mode())
+	}
+	if ch := Priv.(*classicPriv).chowns; len(ch) != 0 {
+		t.Errorf("chowned without the group: %q", ch)
 	}
 	if cur := c.Root.ReadClassicRPC(); cur.Auth != "password" || cur.User != "ccu-client" || !cur.PasswordSet {
 		t.Fatalf("after the pair: %+v", cur)
@@ -151,4 +173,39 @@ func waitFor(t *testing.T, ok func() bool) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatal("timed out")
+}
+
+// B-7, B-120: where the system has lighttpd's group, the pair is root:www-data 0640 - the gid from
+// the system's own /etc/group, not the host's (the host of this test may have a www-data of its own
+// with another id, or none).
+func TestClassicRPCPairGroupReadable(t *testing.T) {
+	c, _, _ := classicRig(t)
+	if err := os.MkdirAll(c.Root.join("/etc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(c.Root.join("/etc/group"), []byte("root:x:0:\nwww-data:x:4242:\nocculite:x:999:\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.SetPassword(t.Context(), "ccu-client", "a typed password", false, func(string) {}); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := os.Stat(c.Root.join(ClassicRPCHtpasswd)); st.Mode().Perm() != 0o640 {
+		t.Errorf("mode %v, want 0640", st.Mode())
+	}
+	if ch := Priv.(*classicPriv).chowns; len(ch) != 1 || ch[0] != "classic-rpc.htpasswd 0:4242" {
+		t.Errorf("chowns %q, want the pair to root:4242", ch)
+	}
+}
+
+func TestRootGroupID(t *testing.T) {
+	r := rootWith(t, map[string]string{"etc/group": "root:x:0:\nwww-data:x:33:\nbad:x:nan:\nnocolon\n\n"})
+	for name, want := range map[string]int{"root": 0, "www-data": 33, "bad": -1, "nocolon": -1, "": -1, "missing": -1} {
+		gid, ok := r.GroupID(name)
+		if (want >= 0) != ok || ok && gid != want {
+			t.Errorf("GroupID(%q) = %d %v, want %d", name, gid, ok, want)
+		}
+	}
+	if !r.HasGroup("bad") || r.HasGroup("nocolon") || r.HasGroup("") {
+		t.Error("HasGroup: a line with a colon names a group, whatever its id; one without does not")
+	}
 }

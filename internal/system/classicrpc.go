@@ -5,9 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/user"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -246,7 +244,7 @@ func (c *ClassicRPCConfig) SetPassword(ctx context.Context, user, password strin
 	if err := writeFileAtomic(c.Root.join(ClassicRPCHtpasswd), []byte(line), 0o600); err != nil {
 		return "", fmt.Errorf("%s: %w", ClassicRPCHtpasswd, err)
 	}
-	if err := groupReadable(c.Root.join(ClassicRPCHtpasswd), "www-data"); err != nil {
+	if err := groupReadable(c.Root, c.Root.join(ClassicRPCHtpasswd), "www-data"); err != nil {
 		// the pair is in place; lighttpd cannot read it until the next start's lite-classic-rpc-conf
 		// repairs the mode (a development box without the helper lands here)
 		certLog(log).logf("classic RPC: the pair could not be handed to lighttpd's group: %v", err)
@@ -269,14 +267,10 @@ func (c *ClassicRPCConfig) SetPassword(ctx context.Context, user, password strin
 
 // groupReadable hands a root 0600 file to a group as 0640 - the classic RPC pair to lighttpd's
 // user (B-120). A box without the group (the busybox products, where lighttpd is root) keeps the
-// file as it is.
-func groupReadable(path, group string) error {
-	g, err := user.LookupGroup(group)
-	if err != nil {
-		return nil
-	}
-	gid, err := strconv.Atoi(g.Gid)
-	if err != nil {
+// file as it is. The group is the system's (r), not the host's the process happens to run on (B-7).
+func groupReadable(r Root, path, group string) error {
+	gid, ok := r.GroupID(group)
+	if !ok {
 		return nil
 	}
 	if err := Priv.Chown(path, 0, gid, false); err != nil {

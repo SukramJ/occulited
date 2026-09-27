@@ -347,12 +347,30 @@ func (r Root) writeAddonPolicy(p *AddonPolicy) error {
 // HasGroup says whether /etc/group names the group - the image's table, plus what
 // occu-etc-writable let addon users add.
 func (r Root) HasGroup(name string) bool {
+	_, ok := r.groupEntry(name)
+	return ok
+}
+
+// GroupID is the group's id in this system's /etc/group - the system occulited manages, which
+// is the host only when the root is "/" (B-7: user.LookupGroup asked the host even under --root and
+// in the tests).
+func (r Root) GroupID(name string) (int, bool) {
+	f, ok := r.groupEntry(name)
+	if !ok || len(f) < 3 {
+		return 0, false
+	}
+	gid, err := strconv.Atoi(f[2])
+	return gid, err == nil && gid >= 0
+}
+
+// groupEntry is the group's line in /etc/group, split at the colons.
+func (r Root) groupEntry(name string) ([]string, bool) {
 	for _, line := range strings.Split(readFile(r.join("/etc/group")), "\n") {
-		if n, _, ok := strings.Cut(line, ":"); ok && n == name {
-			return true
+		if f := strings.Split(line, ":"); len(f) > 1 && f[0] == name {
+			return f, true
 		}
 	}
-	return false
+	return nil, false
 }
 
 // CertsGroup is the group that may read the box's TLS certificate and key (D-46): the image
