@@ -1,7 +1,8 @@
 # openccu-lite: CI for occulited. Runs on the project's own self-hosted runner (host mode) on the
 # private forge the project is developed on. On GitHub it does not run: no self-hosted runner is
 # attached to the public repository (see the job's `if`); github-ci.yml runs the same checks on
-# GitHub-hosted runners there.
+# GitHub-hosted runners there. This job must stay a superset of github-ci.yml's: publishing to
+# GitHub waits for it to be green for the exact commit.
 name: ci
 
 on:
@@ -44,6 +45,9 @@ jobs:
           npm ci --no-audit --no-fund
           npx svelte-check --tsconfig ./tsconfig.json
           npm run build
+      - name: UI unit tests
+        working-directory: ui
+        run: npm test
       - name: Every string is in German (D-12)
         run: python3 scripts/i18n-check.py
       - name: User-facing text says "the system", not "the box" (task 160), and "Sie", not "du" (B-23)
