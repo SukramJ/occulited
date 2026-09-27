@@ -46,8 +46,8 @@ jobs:
           npm run build
       - name: Every string is in German (D-12)
         run: python3 scripts/i18n-check.py
-      - name: User-facing text says "the system", not "the box" (task 160)
-        run: python3 scripts/wording-check.py
+      - name: User-facing text says "the system", not "the box" (task 160), and "Sie", not "du" (B-23)
+        run: python3 scripts/test_wording_check.py && python3 scripts/wording-check.py
       - name: svelte-check
         working-directory: ui
         run: npm run check

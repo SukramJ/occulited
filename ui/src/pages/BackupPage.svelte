@@ -16,6 +16,8 @@
     import {EASE_MS, type BootEntry} from '../lib/bootbar';
     import {beginBoot, removeEntry, watchBoot} from '../lib/bootwatch';
     import {boxUptime} from '../lib/power';
+    import {onMount} from 'svelte';
+    import {scrollToAnchor} from '../lib/anchor';
 
     interface Check { ok: boolean; output: string; backup_version?: string; running_version?: string; needs_key: boolean; has_rega: boolean }
     // openccu-lite task 251: the paired devices a checked backup holds, and this system's side
@@ -273,6 +275,9 @@
         }
     }
     let restoring = $state<BootEntry | null>(null);
+    // the welcome page's device import (occulited task 4) lands on #restore: the encryption and the
+    // targets above it load after the page and push it down, so the jump is made again
+    onMount(() => scrollToAnchor('restore'));
 </script>
 
 <SystemTitle />

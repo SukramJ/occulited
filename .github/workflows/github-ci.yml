@@ -79,8 +79,8 @@ jobs:
           test -z "$(git status --porcelain internal/ui/dist)" || { echo "internal/ui/dist differs from a fresh build: run 'cd ui && npm run build' and commit"; exit 1; }
       - name: Every string is in German
         run: python3 scripts/i18n-check.py
-      - name: User-facing text says "the system"
-        run: python3 scripts/wording-check.py
+      - name: User-facing text says "the system" and "Sie"
+        run: python3 scripts/test_wording_check.py && python3 scripts/wording-check.py
       - name: The UI in a browser
         working-directory: ui
         run: |

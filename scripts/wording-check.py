@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """Task 160: user-facing text says "the system" (de: "das System"), never "the box".
+B-23: the German text addresses the user as "Sie", never with "du" (du, dein, dich, dir, euch, and
+the du-imperatives such as "gib", "wähle", "bestätige" not followed by "Sie").
 
 Checks four places for the word box/Box as its own word:
 
@@ -10,6 +12,9 @@ Checks four places for the word box/Box as its own word:
     it by ui/scripts/starting-page.mjs), ui/src/starting/template.html and the generated
     deploy/lighttpd/occulite-starting.html
   - occulited's own README.md
+
+The du-check runs over the German strings only: the "de:" values of the i18n catalogue and of
+bootbar.ts's catalogue. A {placeholder} such as {dir} is not a word of the text.
 
 Code comments, test names and CSS (box-shadow, box-sizing, border-box, and other
 `box-...`/`...-box` declarations) are not user-facing and are not in scope; a hyphen breaks the
@@ -33,6 +38,26 @@ CSS_BOX_RE = re.compile(
     r"[a-z-]*-box\b|\bbox-[a-z-]+|\.box\b|class=\"[a-z0-9 -]*\bbox\b[a-z0-9 -]*\"",
     re.IGNORECASE,
 )
+
+# B-23: the informal forms. The pronouns are words of their own; the imperatives are the du-forms
+# of the verbs a UI text asks with, and count only when "Sie" does not follow (the formal
+# imperative is "Geben Sie", "Wählen Sie"). Words that are also nouns (Suche, Frage, Bitte, Stelle)
+# are left out, and a status such as "Warten auf …" is written as an infinitive.
+DU_PRONOUN_RE = re.compile(r"(?<![\w])(du|dein|deine|deinen|deinem|deiner|deines|dich|dir|euch|euer|eure|euren|eurem|eurer|eures)(?![\w])", re.IGNORECASE)
+DU_IMPERATIVE_RE = re.compile(
+    r"(?<![\w])(gib|nimm|wähle|prüfe|öffne|bestätige|vergleiche|trage|klicke|tippe|lies|sieh|gehe|lege|setze|starte|melde|"
+    r"versuche|entferne|ändere|speichere|kopiere|drücke|halte|schalte|warte|verbinde|wechsle|verwende|nutze|achte|"
+    r"schließe|lade|erstelle|füge|behalte|bewahre|notiere|entschlüssele|richte|hole)(?![\w])(?!\s+Sie\b)",
+    re.IGNORECASE,
+)
+PLACEHOLDER_RE = re.compile(r"\{[A-Za-z_][A-Za-z0-9_]*\}")
+
+
+def has_du_form(text):
+    """True if the German `text` says du where the UI says Sie (B-23)."""
+    stripped = PLACEHOLDER_RE.sub("", text)
+    return bool(DU_PRONOUN_RE.search(stripped) or DU_IMPERATIVE_RE.search(stripped))
+
 
 def has_bare_box(text):
     """True if `text` contains box/Box as its own word, outside a CSS box-* declaration."""
@@ -87,6 +112,8 @@ def scan_i18n_table():
             violations.append(f"{path.relative_to(ROOT)}:{line}: key {key[:100]!r}")
         if de_val and has_bare_box(de_val):
             violations.append(f"{path.relative_to(ROOT)}:{line}: de {de_val[:100]!r}")
+        if de_val and has_du_form(de_val):
+            violations.append(f"{path.relative_to(ROOT)}:{line}: de says du, not Sie (B-23): {de_val[:100]!r}")
     return violations
 
 
@@ -104,6 +131,9 @@ def scan_bootbar_catalogue():
         if has_bare_box(val):
             line = src.count("\n", 0, m.start()) + 1
             violations.append(f"{path.relative_to(ROOT)}:{line}: de {val[:100]!r}")
+        if has_du_form(val):
+            line = src.count("\n", 0, m.start()) + 1
+            violations.append(f"{path.relative_to(ROOT)}:{line}: de says du, not Sie (B-23): {val[:100]!r}")
     return violations
 
 
@@ -147,12 +177,12 @@ def main():
     violations += scan_plain_text_file(ROOT / "README.md")
 
     if violations:
-        print("user-facing text says \"the box\" (task 160: it must say \"the system\"):")
+        print("user-facing text says \"the box\" (task 160: it must say \"the system\") or \"du\" (B-23: it must say \"Sie\"):")
         for v in violations:
             print("   ", v)
         print(len(violations), "violation(s)")
         sys.exit(1)
-    print("no user-facing \"box\" wording found (task 160)")
+    print("no user-facing \"box\" wording found (task 160), no \"du\" in German text (B-23)")
 
 
 if __name__ == "__main__":

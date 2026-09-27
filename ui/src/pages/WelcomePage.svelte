@@ -2,14 +2,13 @@
     import {onMount} from 'svelte';
     import {api} from '../lib/api';
     import {t} from '../lib/i18n.svelte';
-    import {navigate} from '../lib/router.svelte';
+    import {link, navigate} from '../lib/router.svelte';
 
     interface FwState { enabled: boolean }
     interface FeedState { feed?: {enabled: boolean} | null }
     interface CatalogState { daily?: boolean }
     interface FirstBoot { objects: number; devices: number; channels: number; rooms: number; functions: number; unnamed: number; error?: string }
     let firstBoot = $state<FirstBoot | null>(null);
-    interface ImportResult { devices: number; channels: number; rooms: number; functions: number; unnamed: number }
 
     // B-241 (D-90): the daily checks are off on a fresh system; the page asks once, one checkbox
     // per destination. GitHub is two settings behind one box: the release check and the
@@ -18,8 +17,12 @@
     let relEnabled = $state(false);
     let catDaily = $state(false);
     const ghOn = $derived(relEnabled && catDaily);
-    let ccuHost = $state('');
-    let preview = $state<{result: ImportResult; objects: number} | null>(null);
+    // occulited task 4: the devices of an old CCU come across from its backup (openccu-lite task
+    // 251, System → Backup), and only onto a system with no device paired yet - the import takes
+    // over the old system's radio identity. The factory reset's view counts the paired devices per
+    // interface; when it cannot be read the offer stays, and the Backup page checks again.
+    interface PairedView { interfaces?: Record<string, {devices: number; known: boolean}> }
+    let paired = $state(0);
     let msg = $state('');
     let busy = $state('');
     // task 149 (D-103): the local key step, only while HmIP-RF runs with no paired device - there
@@ -36,6 +39,7 @@
         try { relEnabled = (await api.get<FeedState>('/api/system/v1/system-update')).feed?.enabled ?? false; } catch { /* no feed */ }
         try { catDaily = (await api.get<CatalogState>('/api/system/v1/catalog')).daily ?? false; } catch { /* no catalogue */ }
         try { firstBoot = (await api.get<{first_boot_import?: FirstBoot}>('/api/system/v1/status')).first_boot_import ?? null; } catch { /* none */ }
+        try { paired = Object.values((await api.get<PairedView>('/api/system/v1/factory-reset')).interfaces ?? {}).reduce((n, i) => n + (i.known ? i.devices : 0), 0); } catch { /* not known: the offer stays */ }
     });
 
     async function setFw(on: boolean) {
@@ -48,20 +52,6 @@
         try {
             relEnabled = (await api.put<{enabled: boolean}>('/api/system/v1/system-update/settings', {enabled: on})).enabled;
             catDaily = (await api.put<{daily: boolean}>('/api/system/v1/catalog/settings', {daily: on})).daily;
-        } catch (e) {
-            msg = (e as Error).message;
-        } finally {
-            busy = '';
-        }
-    }
-
-    async function ccu(dryRun: boolean) {
-        busy = dryRun ? 'preview' : 'import';
-        msg = '';
-        try {
-            const r = await api.post<{result: ImportResult; objects: number; changed?: boolean}>('/api/meta/v1/import/ccu', {host: ccuHost.trim(), mode: 'merge', dry_run: dryRun});
-            preview = r;
-            if (!dryRun) msg = t('Imported: {o} named objects, {r} rooms, {f} functions.', {o: r.objects, r: r.result.rooms, f: r.result.functions});
         } catch (e) {
             msg = (e as Error).message;
         } finally {
@@ -96,19 +86,20 @@
     <label><input type="checkbox" checked={fwEnabled} onchange={(e) => setFw((e.currentTarget as HTMLInputElement).checked)} disabled={busy !== ''} data-outbound="eq3" /> {t('eQ-3 (ccu3-update.homematic.com): check daily for new firmware of the paired device types and download it — the same server a CCU asks. Installing stays your decision.')}</label>
 </div>
 
-<h2>2 · {t('Names from an old CCU')}</h2>
+<h2>2 · {t('Devices from a CCU or OpenCCU')}</h2>
 {#if firstBoot && !firstBoot.error}
     <div class="ol-notice">{t('This system was updated from a CCU: its names, rooms and functions were read from the ReGa database on this first boot — {o} named devices and channels, {r} rooms, {f} functions ({u} still carried the default name and were left out). Programs and system variables did not come across; nothing here could run them.', {o: firstBoot.objects, r: firstBoot.rooms, f: firstBoot.functions, u: firstBoot.unnamed})}</div>
 {:else if firstBoot?.error}
     <div class="ol-notice">{t('A ReGa database was found but could not be read: {e}', {e: firstBoot.error})}</div>
 {/if}
-<p>{t('If a CCU, RaspberryMatic or OpenCCU with your device names, rooms and functions is still running, enter its address: the names come across now. Its firewall must allow this system (REGA: full, or this address listed). Can be done later on the Names page.')}</p>
-<div class="ol-toolbar">
-    <input class="hmm-input" placeholder={t('CCU address')} bind:value={ccuHost} />
-    <button class="hmm-button" onclick={() => ccu(true)} disabled={!ccuHost.trim() || busy !== ''}>{t('Preview')}</button>
-    <button class="hmm-button" onclick={() => ccu(false)} disabled={!preview || busy !== ''}>{t('Import')}</button>
+<p>{t('This does not restore a backup: it takes over only the paired devices, with their keys and names, from the backup of a CCU or OpenCCU into this system. The system reboots afterwards.')}</p>
+<div class="ol-actions" data-welcome-devices>
+    {#if paired > 0}
+        <span class="ol-muted" data-welcome-devices-paired>{t('This system has {n} devices paired already: the import only works on a system without paired devices.', {n: paired})}</span>
+    {:else}
+        <a class="hmm-button" href="/system/backup#restore" use:link data-action="welcome-import-devices">{t('Import paired devices, keys and names from a backup')}</a>
+    {/if}
 </div>
-{#if preview}<div class="ol-muted">{t('{d} devices, {c} channels ({o} named), {r} rooms, {f} functions', {d: preview.result.devices, c: preview.result.channels, o: preview.objects, r: preview.result.rooms, f: preview.result.functions})}</div>{/if}
 {#if msg}<div class="ol-notice">{msg}</div>{/if}
 
 {#if lkStep}
