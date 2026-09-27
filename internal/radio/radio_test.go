@@ -95,6 +95,33 @@ func TestPlanStickRandomAddressAndIDs(t *testing.T) {
 	if !p.IDsInvalid || p.HmRFAddressActive != "0xFF1234" {
 		t.Fatalf("an ids file without a usable address is moved aside: %+v", p)
 	}
+	// rfd writes the address it takes in decimal (openccu-lite B-266): 16585268 is 0xFD1234
+	for ids, want := range map[string]string{
+		"BidCoS-Address = 16585268\n":               "0xFD1234",
+		"BidCoS-Address=0xFE42E5\nSerialNumber=X\n": "0xFE42E5",
+		"BidCoS-Address=0x000000\n":                 "0x000000",
+		"BidCoS-Address=0\n":                        "0",
+		"SerialNumber=X\n":                          "",
+		"BidCoS-Address = 0123\n":                   "0123",
+		"BidCoS-Address = 99999999\n":               "99999999",
+	} {
+		if got := IDsAddress(ids); got != want {
+			t.Errorf("IDsAddress(%q) = %q, want %q", ids, got, want)
+		}
+	}
+	in.IDs = "BidCoS-Address = 16585268\n"
+	if p = MakePlan(in); p.IDsInvalid || p.HmRFAddressActive != "0xFD1234" {
+		t.Fatalf("rfd's decimal address: invalid %v, active %q", p.IDsInvalid, p.HmRFAddressActive)
+	}
+	// openccu-lite B-266: the prep step makes both files empty for the daemons to fill; an empty
+	// (or blank) file is no address at all - nothing to move aside, and never upstream's "0x"
+	for _, blank := range []string{"", "\n", "  \n\n"} {
+		in.IDs, in.HmIPAddressConf = blank, blank
+		p = MakePlan(in)
+		if p.IDsInvalid || p.HmRFAddressActive != "0xFF1234" || p.HmIPAddressActive != p.HmIP.Address || p.HmIPAddressActive == "0x" {
+			t.Fatalf("empty ids/hmip_address.conf %q: invalid %v, active %q/%q", blank, p.IDsInvalid, p.HmRFAddressActive, p.HmIPAddressActive)
+		}
+	}
 }
 
 func TestPlanTKStickHmIPOnly(t *testing.T) {

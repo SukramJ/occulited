@@ -201,8 +201,9 @@ func InspectRadioBackup(sbk string) (RadioBackup, error) {
 		}
 		switch {
 		case rel == "ids":
-			kv := radio.ParseKV(small(4096))
-			b.BidCosRF.Address, b.BidCosRF.Serial = kv["BidCoS-Address"], kv["SerialNumber"]
+			ids := small(4096)
+			kv := radio.ParseKV(ids)
+			b.BidCosRF.Address, b.BidCosRF.Serial = radio.IDsAddress(ids), kv["SerialNumber"]
 		case rel == "keys":
 			b.BidCosRF.HasKey = h.Size > 0
 		case rel == "rfd.conf":
@@ -253,8 +254,8 @@ type RadioImportResult struct {
 const asideDir = "/etc/config/.import-devices-aside"
 
 // owners are the users the daemons run as, for the imported files; a name the system lacks (a
-// development root) leaves root's ownership, which the boot's prep step corrects for keys.
-var radioOwners = map[string]string{"rfd": "rfd", "crRFD": "hmipserver", "hs485d": "hs485d", "keys": "rfd", "hmip_address.conf": "hmipserver"}
+// development root) leaves root's ownership, which the boot's prep step corrects for keys and ids.
+var radioOwners = map[string]string{"rfd": "rfd", "crRFD": "hmipserver", "hs485d": "hs485d", "keys": "rfd", "ids": "rfd", "hmip_address.conf": "hmipserver"}
 
 // ImportRadio puts the backup's radio files onto this system: the target's own moved aside, the
 // backup's written, owned by the daemons. The backup's key store (keys, crypttool.cfg) comes as it

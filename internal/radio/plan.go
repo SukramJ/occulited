@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -238,19 +239,8 @@ func MakePlan(in Inputs) Plan {
 	if p.HmRF != nil {
 		hmrfAddr = p.HmRF.Address
 	}
-	if in.IDsExists {
-		v := ""
-		for _, l := range strings.Split(in.IDs, "\n") {
-			if strings.Contains(strings.ToLower(l), "bidcos-address") {
-				v = strings.Join(strings.Fields(l), "")
-				if _, after, ok := strings.Cut(v, "="); ok {
-					v = after
-				} else {
-					v = ""
-				}
-				break
-			}
-		}
+	if in.hasIDs() {
+		v := IDsAddress(in.IDs)
 		if v == "" || v == "0" || v == "0x000000" {
 			p.HmRFAddressActive = hmrfAddr
 			p.IDsInvalid = true
@@ -261,7 +251,7 @@ func MakePlan(in Inputs) Plan {
 	} else {
 		p.HmRFAddressActive = hmrfAddr
 	}
-	if in.HmIPAddressOK {
+	if in.hasHmIPAddress() {
 		v := ""
 		for _, l := range strings.Split(in.HmIPAddressConf, "\n") {
 			if strings.Contains(strings.ToLower(l), "adapter.1.address") {
@@ -523,4 +513,28 @@ func heapMB(memTotalKB, cgroupMax int64) int {
 		return 128
 	}
 	return heap
+}
+
+// IDsAddress is the BidCos address an ids file carries, as the first BidCoS-Address line gives it
+// (spaces dropped, upstream's reading). rfd writes the address it uses into a file that has none
+// in decimal ("BidCoS-Address = 16585268" for 0xFD1234; measured for openccu-lite B-266), the
+// radio run and eq3configd in hex; a decimal one is given in the hex form everything else
+// compares with.
+func IDsAddress(ids string) string {
+	v := ""
+	for _, l := range strings.Split(ids, "\n") {
+		if strings.Contains(strings.ToLower(l), "bidcos-address") {
+			v = strings.Join(strings.Fields(l), "")
+			if _, after, ok := strings.Cut(v, "="); ok {
+				v = after
+			} else {
+				v = ""
+			}
+			break
+		}
+	}
+	if n, err := strconv.ParseUint(v, 10, 24); err == nil && n > 0 && !strings.HasPrefix(v, "0") {
+		return fmt.Sprintf("0x%06X", n)
+	}
+	return v
 }

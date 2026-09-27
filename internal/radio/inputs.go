@@ -123,6 +123,17 @@ func Load(ctx context.Context, root string, run Runner, det Detection) Inputs {
 	return in
 }
 
+// hasIDs: /etc/config/ids is there and not empty. The prep step makes the file empty for rfd to
+// fill (openccu-lite B-266), so an empty one is no address at all - not an unusable one to move
+// aside - and the module's address is written into it.
+func (in Inputs) hasIDs() bool { return in.IDsExists && strings.TrimSpace(in.IDs) != "" }
+
+// hasHmIPAddress: hmip_address.conf is there and not empty, for the same reason (the prep step
+// makes it empty for hmipserver, B-266); an empty one would otherwise give upstream's "0x".
+func (in Inputs) hasHmIPAddress() bool {
+	return in.HmIPAddressOK && strings.TrimSpace(in.HmIPAddressConf) != ""
+}
+
 func readExisting(p string) (string, bool) {
 	b, err := os.ReadFile(p)
 	if err != nil {

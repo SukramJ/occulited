@@ -112,8 +112,8 @@ func write(ctx context.Context, root string, d Detector, det Detection, in Input
 	// (task 163). The daemon is gone; these are not its files. The copy happens once, on a system
 	// that has no ids yet and a BidCos address to write: afterwards rfd owns the file and rewrites
 	// it itself, and overwriting it would take a paired system's address away.
-	if f.VarFiles["rf_address"] != "" && !in.IDsExists {
-		if err := w.file("/etc/config/ids", f.VarFiles["ids"], 0o644, "", ""); err != nil {
+	if f.VarFiles["rf_address"] != "" && !in.hasIDs() {
+		if err := w.file("/etc/config/ids", f.VarFiles["ids"], 0o644, "rfd", "rfd"); err != nil {
 			return r, err
 		}
 		logf("run: /etc/config/ids written from the module's address")

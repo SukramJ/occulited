@@ -61,6 +61,15 @@ func Prep(ctx context.Context, d Detector, daemon string, p Plan, logf func(stri
 		if err := TouchOwn(d.path(cfg+"/keys"), "rfd", "rfd", 0o600); err != nil {
 			return err
 		}
+		// openccu-lite B-266: the address file, for the same reason. A module that carries a
+		// BidCos address has it written by the radio run; without one (the HM-CFG-USB-2, LAN
+		// gateways only) rfd makes a random address and writes it here - in place, into the file
+		// its unit opens (ReadWritePaths). A missing file after a factory reset or a first boot
+		// left the address unwritten, and the next start chose another. The plan reads an empty
+		// file as none.
+		if err := TouchOwn(d.path(cfg+"/ids"), "rfd", "rfd", 0o644); err != nil {
+			return err
+		}
 		if err := TouchOwn(d.path("/var/RFD.handlers"), "rfd", "rfd", 0o644); err != nil {
 			return err
 		}
@@ -82,6 +91,10 @@ func Prep(ctx context.Context, d Detector, daemon string, p Plan, logf func(stri
 		_ = os.MkdirAll(d.path(DiagramPath), 0o750)
 		OwnTree(measureDir, "hmipserver", "hmipserver")
 		Own(measureDir, "hmipserver", "hmipserver", 0o750)
+		// openccu-lite B-266: the store is made before the ownership pass - made after it, on a
+		// fresh userfs (a factory reset, a first boot), it stayed root's 0700 and the server could
+		// neither list it nor write the module's identity into it
+		_ = os.MkdirAll(d.path(cfg+"/crRFD/data"), 0o700)
 		for _, sub := range []string{"/crRFD", "/eshlight"} {
 			_ = os.MkdirAll(d.path(cfg+sub), 0o755)
 			OwnTree(d.path(cfg+sub), "hmipserver", "hmipserver")
@@ -93,9 +106,14 @@ func Prep(ctx context.Context, d Detector, daemon string, p Plan, logf func(stri
 		// crRFD directory itself to everyone but the server and root (its hmip_user.conf and
 		// sgtin.map are 0640 and read through the helper, tasks 149 and 154).
 		Own(d.path(cfg+"/crRFD"), "hmipserver", "hmipserver", 0o750)
-		_ = os.MkdirAll(d.path(cfg+"/crRFD/data"), 0o700)
 		RestrictTree(d.path(cfg+"/crRFD/data"), 0o700, 0o600)
-		Own(d.path(cfg+"/hmip_address.conf"), "hmipserver", "hmipserver", 0o644)
+		// the HmIP address: the server writes a random one into this file when it has none, in
+		// place - its unit opens the file, not /etc/config, and a missing bind source is skipped,
+		// so the file exists from the start (B-266); the plan reads an empty file as none. 0644:
+		// the address is no secret, and occulited reads the file as its own user.
+		if err := TouchOwn(d.path(cfg+"/hmip_address.conf"), "hmipserver", "hmipserver", 0o644); err != nil {
+			return err
+		}
 		Own(d.path(cfg+"/hmip_networkkey.conf"), "hmipserver", "hmipserver", 0o600)
 		// the heating group store (HMServer.conf's groupStorageFilePath, task 180): the server
 		// writes the file in place, and its unit opens only the file, not the directory, so the
