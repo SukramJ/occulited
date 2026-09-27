@@ -11,6 +11,11 @@
 // routed there, so the manager is shown in the shell's frame as it is on a system. Without the
 // variable those shots are skipped.
 //
+// WALK_LICENSES_URL (e.g. https://<a lab system>/) takes the Licenses page from a real system instead
+// of the stub (the maintainer: it shows the real components): signed out, as the page is public, with
+// no API patching and without the author rule - his name as the author is the one thing allowed on
+// that image. Without it the page comes from the stub, author rule included.
+//
 // Two layers of demo data: the stub's JSON answers are patched per endpoint (a system with a plain
 // name, no warnings, local logins, no ULA), and before every shot the page's text is swept with
 // RULES, which mask what must never be on a published image - device serials, SGTINs, host names
@@ -126,11 +131,14 @@ const RULES = [
     ['Access point cellar', 'Access Point Keller'],
     ['\\bsebastian\\b', 'anna'],
     // the author's full name stays off the images (the handle names him)
-    ['\\bSebastian R\\w+ \\(hobbyquaker\\)', 'hobbyquaker'],
-    ['\\bSebastian R\\w+', 'hobbyquaker'],
+    ['\\bSebastian R\\w+ \\(hobbyquaker\\)', 'hobbyquaker', 'author'],
+    ['\\bSebastian R\\w+', 'hobbyquaker', 'author'],
     ['\\b10\\.10\\.0\\.2\\b', '192.0.2.119'],
     ['\\b192\\.168\\.(0|1)\\.(\\d{1,3})(?![\\d/])', '192.0.2.$2'],
     ['\\b192\\.168\\.0\\.0/24\\b', '192.0.2.0/24'],
+    // a real system's own names and addresses, should one show
+    ['\\blab-ccu[\\w-]*', 'openccu-lite'],
+    ['\\b172\\.16\\.\\d{1,3}\\.\\d{1,3}\\b', '192.0.2.10'],
     ['1709ADFA5E', '0A1B2C3D4E'],
     ['4118f6a32', '0a1b2c3d4'],
 ];
@@ -251,7 +259,8 @@ const SHOTS = [
     {name: '25-statusleuchte', path: '/system/led'},
     {name: '26-einstellungen', path: '/settings'},
     {name: '27-konto', path: '/account'},
-    {name: '28-lizenzen', path: '/licenses'},
+    // a real system lists some hundred components: the head of the list is enough
+    {name: '28-lizenzen', path: '/licenses', real: process.env.WALK_LICENSES_URL ?? '', height: process.env.WALK_LICENSES_URL ? 1400 : undefined},
     {name: '29-ausschalten', path: '/', act: (p) => p.locator('.ol-powerbtn').click(), height: 900},
     {name: '30-zusatzsoftware', path: '/addons'},
     {name: '31-zusatzsoftware-menue', path: '/', prefs: true, act: (p) => p.locator('.ol-addonsbtn').click(), height: 900},
@@ -310,7 +319,8 @@ for (const shot of SHOTS) {
         continue;
     }
     const theme = shot.dark ? 'dark' : 'light';
-    const ctx = await browser.newContext({viewport: {width: 1280, height: 900}, colorScheme: theme, locale: 'de-DE', timezoneId: 'Europe/Berlin', serviceWorkers: 'block'});
+    const origin = shot.real || base;
+    const ctx = await browser.newContext({ignoreHTTPSErrors: !!shot.real, viewport: {width: 1280, height: 900}, colorScheme: theme, locale: 'de-DE', timezoneId: 'Europe/Berlin', serviceWorkers: 'block'});
     await ctx.addInitScript((th) => {
         try {
             localStorage.setItem('ol.language', 'de');
@@ -321,9 +331,10 @@ for (const shot of SHOTS) {
         }
     }, theme);
     if (shot.app) await ctx.addCookies([{name: 'stub-app', value: `walk-${shot.name}`, url: base}]);
+    if (shot.real) console.error(`${shot.name}: from ${new URL(shot.real).protocol}//<real system>, signed out, no patching`);
     // the addon pins are per browser in the stub (stub-prefs): a fresh set per shot
     if (shot.prefs) await ctx.addCookies([{name: 'stub-prefs', value: `walk-${shot.name}-${Date.now()}`, url: base}]);
-    await ctx.route('**/api/**', async (route) => {
+    if (!shot.real) await ctx.route('**/api/**', async (route) => {
         const req = route.request();
         const u = new URL(req.url());
         if (req.method() === 'GET' && u.pathname === '/api/auth/v1/state' && shot.state) return route.fulfill({json: shot.state});
@@ -366,7 +377,7 @@ for (const shot of SHOTS) {
         });
     }
     const page = await ctx.newPage();
-    await page.goto(base + shot.path);
+    await page.goto(new URL(shot.path, origin).href);
     await page.waitForTimeout(1800);
     if (shot.act) {
         try {
@@ -377,6 +388,10 @@ for (const shot of SHOTS) {
         await page.waitForTimeout(900);
     }
     let h = shot.height;
+    if (h && h !== 900) {
+        await page.setViewportSize({width: 1280, height: h});
+        await page.waitForTimeout(500);
+    }
     if (!h) {
         h = await page.evaluate(() => {
             const s = document.querySelector('.ol-scrollport');
@@ -387,9 +402,10 @@ for (const shot of SHOTS) {
         await page.setViewportSize({width: 1280, height: h});
         await page.waitForTimeout(500);
     }
-    await page.evaluate(sweep, RULES);
+    const rules = shot.real ? RULES.filter((x) => x[2] !== 'author') : RULES;
+    await page.evaluate(sweep, rules);
     // the addon frames (the manager) are swept the same way
-    for (const fr of page.frames()) if (fr !== page.mainFrame()) await fr.evaluate(sweep, RULES).catch(() => {});
+    for (const fr of page.frames()) if (fr !== page.mainFrame()) await fr.evaluate(sweep, rules).catch(() => {});
     await page.screenshot({path: path.join(out, `${shot.name}.png`)});
     // WALK_TEXT_DIR: the page's text as shot (inputs included), for the check that nothing slipped through
     if (process.env.WALK_TEXT_DIR) {
