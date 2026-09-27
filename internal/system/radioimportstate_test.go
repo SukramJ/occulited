@@ -66,7 +66,7 @@ func TestImportRecordOutcome(t *testing.T) {
 	// onto a system with a key store of its own
 	b := RadioBackup{KeyIndex: 1, Version: "3.89.11"}
 	b.HmIP.IdentitySGTIN, b.HmIP.Devices, b.HmIP.LocalKey = "3014F711A0001F5F000000AF", 2, false
-	b.BidCosRF.Address, b.BidCosRF.Serial, b.BidCosRF.Devices, b.BidCosRF.HasKey = "0xFF97AF", "1709ADFA00", 1, true
+	b.BidCosRF.Address, b.BidCosRF.Serial, b.BidCosRF.Devices, b.BidCosRF.HasKey = "0xFF5678", "1709ADFA00", 1, true
 	at := time.Date(2026, 9, 27, 18, 0, 0, 0, time.UTC)
 	rec := NewImportedRadio(at, "restore-ccu.sbk", b, plan, hasPlan, true)
 	if !rec.HmIP.ModuleChanged || rec.HmIP.FromSGTIN != "3014F711A0001F5F000000AF" || rec.HmIP.ToSGTIN != "3014F711A0001F0000000A03" || rec.HmIP.ToModule != "RPI-RF-MOD 0000000A03" || !rec.BidCosRF.NonDefaultKey || rec.BidCosRF.KeyIndex != 1 || !rec.BidCosRF.TargetKeyReplaced || rec.BidCosRF.Module != "RPI-RF-MOD 0000000A03" || rec.HmIP.Devices != 2 {

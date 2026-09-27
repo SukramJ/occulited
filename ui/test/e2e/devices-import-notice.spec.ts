@@ -19,7 +19,7 @@ test('pending: the notice, the retry restarts HmIP-RF, the BidCos line and the k
     await expect(n).toHaveAttribute('data-state', 'pending');
     await expect(n).toContainText('Devices imported from a backup');
     await expect(n.locator('[data-hmip="pending"]')).toContainText('the identity of module 3014F711A0001F5F000000AF is not on 3014F711A0001F0000000A03 yet');
-    await expect(n.locator('[data-bidcos="took"]')).toContainText('rfd runs with the imported identity (address 0xFF97AF, serial 1709ADFA00) on RPI-RF-MOD 0000000A03');
+    await expect(n.locator('[data-bidcos="took"]')).toContainText('rfd runs with the imported identity (address 0xFF5678, serial 1709ADFA00) on RPI-RF-MOD 0000000A03');
     await expect(n.locator('[data-bidcos="key"]')).toContainText('non-default BidCos security key came along');
     const retry = n.locator('[data-action="import-retry"]');
     await expect(retry).toBeEnabled();

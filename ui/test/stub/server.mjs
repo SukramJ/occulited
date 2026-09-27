@@ -2140,7 +2140,7 @@ function variant(req, u, res) {
             if (!state || importDismissed.has(cookie)) return {imported: false};
             const record = {at: '2026-09-27T16:40:00Z', file: 'restore-ccu.sbk', version: '3.89.11',
                 hmip: {from_sgtin: '3014F711A0001F5F000000AF', to_sgtin: '3014F711A0001F0000000A03', to_module: 'RPI-RF-MOD 0000000A03', module_changed: true, local_key: false, devices: 2},
-                bidcos_rf: {address: '0xFF97AF', serial: '1709ADFA00', devices: 1, non_default_key: true, key_index: 1, target_key_replaced: false, module: 'RPI-RF-MOD 0000000A03'}};
+                bidcos_rf: {address: '0xFF5678', serial: '1709ADFA00', devices: 1, non_default_key: true, key_index: 1, target_key_replaced: false, module: 'RPI-RF-MOD 0000000A03'}};
             const outcome = {hmip: {state, module_now: state === 'no-module' ? '' : '3014F711A0001F0000000A03', ...(state === 'rejected' ? {cause: 'unreachable'} : {}), ...(state === 'done' ? {line: 'Adapter exchange successful.'} : {})},
                 bidcos_rf: {took: true, interface: 'CCU2 1709ADFA00', connected: true}};
             return {imported: true, record, outcome, switching: importRetried.has(cookie) ? 'retry' : ''};
