@@ -80,15 +80,15 @@ func builtinRegadom() []byte {
 <oid>1035</oid><ifc><obj><id>1035</id><name>BidCos-RF</name><type>458753</type></obj></ifc>
 </interfacemap>
 <devicemap><count>1</count>
-<oid>1555</oid><device><obj><id>1555</id><name>Thermostat Bad</name><type>17</type><metadata><count>1</count><property>DEVDESC</property><value>[ADDRESS:&quot;JEQ0230153&quot;,CHILDREN:{&quot;JEQ0230153:1&quot;}]</value></metadata></obj></device>
+<oid>1555</oid><device><obj><id>1555</id><name>Thermostat Bad</name><type>17</type><metadata><count>1</count><property>DEVDESC</property><value>[ADDRESS:&quot;JEQ9000001&quot;,CHILDREN:{&quot;JEQ9000001:1&quot;}]</value></metadata></obj></device>
 </devicemap>
 <channelmap><count>2</count>
-<oid>1575</oid><channel><obj><id>1575</id><name>Bad Klima</name><type>33</type><metadata><count>1</count><property>DEVDESC</property><value>[ADDRESS:&quot;JEQ0230153:1&quot;,PARENT:&quot;JEQ0230153&quot;]</value></metadata></obj></channel>
-<oid>1578</oid><channel><obj><id>1578</id><name>Bad Licht</name><type>33</type><metadata><count>1</count><property>DEVDESC</property><value>[ADDRESS:&quot;JEQ0230153:2&quot;,PARENT:&quot;JEQ0230153&quot;]</value></metadata></obj></channel>
+<oid>1575</oid><channel><obj><id>1575</id><name>Bad Klima</name><type>33</type><metadata><count>1</count><property>DEVDESC</property><value>[ADDRESS:&quot;JEQ9000001:1&quot;,PARENT:&quot;JEQ9000001&quot;]</value></metadata></obj></channel>
+<oid>1578</oid><channel><obj><id>1578</id><name>Bad Licht</name><type>33</type><metadata><count>1</count><property>DEVDESC</property><value>[ADDRESS:&quot;JEQ9000001:2&quot;,PARENT:&quot;JEQ9000001&quot;]</value></metadata></obj></channel>
 </channelmap>
 <hssdpmap><count>2</count>
-<oid>1576</oid><dp><obj><id>1576</id><name>BidCos-RF.JEQ0230153:1.HUMIDITY</name><type>393281</type></obj></dp>
-<oid>1579</oid><dp><obj><id>1579</id><name>BidCos-RF.JEQ0230153:2.STATE</name><type>393281</type></obj></dp>
+<oid>1576</oid><dp><obj><id>1576</id><name>BidCos-RF.JEQ9000001:1.HUMIDITY</name><type>393281</type></obj></dp>
+<oid>1579</oid><dp><obj><id>1579</id><name>BidCos-RF.JEQ9000001:2.STATE</name><type>393281</type></obj></dp>
 </hssdpmap>
 <enummap><count>8</count>
 <oid>101</oid><enum><obj><id>101</id><name>Rooms</name><type>3</type></obj><entype>1</entype><enel><count>3</count><oid>1230</oid><ot>3</ot><oid>1231</oid><ot>3</ot><oid>1232</oid><ot>3</ot></enel></enum>
@@ -118,7 +118,7 @@ func TestConvertTranslatesBuiltins(t *testing.T) {
 	}
 	// the live script answers with the same names
 	fromScript, err := Parse("I\t1035\tBidCos-RF\n" +
-		"O\t1575\t1035\tJEQ0230153:1\tBad Klima\nO\t1578\t1035\tJEQ0230153:2\tBad Licht\n" +
+		"O\t1575\t1035\tJEQ9000001:1\tBad Klima\nO\t1578\t1035\tJEQ9000001:2\tBad Licht\n" +
 		"R\t1230\troomBathroom\nM\t1230\t1575\nM\t1230\t1578\nR\t1231\t${roomKitchen}\nR\t1232\tHobbyraum roomGarage\n" +
 		"F\t1240\t${funcHeating}\nM\t1240\t1575\nF\t1241\tfuncLight\nM\t1241\t1578\n")
 	if err != nil {
@@ -139,7 +139,7 @@ func TestConvertTranslatesBuiltins(t *testing.T) {
 		if got, want := treeNames(doc.Enums["function"].Tree), "heizung=Heizung, licht=Licht"; got != want {
 			t.Errorf("%s: functions %s, want %s", c.source, got, want)
 		}
-		if o := doc.Objects["BidCos-RF.JEQ0230153:1"]; o == nil || strings.Join(o.Enums, ",") != "function/heizung,room/badezimmer" {
+		if o := doc.Objects["BidCos-RF.JEQ9000001:1"]; o == nil || strings.Join(o.Enums, ",") != "function/heizung,room/badezimmer" {
 			t.Errorf("%s: memberships %+v", c.source, o)
 		}
 		if res.Rooms != 3 || res.Functions != 2 || len(res.Renamed) != 0 {
@@ -156,7 +156,7 @@ func TestConvertTranslatesBuiltins(t *testing.T) {
 	if got, want := treeNames(res.Document.Enums["room"].Tree), "roombathroom=Badezimmer, kueche=Küche, hobbyraum-roomgarage=Hobbyraum roomGarage"; got != want {
 		t.Errorf("merge: rooms %s, want %s", got, want)
 	}
-	if o := res.Document.Objects["BidCos-RF.JEQ0230153:1"]; o == nil || strings.Join(o.Enums, ",") != "function/funcheating,room/roombathroom" {
+	if o := res.Document.Objects["BidCos-RF.JEQ9000001:1"]; o == nil || strings.Join(o.Enums, ",") != "function/funcheating,room/roombathroom" {
 		t.Errorf("merge: memberships %+v", o)
 	}
 }
@@ -175,7 +175,7 @@ func keyStore(t *testing.T, saver func(*meta.Document) error) *meta.Store {
 	}
 	doc.Enums["function"].Tree = []*meta.Node{{ID: "funcheating", Name: "funcHeating"}, {ID: "garten", Name: "Garten"}}
 	doc.Enums["floor"] = &meta.Enum{Name: map[string]string{"de": "Etagen", "en": "Floors"}, Tree: []*meta.Node{{ID: "garage", Name: "roomGarage"}}}
-	doc.Objects["BidCos-RF.JEQ0230153:1"] = &meta.Object{Name: "roomBathroom", Enums: []string{"function/funcheating", "room/eg/roomoffice", "room/roombathroom"}}
+	doc.Objects["BidCos-RF.JEQ9000001:1"] = &meta.Object{Name: "roomBathroom", Enums: []string{"function/funcheating", "room/eg/roomoffice", "room/roombathroom"}}
 	s, err := meta.New(doc, saver)
 	if err != nil {
 		t.Fatal(err)
@@ -214,7 +214,7 @@ func TestTranslateBuiltinNodes(t *testing.T) {
 	if got := treeNames(snap.Enums["floor"].Tree); got != "garage=roomGarage" {
 		t.Errorf("other enum touched: %s", got)
 	}
-	o := snap.Objects["BidCos-RF.JEQ0230153:1"]
+	o := snap.Objects["BidCos-RF.JEQ9000001:1"]
 	if o.Name != "roomBathroom" || strings.Join(o.Enums, ",") != "function/funcheating,room/eg/roomoffice,room/roombathroom" {
 		t.Errorf("object touched: %+v", o)
 	}

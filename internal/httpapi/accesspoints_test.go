@@ -43,7 +43,7 @@ func apHmIP(t *testing.T, paired *atomic.Bool) *httptest.Server {
 		case strings.Contains(body, "listDevices"):
 			list := dev("000A1B2C3D4E5F", "HmIP-PDT", "2.2.4")
 			if paired.Load() {
-				list += dev("0003DB3393B323", "HmIP-HAP-B1", "2.2.18")
+				list += dev("00030000000A13", "HmIP-HAP-B1", "2.2.18")
 			}
 			_, _ = w.Write([]byte(head + `<array><data>` + list + `</data></array>` + tail))
 		case strings.Contains(body, "getParamset"):
@@ -62,7 +62,7 @@ func TestAccessPoints(t *testing.T) {
 	root := fakeRoot(t)
 	data := filepath.Join(string(root), "etc/config/crRFD/data")
 	_ = os.MkdirAll(data, 0o755)
-	for _, f := range []string{"30150377DC0003DB3393B323.dev", "3014F711A0000A1B2C3D4E5F.dev", "3014F711A000041709ADFA5B.ap", "linkData.conf"} {
+	for _, f := range []string{"30150377DC00030000000A13.dev", "3014F711A0000A1B2C3D4E5F.dev", "3014F711A000040000000A01.ap", "linkData.conf"} {
 		_ = os.WriteFile(filepath.Join(data, f), []byte("x"), 0o644)
 	}
 	var paired atomic.Bool
@@ -72,13 +72,13 @@ func TestAccessPoints(t *testing.T) {
 	api := &SystemAPI{Root: root,
 		RadioInterfaces: func() []interfaces.Interface { return ifs },
 		Names: func(ref string) (string, []string, bool) {
-			if ref == "HmIP-RF.0003DB3393B323" {
+			if ref == "HmIP-RF.00030000000A13" {
 				return "Access point cellar", nil, true
 			}
 			return "", nil, false
 		},
 		Firmware: apFirmware{devices: []firmware.DeviceStatus{
-			{Device: interfaces.Device{Interface: "HmIP-RF", Address: "0003DB3393B323", Type: "HmIP-HAP-B1", Firmware: "2.2.18"}, Latest: "2.2.20", UpdateAvailable: true},
+			{Device: interfaces.Device{Interface: "HmIP-RF", Address: "00030000000A13", Type: "HmIP-HAP-B1", Firmware: "2.2.18"}, Latest: "2.2.20", UpdateAvailable: true},
 		}},
 	}
 	mux := http.NewServeMux()
@@ -130,7 +130,7 @@ func TestAccessPoints(t *testing.T) {
 		t.Fatalf("%+v", v)
 	}
 	ap := v.AccessPoints[0]
-	if ap.SGTIN != "30150377DC0003DB3393B323" || ap.Name != "Access point cellar" || ap.Latest != "2.2.20" || !ap.UpdateAvailable ||
+	if ap.SGTIN != "30150377DC00030000000A13" || ap.Name != "Access point cellar" || ap.Latest != "2.2.20" || !ap.UpdateAvailable ||
 		ap.Reachable == nil || !*ap.Reachable || ap.IPAddress != "192.0.2.155" || ap.Type != "HmIP-HAP-B1" {
 		t.Errorf("the HAP: %+v", ap)
 	}
@@ -163,11 +163,11 @@ func TestHmIPDeviceSGTINs(t *testing.T) {
 	}
 	data := filepath.Join(string(root), "etc/config/crRFD/data")
 	_ = os.MkdirAll(data, 0o755)
-	for _, f := range []string{"30150377dc0003db3393b323.dev", "3014F711A000179A4989A4B1.dev", "3014F711A000041709ADFA5B.ap", "NOTANSGTIN000000000000000.dev", "metaData.conf"} {
+	for _, f := range []string{"30150377dc00030000000a13.dev", "3014F711A000170000000A08.dev", "3014F711A000040000000A01.ap", "NOTANSGTIN000000000000000.dev", "metaData.conf"} {
 		_ = os.WriteFile(filepath.Join(data, f), []byte("x"), 0o644)
 	}
 	m := root.HmIPDeviceSGTINs()
-	if len(m) != 2 || m["0003DB3393B323"] != "30150377DC0003DB3393B323" || m["00179A4989A4B1"] != "3014F711A000179A4989A4B1" {
+	if len(m) != 2 || m["00030000000A13"] != "30150377DC00030000000A13" || m["00170000000A08"] != "3014F711A000170000000A08" {
 		t.Errorf("%v", m)
 	}
 }

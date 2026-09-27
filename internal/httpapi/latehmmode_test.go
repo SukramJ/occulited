@@ -66,7 +66,7 @@ func TestRadioFollowsLateHMMode(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	write(hmMode, "HM_MODE='NORMAL'\nHM_HOST='rpi4'\nHM_HMRF_DEV='HMIP-RFUSB'\nHM_HMRF_DEVNODE='/dev/raw-uart'\nHM_HMIP_DEV='HMIP-RFUSB'\nHM_HMIP_DEVNODE='/dev/raw-uart'\nHM_HMIP_SGTIN='3014F711A000041709ADFA5E'\n")
+	write(hmMode, "HM_MODE='NORMAL'\nHM_HOST='rpi4'\nHM_HMRF_DEV='HMIP-RFUSB'\nHM_HMRF_DEVNODE='/dev/raw-uart'\nHM_HMIP_DEV='HMIP-RFUSB'\nHM_HMIP_DEVNODE='/dev/raw-uart'\nHM_HMIP_SGTIN='3014F711A000040000000A02'\n")
 	ipc := func(name, url string) string {
 		return "<ipc><name>" + name + "</name><url>" + url + "</url><info>" + name + "</info></ipc>"
 	}

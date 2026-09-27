@@ -697,7 +697,7 @@ func TestHmIPPortWarning(t *testing.T) {
 // map, and nothing once that device is paired. The journal is read through the JournalLog's own
 // runner seam, so the test sees the arguments journalctl would get as well.
 func TestHmIPKeyDeclinedWarning(t *testing.T) {
-	const sgtin = "3014F711A0001F5F298D97AF"
+	const sgtin = "3014F711A0001F0000000A04"
 	entry := func(us int64, msg string) string {
 		b, err := json.Marshal(map[string]any{"__REALTIME_TIMESTAMP": strconv.FormatInt(us, 10), "MESSAGE": msg, "_SYSTEMD_UNIT": "hmipserver.service"})
 		if err != nil {
@@ -706,7 +706,7 @@ func TestHmIPKeyDeclinedWarning(t *testing.T) {
 		return string(b) + "\n"
 	}
 	decline := func(s string) string {
-		return "AP 3014F711A000041709ADFA5B: The inclusion for device " + s + " is declined, the local key is wrong"
+		return "AP 3014F711A000040000000A01: The inclusion for device " + s + " is declined, the local key is wrong"
 	}
 
 	var gotArgs []string
@@ -741,7 +741,7 @@ func TestHmIPKeyDeclinedWarning(t *testing.T) {
 	if w[0].ID != "hmip-key-declined" || w[0].Severity != warnings.SeverityWarning || w[0].Href != "/system/keys#device-keys" {
 		t.Errorf("warning: %+v", w[0])
 	}
-	if w[0].Params["sgtin"] != sgtin || w[0].Params["address"] != "001F5F298D97AF" {
+	if w[0].Params["sgtin"] != sgtin || w[0].Params["address"] != "001F0000000A04" {
 		t.Errorf("params: %+v", w[0].Params)
 	}
 	at, _ := w[0].Params["at"].(string)
@@ -759,7 +759,7 @@ func TestHmIPKeyDeclinedWarning(t *testing.T) {
 	}
 
 	// two devices, one warning each, in the order they were declined
-	const other = "3014F711A000041709ADFA5B"
+	const other = "3014F711A000040000000A01"
 	out = entry(1_700_000_000_000_000, decline(sgtin)) + entry(1_700_000_010_000_000, decline(other))
 	w, _ = a.hmipKeyDeclinedWarning(context.Background())
 	if len(w) != 2 || w[0].Params["sgtin"] != sgtin || w[1].Params["sgtin"] != other {
@@ -788,7 +788,7 @@ func TestHmIPKeyDeclinedWarning(t *testing.T) {
 // Task 201: the warning goes once the device is paired - the only way it can go, because the line
 // that raised it stays in the journal. A listing that fails says nothing instead (ok false).
 func TestHmIPKeyDeclinedGoesWhenTheDeviceIsIn(t *testing.T) {
-	const sgtin = "3014F711A0001F5F298D97AF" // its address is the SGTIN's last 14 digits
+	const sgtin = "3014F711A0001F0000000A04" // its address is the SGTIN's last 14 digits
 	hmip := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		if !strings.Contains(string(body), "listDevices") {
@@ -797,7 +797,7 @@ func TestHmIPKeyDeclinedGoesWhenTheDeviceIsIn(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "text/xml")
 		_, _ = w.Write([]byte(`<?xml version="1.0"?><methodResponse><params><param><value><array><data>` +
-			`<value><struct><member><name>ADDRESS</name><value><string>001F5F298D97AF</string></value></member>` +
+			`<value><struct><member><name>ADDRESS</name><value><string>001F0000000A04</string></value></member>` +
 			`<member><name>TYPE</name><value><string>HmIP-PDT</string></value></member>` +
 			`<member><name>PARENT</name><value><string></string></value></member></struct></value>` +
 			`</data></array></value></param></params></methodResponse>`))

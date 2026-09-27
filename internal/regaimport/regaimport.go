@@ -389,7 +389,7 @@ func Convert(d *Dump, base map[string]*meta.Enum) *Result {
 const FavoritesEnum = "favorite"
 
 // isDefaultName recognises what the CCU calls a device nobody has named: the address alone or
-// "<type> <address>" (HM-CC-TC JEQ0230153:1). Such names are not worth importing.
+// "<type> <address>" (HM-CC-TC JEQ9000001:1). Such names are not worth importing.
 func isDefaultName(name, address string) bool {
 	name = strings.TrimSpace(name)
 	return name == "" || name == address || strings.HasSuffix(name, " "+address)

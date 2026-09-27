@@ -21,18 +21,18 @@ func sampleRegadom() []byte {
 <oid>1036</oid><ifc><obj><id>1036</id><name>HmIP-RF</name><type>458753</type></obj></ifc>
 </interfacemap>
 <devicemap><count>2</count>
-<oid>1555</oid><device><obj><id>1555</id><name>HM-CC-TC JEQ0230153</name><type>17</type><metadata><count>1</count><property>DEVDESC</property><value>[ADDRESS:&quot;JEQ0230153&quot;,CHILDREN:{&quot;JEQ0230153:1&quot;},INTERFACE:&quot;OEQ2396766&quot;,TYPE:&quot;HM-CC-TC&quot;]</value></metadata></obj></device>
-<oid>1403</oid><device><obj><id>1403</id><name>Dimmer B&#252;ro</name><type>17</type><metadata><count>1</count><property>DEVDESC</property><value>[ADDRESS:&quot;0001D3C99C7D4B&quot;,CHILDREN:{&quot;0001D3C99C7D4B:3&quot;},INTERFACE:&quot;3014F711A0&quot;]</value></metadata></obj></device>
+<oid>1555</oid><device><obj><id>1555</id><name>HM-CC-TC JEQ9000001</name><type>17</type><metadata><count>1</count><property>DEVDESC</property><value>[ADDRESS:&quot;JEQ9000001&quot;,CHILDREN:{&quot;JEQ9000001:1&quot;},INTERFACE:&quot;OEQ9000007&quot;,TYPE:&quot;HM-CC-TC&quot;]</value></metadata></obj></device>
+<oid>1403</oid><device><obj><id>1403</id><name>Dimmer B&#252;ro</name><type>17</type><metadata><count>1</count><property>DEVDESC</property><value>[ADDRESS:&quot;0001D0000000B2&quot;,CHILDREN:{&quot;0001D0000000B2:3&quot;},INTERFACE:&quot;3014F711A0&quot;]</value></metadata></obj></device>
 </devicemap>
 <channelmap><count>3</count>
-<oid>1575</oid><channel><obj><id>1575</id><name>Wohnzimmer Thermostat</name><type>33</type><metadata><count>2</count><property>AutoconfRoles</property><value>WEATHER</value><property>DEVDESC</property><value>[ADDRESS:&quot;JEQ0230153:1&quot;,PARENT:&quot;JEQ0230153&quot;,TYPE:&quot;WEATHER&quot;]</value></metadata></obj></channel>
-<oid>1578</oid><channel><obj><id>1578</id><name>HM-CC-TC JEQ0230153:2</name><type>33</type><metadata><count>1</count><property>DEVDESC</property><value>[ADDRESS:&quot;JEQ0230153:2&quot;,PARENT:&quot;JEQ0230153&quot;]</value></metadata></obj></channel>
-<oid>1410</oid><channel><obj><id>1410</id><name>B&#252;ro Licht</name><type>33</type><metadata><count>1</count><property>DEVDESC</property><value>[ADDRESS:&quot;0001D3C99C7D4B:3&quot;,PARENT:&quot;0001D3C99C7D4B&quot;]</value></metadata></obj></channel>
+<oid>1575</oid><channel><obj><id>1575</id><name>Wohnzimmer Thermostat</name><type>33</type><metadata><count>2</count><property>AutoconfRoles</property><value>WEATHER</value><property>DEVDESC</property><value>[ADDRESS:&quot;JEQ9000001:1&quot;,PARENT:&quot;JEQ9000001&quot;,TYPE:&quot;WEATHER&quot;]</value></metadata></obj></channel>
+<oid>1578</oid><channel><obj><id>1578</id><name>HM-CC-TC JEQ9000001:2</name><type>33</type><metadata><count>1</count><property>DEVDESC</property><value>[ADDRESS:&quot;JEQ9000001:2&quot;,PARENT:&quot;JEQ9000001&quot;]</value></metadata></obj></channel>
+<oid>1410</oid><channel><obj><id>1410</id><name>B&#252;ro Licht</name><type>33</type><metadata><count>1</count><property>DEVDESC</property><value>[ADDRESS:&quot;0001D0000000B2:3&quot;,PARENT:&quot;0001D0000000B2&quot;]</value></metadata></obj></channel>
 </channelmap>
 <hssdpmap><count>2</count>
-<oid>1576</oid><dp><obj><id>1576</id><name>BidCos-RF.JEQ0230153:1.HUMIDITY</name><type>393281</type></obj></dp>
-<oid>1579</oid><dp><obj><id>1579</id><name>BidCos-RF.JEQ0230153:2.STATE</name><type>393281</type></obj></dp>
-<oid>1411</oid><dp><obj><id>1411</id><name>HmIP-RF.0001D3C99C7D4B:3.LEVEL</name><type>393281</type></obj></dp>
+<oid>1576</oid><dp><obj><id>1576</id><name>BidCos-RF.JEQ9000001:1.HUMIDITY</name><type>393281</type></obj></dp>
+<oid>1579</oid><dp><obj><id>1579</id><name>BidCos-RF.JEQ9000001:2.STATE</name><type>393281</type></obj></dp>
+<oid>1411</oid><dp><obj><id>1411</id><name>HmIP-RF.0001D0000000B2:3.LEVEL</name><type>393281</type></obj></dp>
 </hssdpmap>
 <usermap><count>1</count>
 <oid>1004</oid><user><obj><id>1004</id><name>Admin</name><type>129</type></obj><userlevel>8</userlevel><name></name><favorite>65535</favorite></user>
@@ -73,10 +73,10 @@ func TestParseRegadom(t *testing.T) {
 		}
 		return nil
 	}
-	if o := find("JEQ0230153"); o == nil || o.Interface != "BidCos-RF" || o.Name != "HM-CC-TC JEQ0230153" {
+	if o := find("JEQ9000001"); o == nil || o.Interface != "BidCos-RF" || o.Name != "HM-CC-TC JEQ9000001" {
 		t.Errorf("device: %+v", o)
 	}
-	if o := find("0001D3C99C7D4B:3"); o == nil || o.Interface != "HmIP-RF" || o.Name != "Büro Licht" {
+	if o := find("0001D0000000B2:3"); o == nil || o.Interface != "HmIP-RF" || o.Name != "Büro Licht" {
 		t.Errorf("hmip channel: %+v", o)
 	}
 	if d.Rooms[0].Name != "Wohnzimmer" || len(d.Rooms[0].Members) != 2 || d.Rooms[1].Name != "Büro" || d.Functions[0].Name != "Heizung" || d.Functions[0].Members[0] != 1575 {
@@ -86,7 +86,7 @@ func TestParseRegadom(t *testing.T) {
 	if res.Rooms != 2 || res.Functions != 1 || res.Unnamed != 2 || len(res.Document.Objects) != 4 {
 		t.Errorf("%+v objects=%d", res, len(res.Document.Objects))
 	}
-	if o := res.Document.Objects["BidCos-RF.JEQ0230153:1"]; o == nil || strings.Join(o.Enums, ",") != "favorite/admin,function/heizung,room/wohnzimmer" {
+	if o := res.Document.Objects["BidCos-RF.JEQ9000001:1"]; o == nil || strings.Join(o.Enums, ",") != "favorite/admin,function/heizung,room/wohnzimmer" {
 		t.Errorf("%+v", o)
 	}
 	// task 193: the favorites - the user's page under the user's name, the shared one under its
@@ -97,7 +97,7 @@ func TestParseRegadom(t *testing.T) {
 	if res.Favorites != 2 || strings.Join(res.FavoritesFor, ",") != "Admin,Wand" {
 		t.Errorf("favorites result: %d %v", res.Favorites, res.FavoritesFor)
 	}
-	if o := res.Document.Objects["HmIP-RF.0001D3C99C7D4B:3"]; o == nil || strings.Join(o.Enums, ",") != "favorite/admin,favorite/wand,function/heizung,room/buero" && strings.Join(o.Enums, ",") != "favorite/admin,favorite/wand,room/buero" {
+	if o := res.Document.Objects["HmIP-RF.0001D0000000B2:3"]; o == nil || strings.Join(o.Enums, ",") != "favorite/admin,favorite/wand,function/heizung,room/buero" && strings.Join(o.Enums, ",") != "favorite/admin,favorite/wand,room/buero" {
 		t.Errorf("the lamp's enums: %+v", o)
 	}
 }

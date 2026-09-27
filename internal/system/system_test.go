@@ -25,7 +25,7 @@ func fakeRoot(t *testing.T) Root {
 	// the two account files a confined addon's user is appended to (B-54)
 	w("etc/passwd", "root:x:0:0::/:/bin/sh\n")
 	w("etc/group", "root:x:0:\n")
-	w("var/hm_mode", "HM_MODE='NORMAL'\nHM_HOST='ova-KVM'\nHM_HMIP_DEV='HMIP-RFUSB'\nHM_HMIP_SERIAL='1709ADFA5E'\nHM_HMIP_SGTIN='3014F711A000041709ADFA5E'\nHM_HMIP_VERSION='4.4.18'\nHM_HMIP_ADDRESS='0x128520'\nHM_HMRF_DEV='HMIP-RFUSB'\nHM_HMRF_ADDRESS='0xFF01B6'\nHM_LED_GREEN_MODE2='heartbeat'\n")
+	w("var/hm_mode", "HM_MODE='NORMAL'\nHM_HOST='ova-KVM'\nHM_HMIP_DEV='HMIP-RFUSB'\nHM_HMIP_SERIAL='0000000A02'\nHM_HMIP_SGTIN='3014F711A000040000000A02'\nHM_HMIP_VERSION='4.4.18'\nHM_HMIP_ADDRESS='0x120a10'\nHM_HMRF_DEV='HMIP-RFUSB'\nHM_HMRF_ADDRESS='0xFF0A06'\nHM_LED_GREEN_MODE2='heartbeat'\n")
 	w("etc/config/InterfacesList.xml", "<interfaces v=\"1.0\">\n<ipc>\n <name>BidCos-RF</name>\n <url>xmlrpc_bin://127.0.0.1:32001</url> \n <info>BidCos-RF</info> \n</ipc>\n<ipc><name>HmIP-RF</name><url>xmlrpc://127.0.0.1:32010</url><info>HmIP-RF</info></ipc>\n</interfaces>\n")
 	w("etc/config/TZ", "Europe/Berlin\n")
 	w("proc/uptime", "12345.67 40000.0\n")
@@ -100,7 +100,7 @@ func TestRadio(t *testing.T) {
 	if rad.Mode != "NORMAL" || len(rad.Modules) != 2 {
 		t.Fatalf("radio: %+v", rad)
 	}
-	if rad.Modules[1].Protocol != "HmIP-RF" || rad.Modules[1].SGTIN != "3014F711A000041709ADFA5E" || rad.Modules[1].Firmware != "4.4.18" {
+	if rad.Modules[1].Protocol != "HmIP-RF" || rad.Modules[1].SGTIN != "3014F711A000040000000A02" || rad.Modules[1].Firmware != "4.4.18" {
 		t.Fatalf("hmip module: %+v", rad.Modules[1])
 	}
 	if rad.LEDs["green_mode2"] != "heartbeat" {
@@ -227,7 +227,7 @@ func TestReadDirFallsBackToHelper(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, f := range []string{"3014F711A000041709ADFA5B.ap", "3014F711A000041709ADFA5B.dev"} {
+	for _, f := range []string{"3014F711A000040000000A01.ap", "3014F711A000040000000A01.dev"} {
 		if err := os.WriteFile(filepath.Join(dir, f), []byte("x"), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -242,7 +242,7 @@ func TestReadDirFallsBackToHelper(t *testing.T) {
 	old := Priv
 	Priv = rootReader{}
 	t.Cleanup(func() { Priv = old })
-	if names := readDir(dir); strings.Join(names, " ") != "3014F711A000041709ADFA5B.ap 3014F711A000041709ADFA5B.dev" {
+	if names := readDir(dir); strings.Join(names, " ") != "3014F711A000040000000A01.ap 3014F711A000040000000A01.dev" {
 		t.Errorf("helper fallback: %v", names)
 	}
 	if names := readDir(filepath.Join(dir, "..", "nothing")); names != nil {

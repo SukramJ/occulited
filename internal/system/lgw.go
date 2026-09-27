@@ -47,7 +47,7 @@ type LANGatewaySpec struct {
 var (
 	serialRe = regexp.MustCompile(`^[A-Za-z0-9]{1,24}$`)
 	// A gateway's key is what eQ-3 prints on the device, and that is not limited to letters and
-	// digits: the maintainer's HM-LGW-O-TW-W-EU carries "=u6%U!M8e3" (2026-09-20), which the old
+	// digits: an HM-LGW-O-TW-W-EU can carry one like "=x1%Y!Z2w3" (2026-09-20), which the old
 	// pattern refused. Every printable character but a space passes now. It survives the way
 	// round: the key is written as the value of "Encryption Key = " in rfd.conf/hs485d.conf and as
 	// KEY= in <serial>.keychange, both of which are read by cutting at the *first* "=" and

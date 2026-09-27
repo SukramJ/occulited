@@ -11,11 +11,11 @@ import (
 )
 
 const sample = "I\t1035\tBidCos-RF\nI\t1036\tHmIP-RF\nI\t1007\tVirtualDevices\n" +
-	"O\t1001\t1035\tJEQ0230153\tHM-CC-TC JEQ0230153\n" +
-	"O\t1002\t1035\tJEQ0230153:1\tWohnzimmer Thermostat\n" +
-	"O\t1003\t1035\tJEQ0230153:2\tJEQ0230153:2\n" +
-	"O\t2001\t1036\t0001D3C99C7D4B\tDimmer B\xfcro\n" +
-	"O\t2002\t1036\t0001D3C99C7D4B:3\tB\xfcro Licht\n" +
+	"O\t1001\t1035\tJEQ9000001\tHM-CC-TC JEQ9000001\n" +
+	"O\t1002\t1035\tJEQ9000001:1\tWohnzimmer Thermostat\n" +
+	"O\t1003\t1035\tJEQ9000001:2\tJEQ9000001:2\n" +
+	"O\t2001\t1036\t0001D0000000B2\tDimmer B\xfcro\n" +
+	"O\t2002\t1036\t0001D0000000B2:3\tB\xfcro Licht\n" +
 	"O\t3001\t1007\tINT0000001\tHeizgruppe\n" +
 	"R\t1200\tWohnzimmer\nM\t1200\t1002\nM\t1200\t1003\n" +
 	"R\t1201\tB\xfcro\nM\t1201\t2002\n" +
@@ -46,15 +46,15 @@ func TestParseAndConvert(t *testing.T) {
 	if err := doc.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	o := doc.Objects["BidCos-RF.JEQ0230153:1"]
+	o := doc.Objects["BidCos-RF.JEQ9000001:1"]
 	if o == nil || o.Name != "Wohnzimmer Thermostat" || strings.Join(o.Enums, ",") != "function/heizung,room/wohnzimmer" {
 		t.Errorf("%+v", o)
 	}
 	// the unnamed channel is a room member: kept, named by address
-	if o := doc.Objects["BidCos-RF.JEQ0230153:2"]; o == nil || o.Name != "JEQ0230153:2" || o.Enums[0] != "room/wohnzimmer" {
+	if o := doc.Objects["BidCos-RF.JEQ9000001:2"]; o == nil || o.Name != "JEQ9000001:2" || o.Enums[0] != "room/wohnzimmer" {
 		t.Errorf("unnamed member: %+v", o)
 	}
-	if o := doc.Objects["HmIP-RF.0001D3C99C7D4B:3"]; o == nil || strings.Join(o.Enums, ",") != "function/licht,room/buero" {
+	if o := doc.Objects["HmIP-RF.0001D0000000B2:3"]; o == nil || strings.Join(o.Enums, ",") != "function/licht,room/buero" {
 		t.Errorf("%+v", o)
 	}
 	// "Buero" collides with "Büro" on the slug and gets -2; its dangling member is ignored
@@ -72,7 +72,7 @@ func TestParseAndConvert(t *testing.T) {
 	base := meta.Defaults()
 	base["room"].Tree = []*meta.Node{{ID: "eg", Name: "EG", Children: []*meta.Node{{ID: "wz", Name: "Wohnzimmer"}}}, {ID: "wohnzimmer", Name: "Wohnzimmer"}}
 	res2 := Convert(d, base)
-	if got := res2.Document.Objects["BidCos-RF.JEQ0230153:1"].Enums; !strings.Contains(strings.Join(got, ","), "room/wohnzimmer") || len(res2.Document.Enums["room"].Tree) != 4 {
+	if got := res2.Document.Objects["BidCos-RF.JEQ9000001:1"].Enums; !strings.Contains(strings.Join(got, ","), "room/wohnzimmer") || len(res2.Document.Enums["room"].Tree) != 4 {
 		t.Errorf("merge: %v %+v", got, res2.Document.Enums["room"].Tree)
 	}
 	if len(base["room"].Tree) != 2 {

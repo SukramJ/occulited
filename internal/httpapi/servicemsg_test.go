@@ -27,7 +27,7 @@ func TestServiceMessagesRoutes(t *testing.T) {
 	store := &servicemsg.Store{OnChange: ServiceMessageWatchers.Changed}
 	mux2 := http.NewServeMux()
 	api := &SystemAPI{Root: fakeRoot(t), ServiceMessages: store, Names: func(ref string) (string, []string, bool) {
-		if ref == "HmIP-RF.000193C9951175" {
+		if ref == "HmIP-RF.00010000000A10" {
 			return "Wandtaster Flur", []string{"room/eg/flur"}, true
 		}
 		return "", nil, false
@@ -35,14 +35,14 @@ func TestServiceMessagesRoutes(t *testing.T) {
 	api.Register(mux2)
 	srv2 := httptest.NewServer(mux2)
 	t.Cleanup(srv2.Close)
-	store.Event(rpcsub.Event{Interface: "HmIP-RF", Address: "000193C9951175:0", Key: "LOW_BAT", Value: true, Time: time.Unix(1000, 0)})
+	store.Event(rpcsub.Event{Interface: "HmIP-RF", Address: "00010000000A10:0", Key: "LOW_BAT", Value: true, Time: time.Unix(1000, 0)})
 	st, out, _ := do(t, srv2, "GET", "/api/system/v1/service-messages", "", nil)
 	if st != 200 || out["count"] != 1.0 {
 		t.Fatalf("list: %d %v", st, out)
 	}
 	msgs := out["messages"].([]any)
 	m := msgs[0].(map[string]any)
-	if m["name"] != "Wandtaster Flur" || m["key"] != "LOW_BAT" || m["seen"] != "event" || m["address"] != "000193C9951175" || m["channel"] != "0" {
+	if m["name"] != "Wandtaster Flur" || m["key"] != "LOW_BAT" || m["seen"] != "event" || m["address"] != "00010000000A10" || m["channel"] != "0" {
 		t.Fatalf("message %v", m)
 	}
 
@@ -75,7 +75,7 @@ func TestServiceMessagesRoutes(t *testing.T) {
 	if v := next(); v["count"] != 1.0 {
 		t.Fatalf("first view %v", v)
 	}
-	store.Event(rpcsub.Event{Interface: "HmIP-RF", Address: "000193C9951175:0", Key: "LOW_BAT", Value: false, Time: time.Unix(2000, 0)})
+	store.Event(rpcsub.Event{Interface: "HmIP-RF", Address: "00010000000A10:0", Key: "LOW_BAT", Value: false, Time: time.Unix(2000, 0)})
 	if v := next(); v["count"] != 0.0 {
 		t.Fatalf("after the clear %v", v)
 	}

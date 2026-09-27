@@ -26,8 +26,8 @@ func TestValidAddress(t *testing.T) {
 
 // the fake board: /sysinfo.json as the firmware writes it (src/webui.cpp)
 const sysinfo = `{"sysInfo":{"serial":"ABCDEF1234","currentVersion":"1.3.0","latestVersion":"1.3.1","memoryUsage":40.1,"cpuUsage":3.2,
-"rawUartRemoteAddress":"%s","radioModuleType":"HM-MOD-RPI-PCB","radioModuleSerial":"MEQ0835626",
-"radioModuleBidCosRadioMAC":"0x3D1BAE","radioModuleHmIPRadioMAC":"0x000000","radioModuleSGTIN":"3014F711A0000EDD8935AB12"}}`
+"rawUartRemoteAddress":"%s","radioModuleType":"HM-MOD-RPI-PCB","radioModuleSerial":"MEQ9000005",
+"radioModuleBidCosRadioMAC":"0x3D0A01","radioModuleHmIPRadioMAC":"0x000000","radioModuleSGTIN":"3014F711A0000E000000AB12"}}`
 
 func fakeBoard(t *testing.T, connectedTo string) *httptest.Server {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -59,7 +59,7 @@ func TestInfoAndState(t *testing.T) {
 	c := &Client{BaseURL: func(string) string { return srv.URL }}
 	b, err := c.Info(context.Background(), "192.0.2.50")
 	if err != nil || b.Address != "192.0.2.50" || b.Serial != "ABCDEF1234" || b.Firmware != "1.3.0" || b.ModuleType != "HM-MOD-RPI-PCB" ||
-		b.ModuleSerial != "MEQ0835626" || b.BidCosRadio != "0x3D1BAE" || b.HmIPRadio != "" || b.ConnectedTo != "192.0.2.7" {
+		b.ModuleSerial != "MEQ9000005" || b.BidCosRadio != "0x3D0A01" || b.HmIPRadio != "" || b.ConnectedTo != "192.0.2.7" {
 		t.Fatalf("%v %+v", err, b)
 	}
 	if StateFor(b, []string{"192.0.2.7"}) != "this" || StateFor(b, []string{"192.0.2.8"}) != "other" || StateFor(Board{}, nil) != "free" {

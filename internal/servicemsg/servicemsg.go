@@ -87,7 +87,7 @@ func key(iface, address, channel, dp string) string {
 	return iface + "|" + address + "|" + channel + ":" + dp
 }
 
-// splitChannel divides "000193C9951175:0" into the device and the channel.
+// splitChannel divides "00010000000A10:0" into the device and the channel.
 func splitChannel(addr string) (device, channel string) {
 	if i := strings.LastIndexByte(addr, ':'); i >= 0 {
 		return addr[:i], addr[i+1:]

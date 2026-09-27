@@ -26,9 +26,9 @@ func TestReadSerialOrder(t *testing.T) {
 		want  string
 	}{
 		{"nothing: the hostname", nil, "ccu-vm-1"},
-		{"the SGTIN first", map[string]string{"var/board_sgtin": "3014F711A000041709ADFA5E\n", "var/board_serial": "1709ADFA5E\n"}, "3014F711A000041709ADFA5E"},
-		{"the serial without an SGTIN (BidCos only)", map[string]string{"var/board_serial": "JEQ0534849\n"}, "JEQ0534849"},
-		{"an empty SGTIN file is skipped", map[string]string{"var/board_sgtin": "\n", "var/board_serial": "JEQ0534849"}, "JEQ0534849"},
+		{"the SGTIN first", map[string]string{"var/board_sgtin": "3014F711A000040000000A02\n", "var/board_serial": "0000000A02\n"}, "3014F711A000040000000A02"},
+		{"the serial without an SGTIN (BidCos only)", map[string]string{"var/board_serial": "JEQ9000002\n"}, "JEQ9000002"},
+		{"an empty SGTIN file is skipped", map[string]string{"var/board_sgtin": "\n", "var/board_serial": "JEQ9000002"}, "JEQ9000002"},
 		{"the kernel module's parameter last", map[string]string{"sys/module/plat_eq3ccu2/parameters/board_serial": "NEQ1234567\n"}, "NEQ1234567"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -56,33 +56,33 @@ func TestIdentityFollowsTheDetection(t *testing.T) {
 		t.Errorf("UDN before the detection %q", u)
 	}
 
-	writeVar(t, root, "var/board_serial", "1709ADFA5E\n")
-	writeVar(t, root, "var/board_sgtin", "3014F711A000041709ADFA5E\n")
-	if got := id.Serial(); got != "3014F711A000041709ADFA5E" {
+	writeVar(t, root, "var/board_serial", "0000000A02\n")
+	writeVar(t, root, "var/board_sgtin", "3014F711A000040000000A02\n")
+	if got := id.Serial(); got != "3014F711A000040000000A02" {
 		t.Fatalf("after the detection: %q, want the SGTIN", got)
 	}
-	if u := d.UDN(); u != "uuid:upnp-BasicDevice-1_0-3014F711A000041709ADFA5E" {
+	if u := d.UDN(); u != "uuid:upnp-BasicDevice-1_0-3014F711A000040000000A02" {
 		t.Errorf("UDN after the detection %q", u)
 	}
 	x := d.DescriptionXML("http://192.0.2.116:80/")
-	if !strings.Contains(x, "<serialNumber>3014F711A000041709ADFA5E</serialNumber>") ||
-		!strings.Contains(x, "<modelDescription>openccu-lite 3014F711A000041709ADFA5E</modelDescription>") {
+	if !strings.Contains(x, "<serialNumber>3014F711A000040000000A02</serialNumber>") ||
+		!strings.Contains(x, "<modelDescription>openccu-lite 3014F711A000040000000A02</modelDescription>") {
 		t.Errorf("the description does not carry the SGTIN:\n%s", x)
 	}
-	if r := string(d.Reply("http://x/")); !strings.Contains(r, "USN: uuid:upnp-BasicDevice-1_0-3014F711A000041709ADFA5E::upnp:rootdevice") {
+	if r := string(d.Reply("http://x/")); !strings.Contains(r, "USN: uuid:upnp-BasicDevice-1_0-3014F711A000040000000A02::upnp:rootdevice") {
 		t.Errorf("the M-SEARCH reply does not carry the SGTIN:\n%s", r)
 	}
 
 	// once found, it stays: a later rewrite (a re-detection with another module) does not change
 	// the identity under the clients while the daemon runs
-	writeVar(t, root, "var/board_sgtin", "3014F711A0001F58A9A728D4\n")
-	if got := id.Serial(); got != "3014F711A000041709ADFA5E" {
+	writeVar(t, root, "var/board_sgtin", "3014F711A0001F0000000A03\n")
+	if got := id.Serial(); got != "3014F711A000040000000A02" {
 		t.Errorf("the identity changed while running: %q", got)
 	}
 	if err := os.Remove(filepath.Join(root, "var/board_sgtin")); err != nil {
 		t.Fatal(err)
 	}
-	if got := id.Serial(); got != "3014F711A000041709ADFA5E" {
+	if got := id.Serial(); got != "3014F711A000040000000A02" {
 		t.Errorf("the identity fell back after the file went: %q", got)
 	}
 }
@@ -102,21 +102,21 @@ func TestIdentityConcurrent(t *testing.T) {
 			if i == 4 {
 				// written whole, then renamed in, as the radio unit's writer does it
 				tmp := filepath.Join(root, "var/.board_serial")
-				if err := os.WriteFile(tmp, []byte("JEQ0534849"), 0o644); err != nil {
+				if err := os.WriteFile(tmp, []byte("JEQ9000002"), 0o644); err != nil {
 					t.Error(err)
 				} else if err := os.Rename(tmp, filepath.Join(root, "var/board_serial")); err != nil {
 					t.Error(err)
 				}
 			}
 			for range 50 {
-				if s := id.Serial(); s != "h" && s != "JEQ0534849" {
+				if s := id.Serial(); s != "h" && s != "JEQ9000002" {
 					t.Errorf("serial %q", s)
 				}
 			}
 		}()
 	}
 	wg.Wait()
-	if s := id.Serial(); s != "JEQ0534849" {
+	if s := id.Serial(); s != "JEQ9000002" {
 		t.Errorf("after all: %q", s)
 	}
 }

@@ -61,11 +61,11 @@ func TestLANGatewaysReadWrite(t *testing.T) {
 	}
 }
 
-// the maintainer's HM-LGW-O-TW-W-EU (2026-09-20): the key eQ-3 printed on it is "=u6%U!M8e3",
+// an HM-LGW-O-TW-W-EU (2026-09-20): eQ-3 prints keys like "=x1%Y!Z2w3" (an invented one here),
 // which the old pattern refused. It has to survive the write, the read back and the key-change
 // file, whose parsers cut at the first "=".
 func TestGatewayKeyWithSpecialCharacters(t *testing.T) {
-	const key = "=u6%U!M8e3"
+	const key = "=x1%Y!Z2w3"
 	r := rootWith(t, map[string]string{"etc/config/rfd.conf": rfdConf})
 	if _, err := r.WriteLANGateways(GatewayRF, []LANGatewaySpec{{Type: "HMLGW2", Name: "Dach", Serial: "NEQ1234567", Key: key, IP: "192.0.2.50"}}); err != nil {
 		t.Fatal(err)
@@ -117,7 +117,7 @@ func TestLANGatewaysWiredFresh(t *testing.T) {
 func TestWiredGatewayKeepsTheHS485DMarker(t *testing.T) {
 	r := rootWith(t, map[string]string{"etc/config/.keep": ""})
 	marker := r.join(HS485DEnabledMarker)
-	if _, err := r.WriteLANGateways(GatewayWired, []LANGatewaySpec{{Type: "HMWLGW", Serial: "LEQ0636432", Key: "k1"}}); err != nil {
+	if _, err := r.WriteLANGateways(GatewayWired, []LANGatewaySpec{{Type: "HMWLGW", Serial: "LEQ9000004", Key: "k1"}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(marker); err != nil {
@@ -135,7 +135,7 @@ func TestWiredGatewayKeepsTheHS485DMarker(t *testing.T) {
 	}
 	// the rf class never touches it
 	_ = os.WriteFile(r.join("/etc/config/rfd.conf"), []byte(rfdConf), 0o600)
-	if _, err := r.WriteLANGateways(GatewayRF, []LANGatewaySpec{{Type: "HMLGW2", Serial: "KEQ1065511", Key: "k2"}}); err != nil {
+	if _, err := r.WriteLANGateways(GatewayRF, []LANGatewaySpec{{Type: "HMLGW2", Serial: "KEQ9000006", Key: "k2"}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
@@ -202,8 +202,8 @@ func TestLANGatewayKeyNeverInTheAnswer(t *testing.T) {
 // gateway: not listed, and kept byte for byte when the list is written - on .170 the page listed
 // it as a gateway row, and saving the list would have dropped it
 func TestLANGatewaysKeepTheUSBAdapter(t *testing.T) {
-	usb := "[Interface 1]\nType = USB Interface\nName = HM-CFG-USB\nSerial Number = JEQ0534849\nEncryption Key =\n"
-	conf := "# occulite.bidcos.module=JEQ0534849\n# TCP Port for XmlRpc connections\nListen Port = 32001\n\n#[Interface 0]\n#Type = CCU2\n#ComPortFile = /dev/mmd_bidcos\n#\n" + usb
+	usb := "[Interface 1]\nType = USB Interface\nName = HM-CFG-USB\nSerial Number = JEQ9000002\nEncryption Key =\n"
+	conf := "# occulite.bidcos.module=JEQ9000002\n# TCP Port for XmlRpc connections\nListen Port = 32001\n\n#[Interface 0]\n#Type = CCU2\n#ComPortFile = /dev/mmd_bidcos\n#\n" + usb
 	r := rootWith(t, map[string]string{"etc/config/rfd.conf": conf})
 	if gws := r.ReadLANGateways(GatewayRF); len(gws) != 0 {
 		t.Fatalf("the adapter listed as a gateway: %+v", gws)
@@ -236,14 +236,14 @@ func TestWiredGatewayKeepsInterfacesList(t *testing.T) {
 	list := r.join("/etc/config/InterfacesList.xml")
 	read := func() string { b, _ := os.ReadFile(list); return string(b) }
 
-	if _, err := r.WriteLANGateways(GatewayWired, []LANGatewaySpec{{Type: "HMWLGW", Serial: "LEQ0636432", Key: "k1"}}); err != nil {
+	if _, err := r.WriteLANGateways(GatewayWired, []LANGatewaySpec{{Type: "HMWLGW", Serial: "LEQ9000004", Key: "k1"}}); err != nil {
 		t.Fatal(err)
 	}
 	if got := read(); got != with {
 		t.Fatalf("after the first wired gateway:\n%q\nwant\n%q", got, with)
 	}
 	// a second write with a gateway leaves the file as it is
-	if _, err := r.WriteLANGateways(GatewayWired, []LANGatewaySpec{{Type: "HMWLGW", Serial: "LEQ0636432"}}); err != nil || read() != with {
+	if _, err := r.WriteLANGateways(GatewayWired, []LANGatewaySpec{{Type: "HMWLGW", Serial: "LEQ9000004"}}); err != nil || read() != with {
 		t.Fatalf("a second write: %v\n%q", err, read())
 	}
 	if _, err := r.WriteLANGateways(GatewayWired, nil); err != nil {
@@ -254,13 +254,13 @@ func TestWiredGatewayKeepsInterfacesList(t *testing.T) {
 	}
 	// the rf class never touches it
 	_ = os.WriteFile(r.join("/etc/config/rfd.conf"), []byte(rfdConf), 0o600)
-	if _, err := r.WriteLANGateways(GatewayRF, []LANGatewaySpec{{Type: "HMLGW2", Serial: "KEQ1065511", Key: "k2"}}); err != nil || read() != without {
+	if _, err := r.WriteLANGateways(GatewayRF, []LANGatewaySpec{{Type: "HMLGW2", Serial: "KEQ9000006", Key: "k2"}}); err != nil || read() != without {
 		t.Fatalf("an rf gateway: %v\n%q", err, read())
 	}
 
 	// no file: none is made (the boot's radio run writes it)
 	r2 := rootWith(t, map[string]string{"etc/config/.keep": ""})
-	if _, err := r2.WriteLANGateways(GatewayWired, []LANGatewaySpec{{Type: "HMWLGW", Serial: "LEQ0636432", Key: "k1"}}); err != nil {
+	if _, err := r2.WriteLANGateways(GatewayWired, []LANGatewaySpec{{Type: "HMWLGW", Serial: "LEQ9000004", Key: "k1"}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(r2.join("/etc/config/InterfacesList.xml")); !os.IsNotExist(err) {

@@ -19,7 +19,7 @@ import (
 	"github.com/hobbyquaker/occulited/internal/radio"
 )
 
-const lkSGTIN = "3014F711A0001F58A9A728D4" // the Charly's RPI-RF-MOD in charlyRoot
+const lkSGTIN = "3014F711A0001F0000000A03" // the Charly's RPI-RF-MOD in charlyRoot
 
 // fakeHmIPServer answers listDevices with two devices, their UNREACH as set ("ok", "unreach", or
 // "unknown": fault -5, not heard from), and getInstallMode. after is the state from hmipserver's
@@ -283,7 +283,7 @@ func TestLocalKeyKnownCheckAndOtherModule(t *testing.T) {
 	// the radio was swapped since: the snapshot is another module's, the revert is blocked
 	plan := filepath.Join(root, "run/occulite/radio/plan.json")
 	b, _ := os.ReadFile(plan)
-	_ = os.WriteFile(plan, []byte(strings.ReplaceAll(string(b), lkSGTIN, "3014F711A000041709ADFA5E")), 0o644)
+	_ = os.WriteFile(plan, []byte(strings.ReplaceAll(string(b), lkSGTIN, "3014F711A000040000000A02")), 0o644)
 	if st = k.Status(); !strings.Contains(st.RevertBlocked, "another radio module") || k.Disable() == nil {
 		t.Fatalf("blocked: %q", st.RevertBlocked)
 	}
@@ -364,7 +364,7 @@ func TestHmIPPairing(t *testing.T) {
 		}
 	}
 	w("etc/config/crRFD/hmip_user.conf", radio.SetLocalKey("occulite.hmip.path=direct\n", "00112233445566778899AABBCCDDEEFF", ""))
-	w("etc/config/crRFD/sgtin.map", radio.FormatDeviceKeyMap([]radio.DeviceKey{{SGTIN: "3014F711A0000B3D1C89D8DF", Key: "00112233445566778899AABBCCDDEEFF"}, {SGTIN: "3014F711A0000B3D1C89D8E0", Key: "FFEEDDCCBBAA99887766554433221100"}}))
+	w("etc/config/crRFD/sgtin.map", radio.FormatDeviceKeyMap([]radio.DeviceKey{{SGTIN: "3014F711A0000B00000000DF", Key: "00112233445566778899AABBCCDDEEFF"}, {SGTIN: "3014F711A0000B00000000E0", Key: "FFEEDDCCBBAA99887766554433221100"}}))
 	if got := HmIPPairing(Root(root)); got != (radio.Pairing{KeyServerMode: radio.KeyServerLocal, DeviceKeys: 2}) {
 		t.Fatalf("LOCAL with two keys: %+v", got)
 	}

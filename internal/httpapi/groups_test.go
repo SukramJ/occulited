@@ -20,9 +20,9 @@ func groupsRig(t *testing.T) (*http.ServeMux, *hmgroupstest.Fake, *meta.Store, *
 	s := hmgroups.NewSession()
 	f := hmgroupstest.New(s.SID())
 	t.Cleanup(f.Close)
-	f.Devices = []hmgroupstest.Device{{ID: "KEQ0165114", Serial: "KEQ0165114", Type: "HM-Sec-SC"}, {ID: "000193C9951175:1", Serial: "000193C9951175:1", Type: "HmIP-eTRV"}}
+	f.Devices = []hmgroupstest.Device{{ID: "KEQ9000003", Serial: "KEQ9000003", Type: "HM-Sec-SC"}, {ID: "00010000000A10:1", Serial: "00010000000A10:1", Type: "HmIP-eTRV"}}
 	ms, _ := meta.New(nil, nil)
-	for ref, name := range map[string]string{"BidCos-RF.KEQ0165114": "Fenster", "HmIP-RF.000193C9951175:1": "Ventil"} {
+	for ref, name := range map[string]string{"BidCos-RF.KEQ9000003": "Fenster", "HmIP-RF.00010000000A10:1": "Ventil"} {
 		if _, _, err := ms.PutObject(nil, ref, name, nil, nil); err != nil {
 			t.Fatal(err)
 		}
@@ -80,21 +80,21 @@ func TestGroupsRoutes(t *testing.T) {
 		t.Errorf("bad body: %d", st)
 	}
 	// create: hmipserver's create then save, the members' flag and the group device's name
-	st, out = warnCall(t, mux, "POST", p, `{"name":" Bad ","type":"HomeMatic.heating","members":["KEQ0165114"],"forbid_single_operation":true}`, "admin", auth.RoleAdmin)
+	st, out = warnCall(t, mux, "POST", p, `{"name":" Bad ","type":"HomeMatic.heating","members":["KEQ9000003"],"forbid_single_operation":true}`, "admin", auth.RoleAdmin)
 	if st != 200 || out["id"] != float64(1) || out["name"] != "Bad" || out["device"] != "INT0000001" || out["ref"] != "VirtualDevices.INT0000001" || out["forbid_single_operation"] != true || len(out["members"].([]any)) != 1 || out["devices_to_configure"] == nil {
 		t.Fatalf("create: %d %v", st, out)
 	}
 	if g := f.Groups[1]; g == nil || g.Name != "Bad" || g.DeviceName != "Bad INT0000001" || !g.ForbidSingle {
 		t.Fatalf("stored: %+v", f.Groups[1])
 	}
-	if inGroup(t, ms, "BidCos-RF.KEQ0165114") != true || inGroup(t, ms, "HmIP-RF.000193C9951175:1") != nil {
-		t.Fatalf("inHeatingGroup after create: %v %v", inGroup(t, ms, "BidCos-RF.KEQ0165114"), inGroup(t, ms, "HmIP-RF.000193C9951175:1"))
+	if inGroup(t, ms, "BidCos-RF.KEQ9000003") != true || inGroup(t, ms, "HmIP-RF.00010000000A10:1") != nil {
+		t.Fatalf("inHeatingGroup after create: %v %v", inGroup(t, ms, "BidCos-RF.KEQ9000003"), inGroup(t, ms, "HmIP-RF.00010000000A10:1"))
 	}
 	if o, err := ms.GetObject("VirtualDevices.INT0000001"); err != nil || o.Name != "Bad INT0000001" {
 		t.Fatalf("group device object: %v %+v", err, o)
 	}
 	// the pending configuration comes with the answer
-	f.Pending["INT0000001"] = []hmgroupstest.Device{{ID: "KEQ0165114", Serial: "KEQ0165114", Type: "HM-Sec-SC"}}
+	f.Pending["INT0000001"] = []hmgroupstest.Device{{ID: "KEQ9000003", Serial: "KEQ9000003", Type: "HM-Sec-SC"}}
 	st, out = warnCall(t, mux, "PUT", p+"/1", `{"name":"Schlafzimmer"}`, "admin", auth.RoleAdmin)
 	if st != 200 || out["name"] != "Schlafzimmer" || len(out["members"].([]any)) != 1 || len(out["devices_to_configure"].([]any)) != 1 {
 		t.Fatalf("rename: %d %v", st, out)
@@ -103,11 +103,11 @@ func TestGroupsRoutes(t *testing.T) {
 		t.Fatalf("group device renamed: %+v", o)
 	}
 	// the members as a whole: the one that left loses the flag, the new one gets it
-	st, out = warnCall(t, mux, "PUT", p+"/1", `{"members":["000193C9951175:1"]}`, "admin", auth.RoleAdmin)
-	if st != 200 || out["name"] != "Schlafzimmer" || out["members"].([]any)[0].(map[string]any)["id"] != "000193C9951175:1" {
+	st, out = warnCall(t, mux, "PUT", p+"/1", `{"members":["00010000000A10:1"]}`, "admin", auth.RoleAdmin)
+	if st != 200 || out["name"] != "Schlafzimmer" || out["members"].([]any)[0].(map[string]any)["id"] != "00010000000A10:1" {
 		t.Fatalf("members: %d %v", st, out)
 	}
-	if inGroup(t, ms, "BidCos-RF.KEQ0165114") != false || inGroup(t, ms, "HmIP-RF.000193C9951175:1") != true {
+	if inGroup(t, ms, "BidCos-RF.KEQ9000003") != false || inGroup(t, ms, "HmIP-RF.00010000000A10:1") != true {
 		t.Fatal("inHeatingGroup after the member change")
 	}
 	st, out = warnCall(t, mux, "GET", p+"/1", "", "monitor", user)
@@ -141,7 +141,7 @@ func TestGroupsRoutes(t *testing.T) {
 	if st != 200 || out["deleted"] != float64(1) || len(out["former_members"].([]any)) != 1 {
 		t.Fatalf("delete: %d %v", st, out)
 	}
-	if inGroup(t, ms, "HmIP-RF.000193C9951175:1") != false {
+	if inGroup(t, ms, "HmIP-RF.00010000000A10:1") != false {
 		t.Fatal("inHeatingGroup after delete")
 	}
 	if _, err := ms.GetObject("VirtualDevices.INT0000001"); err == nil {

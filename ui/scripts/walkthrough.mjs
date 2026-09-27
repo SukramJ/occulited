@@ -154,14 +154,14 @@ const RULES = [
     // a real system's own names and addresses, should one show
     ['\\blab-ccu[\\w-]*', 'openccu-lite'],
     ['\\b172\\.16\\.\\d{1,3}\\.\\d{1,3}\\b', '192.0.2.10'],
-    ['1709ADFA5E', '0A1B2C3D4E'],
-    ['4118f6a32', '0a1b2c3d4'],
 ];
 // only on pages of a real system: whatever identifies its hardware
 const REAL_RULES = [
     ['\\b([0-9A-Fa-f]{2})[:-]([0-9A-Fa-f]{2})[:-]([0-9A-Fa-f]{2})[:-][0-9A-Fa-f]{2}[:-][0-9A-Fa-f]{2}[:-][0-9A-Fa-f]{2}\\b', '$1:$2:$3:XX:XX:XX'],
     ['\\b0x[0-9A-Fa-f]{6}\\b', '0xXXXXXX'],
     ['\\b(?=[0-9A-F]*[0-9])(?=[0-9A-F]*[A-F])[0-9A-F]{6,12}\\b', 'XXXXXXXXXX'],
+    // a CCU's discovery serial (the last nine hex digits of its MAC)
+    ['\\b(?=[0-9a-f]*[0-9])(?=[0-9a-f]*[a-f])[0-9a-f]{9}\\b', '0a1b2c3d4'],
     ['\\b(?!127\\.0\\.0\\.1\\b)(?!192\\.0\\.2\\.)(?:\\d{1,3}\\.){3}(\\d{1,3})\\b', '192.0.2.$1'],
 ];
 function sweep(rules) {

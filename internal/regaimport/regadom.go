@@ -22,7 +22,7 @@ import (
 //   <interfacemap> <ifc><obj>…<name>BidCos-RF</name></obj></ifc>          interface names
 //   <devicemap>    <device><obj>… DEVDESC=[ADDRESS:"…",CHILDREN:{…}]</obj>  devices
 //   <channelmap>   <channel><obj>… DEVDESC=[ADDRESS:"…:1",PARENT:"…"]</obj> channels
-//   <hssdpmap>     <dp><obj><name>BidCos-RF.JEQ0230153:1.HUMIDITY</name>    datapoints - the only
+//   <hssdpmap>     <dp><obj><name>BidCos-RF.JEQ9000001:1.HUMIDITY</name>    datapoints - the only
 //                                                                           place a channel's
 //                                                                           interface *name* appears
 //   <enummap>      <enum><obj>…<name>Rooms</name></obj><enel><oid>…</enel>  the Rooms/Functions

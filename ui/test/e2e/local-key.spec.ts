@@ -40,7 +40,7 @@ test('enter the network key, the check, the override, back to eQ-3 and discard t
     await expect(page.locator('[data-state="on"]')).toContainText('the HmIP network key is kept on this system (entered).');
     await expect(page.locator('[data-state="on"]')).toContainText("Radio module swaps and pairing work without eQ-3's key server; a device is paired with the key from its QR code.");
     await expect(page.locator('[data-check="ok"]')).toHaveText('All 3 HmIP devices answered after the switch.');
-    await expect(page.locator('.lk-snapshots li')).toContainText('3014F711A000041709ADFA5E');
+    await expect(page.locator('.lk-snapshots li')).toContainText('3014F711A000040000000A02');
     await expect(page.locator('.lk-snapshots li')).toContainText('this module');
 
     // the key server for one pairing

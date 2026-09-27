@@ -11,7 +11,7 @@ import (
 	"github.com/hobbyquaker/occulited/internal/radio"
 )
 
-const exPrevSGTIN = "3014F711A0001F5F298D97AF" // the previous module, whose network is on the system
+const exPrevSGTIN = "3014F711A0001F0000000A04" // the previous module, whose network is on the system
 
 // lkFatal leaves the marker of a rejected exchange under the rig's root, as the ready step does.
 func lkFatal(t *testing.T, root, cause string) string {

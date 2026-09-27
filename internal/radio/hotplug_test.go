@@ -96,7 +96,7 @@ func TestHotplugSecondStickAndAdapter(t *testing.T) {
 	// a second stick nothing uses (auto keeps both stacks on the RPI-RF-MOD): the results change,
 	// no daemon restarts, and the page offers the stick
 	resetCalls(rec)
-	rec.probe.answers["raw-uart1"] = "HMIP-RFUSB 1709ADFA5B 3014F711A000041709ADFA5B 0x000000 0x7F7A50 4.4.18"
+	rec.probe.answers["raw-uart1"] = "HMIP-RFUSB 0000000A01 3014F711A000040000000A01 0x000000 0x7F7A50 4.4.18"
 	plug(t, root, "raw-uart1", "eQ-3 HmIP-RFUSB@usb-1")
 	rep, err := Hotplug(ctx, root, d, 0, logf)
 	if err != nil || !rep.Changed || len(rep.Restarted) != 0 || len(systemctlCalls(rec)) != 0 {
@@ -169,8 +169,8 @@ func TestHotplugHeldNodeOfAPulledStick(t *testing.T) {
 	fakeUsers(t)
 	root, rec := boxRoot(t, map[string]string{"raw-uart1": "HB-RF-USB@usb-0000:01:00.0-1.3"})
 	rec.probe.answers = map[string]string{
-		"raw-uart1": "HM-MOD-RPI-PCB MEQ0835626 3014F711A061A7D3C996282A 0x3D1BAE 0x1EE437 2.8.6",
-		"raw-uart2": "HMIP-RFUSB-TK 1D899272DB 3014F5AC9400041D899272DB 0x000000 0x7F7A51 4.2.14",
+		"raw-uart1": "HM-MOD-RPI-PCB MEQ9000005 3014F711A061A70000000A06 0x3D0A01 0x1E0A02 2.8.6",
+		"raw-uart2": "HMIP-RFUSB-TK 0000000A09 3014F5AC9400040000000A09 0x000000 0x7F7A51 4.2.14",
 	}
 	d := Detector{Root: root, Run: rec.run, Sleep: func(time.Duration) {}}
 	logf := func(string, ...any) {}
@@ -210,7 +210,7 @@ func TestReadyHmIPServerFailsFastOnAKnownError(t *testing.T) {
 		t.Fatalf("the main process's output was not read: %v", rec.calls)
 	}
 	f := ReadHmIPFatal(root)
-	if f == nil || f.Code != "adapter-exchange-rejected" || f.Adapter != "3014F711A0001F58A9A728D4" || !strings.Contains(f.Line, "rejected by key server") || f.Cause != CauseRefused {
+	if f == nil || f.Code != "adapter-exchange-rejected" || f.Adapter != "3014F711A0001F0000000A03" || !strings.Contains(f.Line, "rejected by key server") || f.Cause != CauseRefused {
 		t.Fatalf("marker: %+v", f)
 	}
 	// the next run of the stack clears it
@@ -232,7 +232,7 @@ func TestReadyHmIPServerFailsFastOnAKnownError(t *testing.T) {
 func TestHotplugBoardPowerCycle(t *testing.T) {
 	fakeUsers(t)
 	root, rec := boxRoot(t, map[string]string{"raw-uart1": "HB-RF-ETH@192.0.2.10"})
-	rec.probe.answers = map[string]string{"raw-uart1": "HM-MOD-RPI-PCB MEQ0835626 3014F711A061A7D3C996282A 0x3D1BAE 0xB4C139 2.8.6"}
+	rec.probe.answers = map[string]string{"raw-uart1": "HM-MOD-RPI-PCB MEQ9000005 3014F711A061A70000000A06 0x3D0A01 0xB40A03 2.8.6"}
 	for p, c := range map[string]string{
 		"etc/config/hb_rf_eth":                          "192.0.2.10\n",
 		"sys/module/hb_rf_eth/parameters/connect":       "",

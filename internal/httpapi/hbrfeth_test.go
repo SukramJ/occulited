@@ -19,7 +19,7 @@ func TestHBRFETHRoutes(t *testing.T) {
 	root := fakeRoot(t)
 	connectedTo := "192.0.2.99"
 	board := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"sysInfo":{"serial":"ABCDEF1234","currentVersion":"1.3.0","rawUartRemoteAddress":"` + connectedTo + `","radioModuleType":"HM-MOD-RPI-PCB","radioModuleSerial":"MEQ0835626","radioModuleBidCosRadioMAC":"0x3D1BAE","radioModuleHmIPRadioMAC":"0x000000","radioModuleSGTIN":"x"}}`))
+		_, _ = w.Write([]byte(`{"sysInfo":{"serial":"ABCDEF1234","currentVersion":"1.3.0","rawUartRemoteAddress":"` + connectedTo + `","radioModuleType":"HM-MOD-RPI-PCB","radioModuleSerial":"MEQ9000005","radioModuleBidCosRadioMAC":"0x3D0A01","radioModuleHmIPRadioMAC":"0x000000","radioModuleSGTIN":"x"}}`))
 	}))
 	defer board.Close()
 	kicks := 0

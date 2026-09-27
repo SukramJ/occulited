@@ -188,7 +188,7 @@ func TestHBRFETHWatchLeavesALossToTheKernel(t *testing.T) {
 	tick(30 * time.Second)
 	set("1")
 	tick(30 * time.Second)
-	healthy, why = false, "BidCos-RF: MEQ0835626 not connected"
+	healthy, why = false, "BidCos-RF: MEQ9000005 not connected"
 	tick(30 * time.Second)
 	tick(30 * time.Second)
 	if restarts != 1 || w.Status().Restarts != 1 {

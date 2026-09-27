@@ -25,7 +25,7 @@ func TestListDirAndIdentityReads(t *testing.T) {
 	if err := os.Symlink("../usr/local/etc/config", filepath.Join(root, "etc/config")); err != nil {
 		t.Fatal(err)
 	}
-	const sg = "3014F711A000041709ADFA5B"
+	const sg = "3014F711A000040000000A01"
 	for name, content := range map[string]string{sg + ".ap": "AP", sg + ".apkx": "APKX", sg + ".bbkx": "BBKX", sg + ".dev": "DEV", "linkData.conf": "LINKS", "metaData.conf": "META"} {
 		if err := os.WriteFile(filepath.Join(data, name), []byte(content), 0o600); err != nil {
 			t.Fatal(err)

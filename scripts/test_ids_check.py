@@ -1,0 +1,60 @@
+#!/usr/bin/env python3
+"""Tests for scripts/ids-check.py: the identifier shapes and the allow-list (B-24).
+
+    python3 scripts/test_ids_check.py
+"""
+
+import importlib.util
+import pathlib
+import tempfile
+import unittest
+
+_spec = importlib.util.spec_from_file_location("ids_check", pathlib.Path(__file__).resolve().parent / "ids-check.py")
+ic = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(ic)
+
+
+class ShapeTest(unittest.TestCase):
+    def test_find(self):
+        for text, want in [
+            ('serial: "3014F711A0000A1B2C3D4E5F"', [("SGTIN", "3014F711A0000A1B2C3D4E5F")]),
+            ("sgtin=3014f711a0000a1b2c3d4e5f", [("SGTIN", "3014F711A0000A1B2C3D4E5F")]),
+            ("Key stored for 3014-F711-A000-0A1B-2C3D-4E5F.", [("SGTIN", "3014F711A0000A1B2C3D4E5F")]),
+            ("HmIP-RF.000A1B2C3D4E5F:4", [("HmIP address", "000A1B2C3D4E5F")]),
+            ("BidCos-RF.NEQ0000001:1", [("BidCos serial", "NEQ0000001")]),
+            ("rfd/NEQ0000001.dev", [("BidCos serial", "NEQ0000001")]),
+            ("mac aa:bb:cc:dd:ee:ff up", [("MAC", "AA:BB:CC:DD:EE:FF")]),
+            # a certificate fingerprint is a longer run of pairs, not a MAC
+            ("96:BC:EC:06:26:49:11:22:33:44", []),
+            # a longer hex run is no SGTIN, and a timestamp no address
+            ("3014F711A0000A1B2C3D4E5F00", []),
+            ("20260829155415", []),
+            ("ABC0000001 NEQ00000011", []),
+        ]:
+            with self.subTest(text=text):
+                self.assertEqual(ic.find(text), want)
+
+    def test_allow_list_is_case_free_and_skips_comments(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
+            f.write("# a comment\n3014f711a0000a1b2c3d4e5f  # trailing\n\nNEQ0000001\n")
+        allow = ic.load_allow(pathlib.Path(f.name))
+        self.assertEqual(allow, {"3014F711A0000A1B2C3D4E5F", "NEQ0000001"})
+
+    def test_the_tree_is_clean(self):
+        # the real check, as CI runs it: every identifier in the tracked files is on the list
+        allow = ic.load_allow()
+        bad = {v for v in ic.scan(ic.tracked()) if v not in allow}
+        self.assertEqual(bad, set())
+
+    def test_a_real_looking_value_is_refused(self):
+        allow = ic.load_allow()
+        # built from parts, so this file itself does not carry them for the tree check to find
+        for value in ["3014F711A0000" + "FEDCBA98765", "3014-F711-A000-0" + "FED-CBA9-8765", "KEQ" + "7654321", "00:1A:22" + ":98:76:54"]:
+            with self.subTest(value=value):
+                found = [v for _, v in ic.find(value)]
+                self.assertEqual(found, [value.replace("-", "")])
+                self.assertNotIn(value.replace("-", ""), allow)
+
+
+if __name__ == "__main__":
+    unittest.main()

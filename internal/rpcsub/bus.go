@@ -19,7 +19,7 @@ const (
 // Event is one datapoint change as an interface process sent it.
 type Event struct {
 	Interface string
-	Address   string // device or channel address, as the daemon says it: 000193C9951175:0
+	Address   string // device or channel address, as the daemon says it: 00010000000A10:0
 	Key       string
 	Value     any
 	Time      time.Time

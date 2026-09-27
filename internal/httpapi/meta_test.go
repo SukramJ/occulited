@@ -203,7 +203,7 @@ func TestVersionHmIPPairingOpen(t *testing.T) {
 
 func TestObjectLifecycle(t *testing.T) {
 	srv, _ := newServer(t)
-	ref := "/api/meta/v1/objects/BidCos-RF.JEQ0230153%3A1"
+	ref := "/api/meta/v1/objects/BidCos-RF.JEQ9000001%3A1"
 	st, out, _ := do(t, srv, "PATCH", ref, `{"name":"Heizung Bad"}`, nil)
 	if st != 200 || out["revision"] != float64(1) {
 		t.Fatalf("patch: %d %v", st, out)

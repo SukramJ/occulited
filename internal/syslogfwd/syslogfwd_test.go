@@ -65,11 +65,11 @@ func TestFormat(t *testing.T) {
 	// 2026-09-12T13:30:05.123456Z
 	us := time.Date(2026, 9, 12, 13, 30, 5, 123456000, time.UTC).UnixMicro()
 	e := Entry{
-		"__REALTIME_TIMESTAMP": fmt.Sprint(us), "_HOSTNAME": "openccu-lite-rpi4", "SYSLOG_IDENTIFIER": "rfd",
+		"__REALTIME_TIMESTAMP": fmt.Sprint(us), "_HOSTNAME": "openccu-lite-b", "SYSLOG_IDENTIFIER": "rfd",
 		"_PID": "812", "PRIORITY": "4", "SYSLOG_FACILITY": "3", "MESSAGE": "Device not reachable\n",
 	}
 	got := string(Format(e, "fallback", DefaultMaxSize))
-	want := "<28>1 2026-09-12T15:30:05.123456+02:00 openccu-lite-rpi4 rfd 812 - - Device not reachable"
+	want := "<28>1 2026-09-12T15:30:05.123456+02:00 openccu-lite-b rfd 812 - - Device not reachable"
 	if got != want {
 		t.Errorf("\n got %q\nwant %q", got, want)
 	}

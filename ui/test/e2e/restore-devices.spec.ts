@@ -10,10 +10,10 @@ import {expect, test, type Page} from '@playwright/test';
 const CHECK = {ok: true, output: '1) Checking sbk backup file consistency:\n   generated on 3.89.11.20260919, applying to 3.89.11.20260919, OK\n   backup or system NOT protected by security key, OK', backup_version: '3.89.11.20260919', running_version: '3.89.11.20260919', needs_key: false, has_rega: true};
 const BACKUP = {
     bidcos_rf: {devices: 2, address: '0xFF1234', serial: '1709ADFA00', has_key: false, gateways: 1},
-    hmip: {devices: 3, identity_sgtin: '3014F711A0001F58A9A728D4', local_key: true, device_key_map: true},
+    hmip: {devices: 3, identity_sgtin: '3014F711A0001F0000000A03', local_key: true, device_key_map: true},
     bidcos_wired: {devices: 1, gateways: 0},
     key_index: 0,
-    files: ['ids', 'rfd/JEQ0230153.dev'],
+    files: ['ids', 'rfd/JEQ9000001.dev'],
     version: '3.89.11.20260919',
 };
 const FREE = {paired: {'BidCos-RF': {devices: 0, known: true}, 'HmIP-RF': {devices: 0, known: true}}, devices: 0, unknown: [], user_key: false, importable: true};
@@ -36,7 +36,7 @@ test('the backup\'s devices, a free system, the import asks in red and posts the
     const block = page.locator('[data-restore="devices"]');
     await expect(block.getByRole('heading', {level: 3})).toContainText('Paired devices in this backup');
     await expect(block.locator('[data-devices="bidcos-rf"]')).toHaveText('2 devices · address 0xFF1234 · 1 LAN gateways');
-    await expect(block.locator('[data-devices="hmip"]')).toHaveText('3 devices · identity of module 3014F711A0001F58A9A728D4 · local key mode · device key map');
+    await expect(block.locator('[data-devices="hmip"]')).toHaveText('3 devices · identity of module 3014F711A0001F0000000A03 · local key mode · device key map');
     await expect(block.locator('[data-devices="wired"]')).toHaveText('1 devices');
     await expect(block.locator('[data-devices-target="free"]')).toContainText('This system has no paired devices');
     await expect(block.locator('[data-input="devices-key"]')).toHaveCount(0);

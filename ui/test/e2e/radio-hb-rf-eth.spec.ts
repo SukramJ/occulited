@@ -22,7 +22,7 @@ test('find a board, use it, save: connected, with what the board says', async ({
     await expect(sec.locator('[data-hb-connected]')).toHaveText('Connected to the board at 192.0.2.50.');
     await expect(sec.locator('[data-hb-board]')).toContainText('1.3.0');
     // B-220: the module type and its serial with a space between them
-    await expect(sec.locator('[data-hb-module]')).toHaveText('HM-MOD-RPI-PCB MEQ0835626');
+    await expect(sec.locator('[data-hb-module]')).toHaveText('HM-MOD-RPI-PCB MEQ9000005');
     await expect(sec.locator('[data-hb-board-state]')).toHaveText('connected to this system');
     await expect(sec.getByRole('link', {name: "The board's own page (settings, firmware update)"})).toHaveAttribute('href', 'http://192.0.2.50/');
     // remove, asked first

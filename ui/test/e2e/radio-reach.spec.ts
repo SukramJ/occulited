@@ -74,7 +74,7 @@ test('the removal dialog names the hint, and a removal does not probe again', as
     await page.route(REMOVE, (route) => route.fulfill({json: {removed: true, subscribers: [
         {id: '1007', url: 'xmlrpc_bin://127.0.0.1:31999', local: true},
         {id: 'BidCos-RF_java', url: 'http://127.0.0.1:39292/bidcos', local: true},
-        {id: 'nr_D24DjW_BidCos-RF', url: 'http://127.0.0.1:2048', local: true},
+        {id: 'nr_Ab1Cd2_BidCos-RF', url: 'http://127.0.0.1:2048', local: true},
     ]}}));
     await page.goto('/system/remote-access');
     const rf = page.locator('.ol-process[data-interface="BidCos-RF"]');
@@ -91,7 +91,7 @@ test('the removal dialog names the hint, and a removal does not probe again', as
 
     // a reachable entry's dialog says nothing of the kind
     await page.goto('/system/interfaces');
-    await page.locator('.ol-process[data-interface="BidCos-RF"] li.ol-sub', {hasText: 'nr_D24DjW_BidCos-RF'}).getByRole('button', {name: 'Remove subscription'}).click();
+    await page.locator('.ol-process[data-interface="BidCos-RF"] li.ol-sub', {hasText: 'nr_Ab1Cd2_BidCos-RF'}).getByRole('button', {name: 'Remove subscription'}).click();
     await expect(dialog).toBeVisible();
     await expect(dialog).not.toContainText('Not reachable');
     await page.keyboard.press('Escape');

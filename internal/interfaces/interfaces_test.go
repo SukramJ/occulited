@@ -39,8 +39,8 @@ func fakeInterface(t *testing.T) *httptest.Server {
 </data></array></value></param></params></methodResponse>`))
 		case strings.Contains(body, "<methodName>listBidcosInterfaces</methodName>"):
 			_, _ = w.Write([]byte(`<?xml version="1.0"?><methodResponse><params><param><value><array><data><value><struct>
-<member><name>ADDRESS</name><value>3014F711A000041709ADFA5E</value></member>
-<member><name>DESCRIPTION</name><value>HMIP_CCU2 3014F711A000041709ADFA5E</value></member>
+<member><name>ADDRESS</name><value>3014F711A000040000000A02</value></member>
+<member><name>DESCRIPTION</name><value>HMIP_CCU2 3014F711A000040000000A02</value></member>
 <member><name>CONNECTED</name><value><boolean>1</boolean></value></member>
 <member><name>DEFAULT</name><value><boolean>1</boolean></value></member>
 <member><name>TYPE</name><value>HMIP_CCU2</value></member>
@@ -98,7 +98,7 @@ func TestListInterfaces(t *testing.T) {
 		t.Fatalf("%v %+v", errs, list)
 	}
 	ri := list[0]
-	if ri.Interface != "HmIP-RF" || ri.Address != "3014F711A000041709ADFA5E" || !ri.Connected || !ri.Default || ri.DutyCycle != 3 || ri.Firmware != "4.4.18" || ri.Type != "HMIP_CCU2" {
+	if ri.Interface != "HmIP-RF" || ri.Address != "3014F711A000040000000A02" || !ri.Connected || !ri.Default || ri.DutyCycle != 3 || ri.Firmware != "4.4.18" || ri.Type != "HMIP_CCU2" {
 		t.Errorf("%+v", ri)
 	}
 }
@@ -176,7 +176,7 @@ func (l *levelServer) serve(t *testing.T) *httptest.Server {
 				member = `<member><name>CARRIER_SENSE_LEVEL</name><value>` + l.listLevel + `</value></member>`
 			}
 			fmt.Fprintf(w, `<?xml version="1.0"?><methodResponse><params><param><value><array><data><value><struct>
-<member><name>ADDRESS</name><value>3014F711A000041709ADFA5E</value></member>
+<member><name>ADDRESS</name><value>3014F711A000040000000A02</value></member>
 <member><name>CONNECTED</name><value><boolean>1</boolean></value></member>
 <member><name>TYPE</name><value>HMIP_CCU2</value></member>
 <member><name>DUTY_CYCLE</name><value><i4>1</i4></value></member>%s
@@ -255,7 +255,7 @@ func TestCarrierSenseFromDevice(t *testing.T) {
 			}
 			// the device, not the SGTIN of the list entry
 			for _, body := range c.srv.addresses {
-				if !strings.Contains(body, ">00041709ADFA5E:0<") {
+				if !strings.Contains(body, ">00040000000A02:0<") {
 					t.Errorf("asked for another address: %s", body)
 				}
 			}
@@ -310,13 +310,13 @@ func TestCarrierSenseOnlyHmIP(t *testing.T) {
 
 func TestDeviceAddress(t *testing.T) {
 	for in, want := range map[string]string{
-		"3014F711A000041709ADFA5B": "00041709ADFA5B",
-		"3014f711a0001F58A9A728D4": "001F58A9A728D4",
+		"3014F711A000040000000A01": "00040000000A01",
+		"3014f711a0001F0000000A03": "001F0000000A03",
 		"NEQ1234567":               "NEQ1234567",
 		"3014F711A0":               "3014F711A0",
 		// task 217: another company prefix (the SilverCrest HmIP-HAP-B1, TARGA's)
-		"30150377DC0003DB3393B323": "0003DB3393B323",
-		"30150377dc0003db3393b323": "0003DB3393B323",
+		"30150377DC00030000000A13": "00030000000A13",
+		"30150377dc00030000000a13": "00030000000A13",
 		"NEQ12345670123456789ABCD": "NEQ12345670123456789ABCD",
 		"3015XXXXXXXXXXXXXXXXXXXX": "3015XXXXXXXXXXXXXXXXXXXX",
 	} {

@@ -155,7 +155,7 @@ const routes = {
     'GET /api/system/v1/usb': {devices: [
         {path: 'usb1', parent: '', bus: 1, dev: 1, vendor: '1d6b', product: '0001', vendor_name: 'Linux Foundation', product_name: 'UHCI Host Controller', manufacturer: 'Linux 6.18.48 uhci_hcd', serial: '0000:00:01.2', speed: '12', class: '09', hub: true, driver: 'hub', nodes: [], radio: null},
         {path: 'usb2', parent: '', bus: 2, dev: 1, vendor: '1d6b', product: '0002', vendor_name: 'Linux Foundation', product_name: 'xHCI Host Controller', manufacturer: 'Linux 6.18.48 xhci-hcd', serial: '0000:02:1b.0', speed: '480', class: '09', hub: true, driver: 'hub', nodes: [], radio: null},
-        {path: '2-1', parent: 'usb2', bus: 2, dev: 2, vendor: '1b1f', product: 'c020', vendor_name: 'eQ-3', product_name: 'eQ-3 HmIP-RFUSB', manufacturer: 'Silicon Labs', serial: '3014F711A061A7C00010CECF', speed: '12', class: '00', hub: false, driver: 'hb_rf_usb_2', nodes: ['/dev/raw-uart'], radio: {device_node: '/dev/raw-uart', device_type: 'eQ-3 HmIP-RFUSB@usb-0000:02:1b.0-1', protocols: ['BidCos-RF', 'HmIP-RF']}},
+        {path: '2-1', parent: 'usb2', bus: 2, dev: 2, vendor: '1b1f', product: 'c020', vendor_name: 'eQ-3', product_name: 'eQ-3 HmIP-RFUSB', manufacturer: 'Silicon Labs', serial: '3014F711A061A70000000A07', speed: '12', class: '00', hub: false, driver: 'hb_rf_usb_2', nodes: ['/dev/raw-uart'], radio: {device_node: '/dev/raw-uart', device_type: 'eQ-3 HmIP-RFUSB@usb-0000:02:1b.0-1', protocols: ['BidCos-RF', 'HmIP-RF']}},
         {path: 'usb3', parent: '', bus: 3, dev: 1, vendor: '1d6b', product: '0003', vendor_name: 'Linux Foundation', product_name: 'xHCI Host Controller', manufacturer: 'Linux 6.18.48 xhci-hcd', serial: '0000:02:1b.0', speed: '5000', class: '09', hub: true, driver: 'hub', nodes: [], radio: null},
     ]},
     // task 76's follow-up (D-64): the reachability probe's verdicts on the subscribers below - the
@@ -165,9 +165,9 @@ const routes = {
             {interface: 'BidCos-RF', id: '1007', url: 'xmlrpc_bin://127.0.0.1:31999', reachable: true},
             {interface: 'BidCos-RF', id: 'BidCos-RF_java', url: 'http://127.0.0.1:39292/bidcos', reachable: true},
             {interface: 'BidCos-RF', id: 'mb_BidCos_RF', url: 'http://198.51.100.9:2049', reachable: false, reason: 'timeout'},
-            {interface: 'BidCos-RF', id: 'nr_D24DjW_BidCos-RF', url: 'http://127.0.0.1:2048', reachable: true},
+            {interface: 'BidCos-RF', id: 'nr_Ab1Cd2_BidCos-RF', url: 'http://127.0.0.1:2048', reachable: true},
             {interface: 'HmIP-RF', id: 'HmIP-RF_java', url: 'http://127.0.0.1:39292/bidcos', reachable: true},
-            {interface: 'HmIP-RF', id: 'nr_D24DjW_HmIP-RF', url: 'http://127.0.0.1:2048', reachable: true},
+            {interface: 'HmIP-RF', id: 'nr_Ab1Cd2_HmIP-RF', url: 'http://127.0.0.1:2048', reachable: true},
             {interface: 'VirtualDevices', id: 'hmm_VirtualDevices', url: 'xmlrpc://127.0.0.1:2140', reachable: true},
             {interface: 'VirtualDevices', id: 'hmm_VirtualDevices', url: 'xmlrpc://127.0.0.1:2141', reachable: true},
         ],
@@ -178,14 +178,14 @@ const routes = {
         mode: 'HmIP-RFUSB',
         host: 'ova-KVM',
         modules: [
-            {protocol: 'BidCos-RF', device: 'HMIP-RFUSB', device_node: '/dev/raw-uart', device_type: 'eQ-3 HmIP-RFUSB@usb-0000:02:1b.0-1', serial: '1709ADFA5E', firmware: '4.4.18', address: '0xFF01B6', address_active: '0xFF42E5'},
-            {protocol: 'HmIP-RF', device: 'HMIP-RFUSB', device_node: '/dev/raw-uart', device_type: 'eQ-3 HmIP-RFUSB@usb-0000:02:1b.0-1', serial: '1709ADFA5E', sgtin: '3014F711A000041709ADFA5E', firmware: '4.4.18', address: '0xBCEDC1', address_active: '0xBCEDC1'},
+            {protocol: 'BidCos-RF', device: 'HMIP-RFUSB', device_node: '/dev/raw-uart', device_type: 'eQ-3 HmIP-RFUSB@usb-0000:02:1b.0-1', serial: '0000000A02', firmware: '4.4.18', address: '0xFF0A06', address_active: '0xFF0A05'},
+            {protocol: 'HmIP-RF', device: 'HMIP-RFUSB', device_node: '/dev/raw-uart', device_type: 'eQ-3 HmIP-RFUSB@usb-0000:02:1b.0-1', serial: '0000000A02', sgtin: '3014F711A000040000000A02', firmware: '4.4.18', address: '0xBC0A08', address_active: '0xBC0A08'},
         ],
         leds: {HM_LED_GREEN: '', HM_LED_GREEN_MODE1: 'none', HM_LED_GREEN_MODE2: 'heartbeat', HM_LED_RED: ''},
         interfaces: [
-            {name: 'BidCos-RF', url: 'xmlrpc_bin://127.0.0.1:2001', info: 'BidCos-RF', subscribers: [{id: '1007', url: 'xmlrpc_bin://127.0.0.1:31999', local: true},{id: 'BidCos-RF_java', url: 'http://127.0.0.1:39292/bidcos', local: true},{id: 'mb_BidCos_RF', url: 'http://198.51.100.9:2049', local: false},{id: 'nr_D24DjW_BidCos-RF', url: 'http://127.0.0.1:2048', local: true}]},
+            {name: 'BidCos-RF', url: 'xmlrpc_bin://127.0.0.1:2001', info: 'BidCos-RF', subscribers: [{id: '1007', url: 'xmlrpc_bin://127.0.0.1:31999', local: true},{id: 'BidCos-RF_java', url: 'http://127.0.0.1:39292/bidcos', local: true},{id: 'mb_BidCos_RF', url: 'http://198.51.100.9:2049', local: false},{id: 'nr_Ab1Cd2_BidCos-RF', url: 'http://127.0.0.1:2048', local: true}]},
             // task 75: the system's own subscriber, the RPC process, marked and not removable
-            {name: 'HmIP-RF', url: 'xmlrpc://127.0.0.1:2010/', info: 'HmIP-RF', subscribers: [{id: 'HmIP-RF_java', url: 'http://127.0.0.1:39292/bidcos', local: true},{id: 'nr_D24DjW_HmIP-RF', url: 'http://127.0.0.1:2048', local: true},{id: 'occulited_HmIP-RF', url: 'http://127.0.0.1:8184/cb/HmIP-RF', local: true, own: true}]},
+            {name: 'HmIP-RF', url: 'xmlrpc://127.0.0.1:2010/', info: 'HmIP-RF', subscribers: [{id: 'HmIP-RF_java', url: 'http://127.0.0.1:39292/bidcos', local: true},{id: 'nr_Ab1Cd2_HmIP-RF', url: 'http://127.0.0.1:2048', local: true},{id: 'occulited_HmIP-RF', url: 'http://127.0.0.1:8184/cb/HmIP-RF', local: true, own: true}]},
             // the Charly's (B-80): Homematic Manager's old registration kept beside the new one -
             // one id, two callbacks; the page keyed its rows by the id and threw. Both carry
             // duplicate, as the API marks them (task 76)
@@ -204,8 +204,8 @@ const routes = {
     'GET /api/system/v1/service-messages': {
         count: 2,
         messages: [
-            {interface: 'HmIP-RF', address: '000193C9951175', channel: '0', key: 'LOW_BAT', value: true, since: new Date(Date.parse(now) - 3 * 86400000).toISOString(), seen: 'start', type: 'HmIP-WRC2', name: 'Wandtaster Flur', enums: ['room/eg/flur']},
-            {interface: 'BidCos-RF', address: 'JEQ0230153', channel: '0', key: 'UNREACH', value: true, since: new Date(Date.parse(now) - 20 * 60000).toISOString(), seen: 'event', type: 'HM-CC-TC'},
+            {interface: 'HmIP-RF', address: '00010000000A10', channel: '0', key: 'LOW_BAT', value: true, since: new Date(Date.parse(now) - 3 * 86400000).toISOString(), seen: 'start', type: 'HmIP-WRC2', name: 'Wandtaster Flur', enums: ['room/eg/flur']},
+            {interface: 'BidCos-RF', address: 'JEQ9000001', channel: '0', key: 'UNREACH', value: true, since: new Date(Date.parse(now) - 20 * 60000).toISOString(), seen: 'event', type: 'HM-CC-TC'},
         ],
         swept: now,
         errors: {},
@@ -217,9 +217,9 @@ const routes = {
         feed: {connected: true, boot_id: 'stub', received: 42, interfaces: [{name: 'BidCos-RF', state: 'up', registered: true, last_activity: new Date(Date.parse(now) - 12000).toISOString(), events: 30}, {name: 'HmIP-RF', state: 'up', registered: true, last_activity: new Date(Date.parse(now) - 95000).toISOString(), events: 12}, {name: 'VirtualDevices', state: 'up', registered: true, last_activity: '0001-01-01T00:00:00Z', events: 0}]},
         interfaces: [
             // task 156: the box names the radio of each entry; both stacks share the HmIP-RFUSB through multimacd
-            {interface: 'BidCos-RF', address: 'FF42E5', type: 'HM-MOD-UART', connected: true, default: true, firmware: '4.4.18', duty_cycle: 3, radio: 'module:1709ADFA5E', radio_name: 'HMIP-RFUSB 1709ADFA5E'},
+            {interface: 'BidCos-RF', address: 'FF0A05', type: 'HM-MOD-UART', connected: true, default: true, firmware: '4.4.18', duty_cycle: 3, radio: 'module:0000000A02', radio_name: 'HMIP-RFUSB 0000000A02'},
             // task 68: the level read from channel 0 of the module's device, as on the HmIP-RFUSB
-            {interface: 'HmIP-RF', address: 'BCEDC1', type: 'HmIP-RFUSB', connected: true, default: false, firmware: '4.4.18', duty_cycle: 11, carrier_sense: 2, carrier_sense_source: 'device', radio: 'module:1709ADFA5E', radio_name: 'HMIP-RFUSB 1709ADFA5E'},
+            {interface: 'HmIP-RF', address: 'BC0A08', type: 'HmIP-RFUSB', connected: true, default: false, firmware: '4.4.18', duty_cycle: 11, carrier_sense: 2, carrier_sense_source: 'device', radio: 'module:0000000A02', radio_name: 'HMIP-RFUSB 0000000A02'},
         ],
         errors: {},
         // tasks 53/54: an hour and a half of polls a minute apart up to now, as the sampler keeps
@@ -237,8 +237,8 @@ const routes = {
                 return s;
             });
             return {
-                'BidCos-RF/FF42E5': series((i) => 2 + (i % 7)),
-                'HmIP-RF/BCEDC1': series((i) => (i === 15 ? 45 : 8 + ((i * 3) % 14)), (i) => (i === 49 ? 14 : i >= 60 && i < 65 ? undefined : 1 + (i % 5))),
+                'BidCos-RF/FF0A05': series((i) => 2 + (i % 7)),
+                'HmIP-RF/BC0A08': series((i) => (i === 15 ? 45 : 8 + ((i * 3) % 14)), (i) => (i === 49 ? 14 : i >= 60 && i < 65 ? undefined : 1 + (i % 5))),
             };
         })(),
         busy: false,
@@ -351,9 +351,9 @@ const routes = {
         // B-195: an upper-case type eQ-3 lists (its bundle not deployed yet), a current one, and a
         // BidCos type the index does not list
         devices: [
-            {interface: 'HmIP-RF', address: '000193C9951175', type: 'HMIP-WRC2', firmware: '1.0.3', available_firmware: '0.0.0', latest: '1.18.2', update_available: true},
-            {interface: 'HmIP-RF', address: '0001D3C99C4A2B', type: 'HmIP-PDT', firmware: '2.2.4', available_firmware: '2.2.4', latest: '2.2.4', update_available: false},
-            {interface: 'BidCos-RF', address: 'JEQ0230153', type: 'HM-CC-TC', firmware: '2.1', not_listed: true, update_available: false},
+            {interface: 'HmIP-RF', address: '00010000000A10', type: 'HMIP-WRC2', firmware: '1.0.3', available_firmware: '0.0.0', latest: '1.18.2', update_available: true},
+            {interface: 'HmIP-RF', address: '0001D0000000B1', type: 'HmIP-PDT', firmware: '2.2.4', available_firmware: '2.2.4', latest: '2.2.4', update_available: false},
+            {interface: 'BidCos-RF', address: 'JEQ9000001', type: 'HM-CC-TC', firmware: '2.1', not_listed: true, update_available: false},
         ],
         last_result: [
             {type: 'HmIP-PDT', version: '2.2.4', action: 'deployed'},
@@ -655,8 +655,8 @@ function accessPointsView(jar) {
     if (mode === 'off') return {interface: 'HmIP-RF', available: false, access_points: [], firewall: null};
     if (mode === 'silent') return {interface: 'HmIP-RF', available: true, error: 'dial tcp 127.0.0.1:32010: connect: connection refused', access_points: [], firewall};
     const aps = mode === 'none' || mode === 'reopen' ? [] : [
-        {address: '0003DB3393B323', type: 'HmIP-HAP-B1', firmware: '2.2.18', available_firmware: '0.0.0', firmware_update_state: 'UP_TO_DATE', reachable: true, ip_address: '192.0.2.155', duty_cycle: 2.5, carrier_sense: 4, connected: true, sgtin: '30150377DC0003DB3393B323', name: 'Access point cellar', latest: '2.2.20', update_available: true},
-        {address: '00179A4989A4B1', type: 'HmIPW-DRAP', firmware: '3.0.36', available_firmware: '3.0.36', firmware_update_state: 'LIVE_UP_TO_DATE', reachable: mode === 'blocked' ? false : true, ip_address: '192.0.2.209', config_pending: mode === 'blocked', sgtin: '3014F711A000179A4989A4B1'},
+        {address: '00030000000A13', type: 'HmIP-HAP-B1', firmware: '2.2.18', available_firmware: '0.0.0', firmware_update_state: 'UP_TO_DATE', reachable: true, ip_address: '192.0.2.155', duty_cycle: 2.5, carrier_sense: 4, connected: true, sgtin: '30150377DC00030000000A13', name: 'Access point cellar', latest: '2.2.20', update_available: true},
+        {address: '00170000000A08', type: 'HmIPW-DRAP', firmware: '3.0.36', available_firmware: '3.0.36', firmware_update_state: 'LIVE_UP_TO_DATE', reachable: mode === 'blocked' ? false : true, ip_address: '192.0.2.209', config_pending: mode === 'blocked', sgtin: '3014F711A000170000000A08'},
     ];
     return {interface: 'HmIP-RF', available: true, access_points: aps, firewall};
 }
@@ -677,10 +677,10 @@ function lanDevicesView(jar) {
     return {
         scanned: now,
         devices: [
-            {type: 'eQ3-HMIP-HAP-App', serial: '30150377DC0003DB3393B323', version: '2.2.18', protocol_version: 4, ip: '192.0.2.155', runtime: run('192.0.2.155'), config: cfg('192.168.1.224', 'C0003DB3393B323'), kind: 'access-point', writable: true, password: 'sticker', paired: true, same_subnet: true},
-            {type: 'eQ3-HM-LGW-App', serial: 'KEQ1065511', version: '1.1.5', protocol_version: 2, ip: '192.0.2.124', services: [{protocol: 2, port: 2000}, {protocol: 42, port: 2001}], runtime: run('192.0.2.124'), config: cfg('192.168.1.224', 'KEQ1065511'), kind: 'gateway', writable: true, password: 'sticker', same_subnet: true},
-            {type: 'eQ3-HMW-LGW-App', serial: 'LEQ0636432', version: '1.0.5', protocol_version: 2, ip: '192.0.2.116', runtime: run('192.0.2.116'), config: {...cfg('192.0.2.116', 'LEQ0636432'), dhcp: false}, kind: 'gateway', writable: true, password: 'configured', configured: 'wired', name: 'Wired', same_subnet: true},
-            {type: 'eQ3-HmIP-CCU3-App', serial: '4118f6a32', version: '3.89.8.20260719', protocol_version: 2, ip: '192.0.2.230', kind: 'ccu', writable: false, same_subnet: true, link: 'http://192.0.2.230/'},
+            {type: 'eQ3-HMIP-HAP-App', serial: '30150377DC00030000000A13', version: '2.2.18', protocol_version: 4, ip: '192.0.2.155', runtime: run('192.0.2.155'), config: cfg('192.168.1.224', 'C00030000000A13'), kind: 'access-point', writable: true, password: 'sticker', paired: true, same_subnet: true},
+            {type: 'eQ3-HM-LGW-App', serial: 'KEQ9000006', version: '1.1.5', protocol_version: 2, ip: '192.0.2.124', services: [{protocol: 2, port: 2000}, {protocol: 42, port: 2001}], runtime: run('192.0.2.124'), config: cfg('192.168.1.224', 'KEQ9000006'), kind: 'gateway', writable: true, password: 'sticker', same_subnet: true},
+            {type: 'eQ3-HMW-LGW-App', serial: 'LEQ9000004', version: '1.0.5', protocol_version: 2, ip: '192.0.2.116', runtime: run('192.0.2.116'), config: {...cfg('192.0.2.116', 'LEQ9000004'), dhcp: false}, kind: 'gateway', writable: true, password: 'configured', configured: 'wired', name: 'Wired', same_subnet: true},
+            {type: 'eQ3-HmIP-CCU3-App', serial: '4110000a1', version: '3.89.8.20260719', protocol_version: 2, ip: '192.0.2.230', kind: 'ccu', writable: false, same_subnet: true, link: 'http://192.0.2.230/'},
         ],
     };
 }
@@ -696,7 +696,7 @@ function cookieJar(req) {
 // task 129 phase 3: the radio connections of the stub's box (the HmIP-RFUSB serving both stacks,
 // two LAN gateways). A spec's change is kept per stub-conn cookie, so the projects that share the
 // stub never see each other's; without the cookie the box is on auto and a change is not kept.
-const CONN_MODULE = {id: '1709ADFA5E', hardware: 'HMIP-RFUSB', node: '/dev/raw-uart', device_type: 'eQ-3 HmIP-RFUSB@usb-0000:02:1b.0-1', sgtin: '3014F711A000041709ADFA5E', version: '4.4.18'};
+const CONN_MODULE = {id: '0000000A02', hardware: 'HMIP-RFUSB', node: '/dev/raw-uart', device_type: 'eQ-3 HmIP-RFUSB@usb-0000:02:1b.0-1', sgtin: '3014F711A000040000000A02', version: '4.4.18'};
 // task 150: the HmIP option names the paths hmipserver can take to it; BidCos-RF's has none
 const CONN_HMIP = {...CONN_MODULE, paths: ['direct', 'multimacd']};
 // task 150: the conflicts the box refuses at the preview (plan.go's Conflict)
@@ -708,7 +708,7 @@ const connState = new Map();
 // task 199: `basic` is a module that carries HmIP but cannot route for HmIP-HAPs and DRAPs (an
 // HM-MOD-RPI-PCB against an RPI-RF-MOD) - the red mark before the routing sentence
 function connPlan(ch, missing, basic) {
-    const role = {hardware: 'HMIP-RFUSB', node: '/dev/raw-uart', device_type: CONN_MODULE.device_type, address: '0xBCEDC1', serial: '1709ADFA5E', sgtin: CONN_MODULE.sgtin, version: '4.4.18', module: 0};
+    const role = {hardware: 'HMIP-RFUSB', node: '/dev/raw-uart', device_type: CONN_MODULE.device_type, address: '0xBC0A08', serial: '0000000A02', sgtin: CONN_MODULE.sgtin, version: '4.4.18', module: 0};
     const none = ch.bidcos === 'none';
     // HmIP through multimacd: with BidCos-RF on the module, or by choice (task 150)
     const mmdHmIP = !missing && (!none || ch.hmip_path === 'multimacd');
@@ -725,7 +725,7 @@ function connPlan(ch, missing, basic) {
 // task 155 (D-106): stub-conn-fatal=unreachable|refused|plain is a box whose hmipserver stopped on a
 // rejected adapter exchange (plain: a marker from before the causes existed); the exchange routes
 // below clear it per stub-conn cookie, so the notice goes once the page reloads
-const EX_PREVIOUS = '3014F711A0001F5F298D97AF';
+const EX_PREVIOUS = '3014F711A0001F0000000A04';
 const exCleared = new Set();
 const exCalls = new Map();
 function connFatal(jar) {
@@ -936,10 +936,10 @@ function traceRoute(req, u, res) {
     });
 }
 const TRACE_LINES = [
-    'xmlrpc 192.0.2.50 (token home-assistant) → HmIP-RF getValue ["000DD8A9931617:3","LEVEL"]',
+    'xmlrpc 192.0.2.50 (token home-assistant) → HmIP-RF getValue ["000D0000000A11:3","LEVEL"]',
     '← HmIP-RF 192.0.2.50 (token home-assistant) getValue 0.5',
-    'xmlrpc HmIP-RF → occulited event ["occulited_HmIP-RF","000DD8A9931617:0","UNREACH",true]',
-    '→ sse home-assistant@192.0.2.50 event HmIP-RF 000DD8A9931617:0 UNREACH true',
+    'xmlrpc HmIP-RF → occulited event ["occulited_HmIP-RF","000D0000000A11:0","UNREACH",true]',
+    '→ sse home-assistant@192.0.2.50 event HmIP-RF 000D0000000A11:0 UNREACH true',
     'stream sse home-assistant@192.0.2.50 connect filter={"interface":["HmIP-RF"]} last_event_id="" devices=true',
     '← HmIP-RF occulited listDevices ' + JSON.stringify(Array.from({length: 12}, (_, i) => ({ADDRESS: `000DD8A99316${String(i).padStart(2, '0')}`, TYPE: 'HmIP-PDT', CHILDREN: [`000DD8A99316${String(i).padStart(2, '0')}:0`], FIRMWARE: '1.6.2'}))),
 ];
@@ -1395,7 +1395,7 @@ function fwRoute(req, u, res) {
 
 // task 149: local key mode per browser (stub-lk=<id>); stub-lk-empty=1 is a box with no HmIP device
 // paired (the welcome step), stub-lk-wrong=1 an entered key the devices do not answer to
-const LK_SGTIN = '3014F711A000041709ADFA5E';
+const LK_SGTIN = '3014F711A000040000000A02';
 const lkStates = new Map();
 function lkStateOf(jar) {
     const id = jar['stub-lk'] ?? '';
@@ -1465,7 +1465,7 @@ function connRoute(req, u, res) {
         if (conflict) return sendJSON(res, {error: 'invalid', message: conflict}, 422);
         const cur = connStatus(jar).choices;
         const lost = ch.bidcos === 'none' && cur.bidcos !== 'none';
-        const devices = [{address: 'JEQ0230153', type: 'HM-CC-TC'}, {address: 'KEQ0165114', type: 'HM-LC-Sw1-FM'}];
+        const devices = [{address: 'JEQ9000001', type: 'HM-CC-TC'}, {address: 'KEQ9000003', type: 'HM-LC-Sw1-FM'}];
         if (u.pathname.endsWith('/preview')) {
             const changed = ch.hmip !== cur.hmip || ch.bidcos !== cur.bidcos || ch.hmip_path !== (cur.hmip_path ?? '');
             return sendJSON(res, {choices: ch, plan: connPlan(ch), changed, restarts: changed ? ['multimacd', 'rfd', 'hmipserver'] : [], bidcos_lost: lost, devices: lost ? devices : []});
@@ -1746,7 +1746,7 @@ const REAL_BOX = {
             files: [{name: 'coprocessor_update_hm_only.eq3', path: '/firmware/HM-MOD-UART/coprocessor_update_hm_only.eq3', source: 'shipped', version: '2.8.6', size: 118784, sha256: 'b5bb9d8014a0f9b1d61e21e796d78dccdf1352f23cd32812f4850b878ae4944c', direction: 'same'}],
         });
         // task 147: an HM-CFG-USB-2 on the old 0.956, no file uploaded yet (the image ships none)
-        r.modules.push({protocols: [], device: 'HM-CFG-USB-2', device_node: 'usb:JEQ0534849', device_type: 'USB', family: 'hmcfgusb', dir: 'HM-CFG-USB-2', running_version: '0.956', verdict: 'no-file', flashable: true, files: []});
+        r.modules.push({protocols: [], device: 'HM-CFG-USB-2', device_node: 'usb:JEQ9000002', device_type: 'USB', family: 'hmcfgusb', dir: 'HM-CFG-USB-2', running_version: '0.956', verdict: 'no-file', flashable: true, files: []});
         return r;
     },
 };
@@ -2496,7 +2496,7 @@ function variant(req, u, res) {
     // task 156: BidCos-RF on an HM-CFG-USB-2, HmIP on the stick - two radios (stub-radios=2)
     if (jar['stub-radios'] === '2' && key === 'GET /api/system/v1/radio/health') {
         const h = structuredClone(routes[key]);
-        Object.assign(h.interfaces.find((i) => i.interface === 'BidCos-RF'), {radio: 'module:JEQ0534849', radio_name: 'HM-CFG-USB-2 JEQ0534849'});
+        Object.assign(h.interfaces.find((i) => i.interface === 'BidCos-RF'), {radio: 'module:JEQ9000002', radio_name: 'HM-CFG-USB-2 JEQ9000002'});
         sendJSON(res, h);
         return true;
     }
@@ -3124,7 +3124,7 @@ const srv = http.createServer((req, res) => {
     if (key === 'GET /api/system/v1/radio/hb-rf-eth') return sendJSON(res, hbView(''));
     if (key === 'POST /api/system/v1/radio/hb-rf-eth/find') {
         return sendJSON(res, {boards: [
-            {address: '192.0.2.50', name: 'HB-RF-ETH-ABCDEF1234', serial: 'ABCDEF1234', firmware: '1.3.0', module_type: 'HM-MOD-RPI-PCB', module_serial: 'MEQ0835626', bidcos_address: '0x3D1BAE', state: 'free'},
+            {address: '192.0.2.50', name: 'HB-RF-ETH-ABCDEF1234', serial: 'ABCDEF1234', firmware: '1.3.0', module_type: 'HM-MOD-RPI-PCB', module_serial: 'MEQ9000005', bidcos_address: '0x3D0A01', state: 'free'},
             {address: '192.0.2.99', name: 'HB-RF-ETH-9999', serial: '99999', firmware: '1.2.9', module_type: 'RPI-RF-MOD', connected_to: '192.0.2.7', state: 'other'},
         ]});
     }
@@ -3542,5 +3542,5 @@ function hbView(hbAddress) {
     if (hbAddress === '192.0.2.61') return {address: hbAddress, connected: false, module_loaded: true, retrying: true, reconnecting: true, lost_since: new Date(Date.now() - 40000).toISOString(), tries: 0};
     if (hbAddress === '192.0.2.60') return {address: hbAddress, connected: false, module_loaded: true, retrying: true, tries: 3, board_error: 'the board does not answer: dial tcp 192.0.2.60:80: i/o timeout'};
     return {address: hbAddress, connected: true, module_loaded: true, retrying: false, tries: 0,
-        board: {address: hbAddress, serial: 'ABCDEF1234', firmware: '1.3.0', module_type: 'HM-MOD-RPI-PCB', module_serial: 'MEQ0835626', bidcos_address: '0x3D1BAE', connected_to: '192.0.2.1', state: 'this'}};
+        board: {address: hbAddress, serial: 'ABCDEF1234', firmware: '1.3.0', module_type: 'HM-MOD-RPI-PCB', module_serial: 'MEQ9000005', bidcos_address: '0x3D0A01', connected_to: '192.0.2.1', state: 'this'}};
 }

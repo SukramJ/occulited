@@ -28,7 +28,7 @@ func charlyRoot(t *testing.T) string {
 			t.Fatal(err)
 		}
 	}
-	mod := radio.Module{Name: "raw-uart", Node: "/dev/raw-uart", DeviceType: "GPIO@3f201000.serial", GPIO: true, Hardware: "RPI-RF-MOD", Serial: "58A9A728D4", SGTIN: "3014F711A0001F58A9A728D4", HmRFAddress: "0x1F6C2E", HmIPAddress: "0x3FAE2C", Version: "4.4.22", Probe: "ok"}
+	mod := radio.Module{Name: "raw-uart", Node: "/dev/raw-uart", DeviceType: "GPIO@3f201000.serial", GPIO: true, Hardware: "RPI-RF-MOD", Serial: "0000000A03", SGTIN: "3014F711A0001F0000000A03", HmRFAddress: "0x1F6C2E", HmIPAddress: "0x3FAE2C", Version: "4.4.22", Probe: "ok"}
 	det := radio.Detection{Modules: []radio.Module{mod}}
 	w("var/hm_mode", "HM_HOST='rpi3'\nHM_MODE='NORMAL'\n")
 	w("etc/config/rfd.conf", connRFDConf)
@@ -97,7 +97,7 @@ func TestRadioConnStatus(t *testing.T) {
 	if !st.Available || st.Choices.Explicit() || st.Plan == nil || !st.Plan.Multimacd.Run || st.Plan.HmIPServer.Node != "/dev/mmd_hmip" || !st.Plan.HmIPAdvanced {
 		t.Fatalf("status: %+v %+v", st, st.Plan)
 	}
-	if len(st.Options.HmIP) != 1 || len(st.Options.BidCos) != 1 || st.Options.HmIP[0].ID != "58A9A728D4" {
+	if len(st.Options.HmIP) != 1 || len(st.Options.BidCos) != 1 || st.Options.HmIP[0].ID != "0000000A03" {
 		t.Fatalf("options: %+v", st.Options)
 	}
 	// no plan: not available, nothing to choose
@@ -109,7 +109,7 @@ func TestRadioConnStatus(t *testing.T) {
 
 func TestRadioConnPreviewAndValidate(t *testing.T) {
 	root := charlyRoot(t)
-	devs := []BidCosDevice{{Address: "JEQ0230153", Type: "HM-CC-TC"}}
+	devs := []BidCosDevice{{Address: "JEQ9000001", Type: "HM-CC-TC"}}
 	s, _ := newConn(t, root, devs)
 	ctx := context.Background()
 	pv, err := s.Preview(ctx, radio.Choices{BidCos: radio.BidCosNone})
@@ -126,7 +126,7 @@ func TestRadioConnPreviewAndValidate(t *testing.T) {
 		t.Fatalf("auto on an auto box changes nothing: %+v %v", pv, err)
 	}
 	// pinning the module auto chose anyway: the choice changes, the stack does not
-	if pv, err = s.Preview(ctx, radio.Choices{HmIP: "58A9A728D4"}); err != nil || !pv.Changed || pv.Plan.HmIPServer.Node != "/dev/mmd_hmip" {
+	if pv, err = s.Preview(ctx, radio.Choices{HmIP: "0000000A03"}); err != nil || !pv.Changed || pv.Plan.HmIPServer.Node != "/dev/mmd_hmip" {
 		t.Fatalf("pinned to the same module: %+v %v", pv, err)
 	}
 	for _, c := range []radio.Choices{{HmIP: radio.BidCosNone}, {HmIP: "0000000000"}, {BidCos: "../etc"}, {BidCos: "KEQ0000000"}} {
@@ -138,7 +138,7 @@ func TestRadioConnPreviewAndValidate(t *testing.T) {
 
 func TestRadioConnApplyHmIPDirectAndBack(t *testing.T) {
 	root := charlyRoot(t)
-	devs := []BidCosDevice{{Address: "JEQ0230153", Type: "HM-CC-TC"}}
+	devs := []BidCosDevice{{Address: "JEQ9000001", Type: "HM-CC-TC"}}
 	s, svc := newConn(t, root, devs)
 	ctx := context.Background()
 	// paired devices: refused without confirm, nothing written
@@ -197,14 +197,14 @@ func TestRadioConnApplyHmIPChoiceFile(t *testing.T) {
 	hu := filepath.Join(root, "etc/config/crRFD/hmip_user.conf")
 	_ = os.MkdirAll(filepath.Dir(hu), 0o755)
 	_ = os.WriteFile(hu, []byte("Legacy.VirtualRemoteControl.Enabled=false\n"), 0o644)
-	if _, err := s.Apply(context.Background(), radio.Choices{HmIP: "3014F711A0001F58A9A728D4"}, false); err != nil {
+	if _, err := s.Apply(context.Background(), radio.Choices{HmIP: "3014F711A0001F0000000A03"}, false); err != nil {
 		t.Fatal(err)
 	}
 	if a := waitApply(t, s); !a.OK {
 		t.Fatalf("%+v", a)
 	}
 	b, _ := os.ReadFile(hu)
-	if string(b) != "Legacy.VirtualRemoteControl.Enabled=false\noccu"+"lite.hmip.adapter=3014F711A0001F58A9A728D4\n" {
+	if string(b) != "Legacy.VirtualRemoteControl.Enabled=false\noccu"+"lite.hmip.adapter=3014F711A0001F0000000A03\n" {
 		t.Fatalf("hmip_user.conf: %q", b)
 	}
 }
@@ -213,7 +213,7 @@ func TestRadioConnApplyFailureStartsTheStack(t *testing.T) {
 	root := charlyRoot(t)
 	s, svc := newConn(t, root, nil)
 	svc.failing = RadioDetectionUnit
-	if _, err := s.Apply(context.Background(), radio.Choices{HmIP: "58A9A728D4"}, false); err != nil {
+	if _, err := s.Apply(context.Background(), radio.Choices{HmIP: "0000000A03"}, false); err != nil {
 		t.Fatal(err)
 	}
 	a := waitApply(t, s)
@@ -232,7 +232,7 @@ func TestRadioConnBusyAndLoad(t *testing.T) {
 	fw := &RadioFirmware{Root: Root(root), StateDir: filepath.Join(root, "state/radio-firmware")}
 	fw.running = &FlashAttempt{Module: "RPI-RF-MOD"}
 	s.Firmware = fw
-	if _, err := s.Apply(context.Background(), radio.Choices{HmIP: "58A9A728D4"}, false); !errors.Is(err, ErrConnApplyRunning) {
+	if _, err := s.Apply(context.Background(), radio.Choices{HmIP: "0000000A03"}, false); !errors.Is(err, ErrConnApplyRunning) {
 		t.Fatalf("a change during a flash: %v", err)
 	}
 	fw.running = nil

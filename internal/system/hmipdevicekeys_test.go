@@ -43,8 +43,8 @@ func (s *dkSvc) Control(_ context.Context, id, action string) (string, error) {
 const (
 	dkPDT  = "3014F711A0000A1B2C3D4E5F" // HmIP-PDT in fakeHmIPServer's list
 	dkTRV  = "3014F711A0000B1B2C3D4E5F"
-	dkNew  = "3014F711A0000EDD89A81DBA" // not paired
-	dkCode = "EQ01SG" + dkPDT + "DLKCA477C71EC12F9BDD289046D34012259"
+	dkNew  = "3014F711A0000E0000000A05" // not paired
+	dkCode = "EQ01SG" + dkPDT + "DLK0123456789ABCDEFFEDCBA9876543210"
 )
 
 func dkRig(t *testing.T, hmip *httptest.Server) (*HmIPDeviceKeys, *dkSvc, string) {
@@ -102,7 +102,7 @@ func TestDeviceKeysAddViewApplyExport(t *testing.T) {
 		t.Fatalf("again: %+v %v", res, err)
 	}
 	// a sticker of a device not paired yet: stored all the same
-	if res, err := d.Add(ctx, "", "3014-F711-A000-0EDD-89A8-1DBA", "6A8XY-73U0K-Z6YX5-284EM-T028KS"); err != nil || res.Paired {
+	if res, err := d.Add(ctx, "", "3014-F711-A000-0E00-0000-0A05", "014E2-PG2EB-SQQZX-Q5TL1-U58CHH"); err != nil || res.Paired {
 		t.Fatalf("unpaired: %+v %v", res, err)
 	}
 	v = d.View(ctx)
@@ -115,7 +115,7 @@ func TestDeviceKeysAddViewApplyExport(t *testing.T) {
 		t.Fatalf("rows: %+v", v.Rows)
 	}
 	// no answer but the export carries a key
-	if b := strings.ToUpper(strings.Join([]string{v.Rows[2].SGTIN, v.Rows[2].Address, v.Rows[2].Name}, " ")); strings.Contains(b, "CA477C71") {
+	if b := strings.ToUpper(strings.Join([]string{v.Rows[2].SGTIN, v.Rows[2].Address, v.Rows[2].Name}, " ")); strings.Contains(b, "01234567") {
 		t.Fatal("a key in the view")
 	}
 	if res, err := d.Add(ctx, "", dkPDT, "0123456789abcdef0123456789abcdef"); err != nil || !res.Replaced {
@@ -124,7 +124,7 @@ func TestDeviceKeysAddViewApplyExport(t *testing.T) {
 	if err := d.Delete(dkTRV); err == nil {
 		t.Fatal("removed a key that was not there")
 	}
-	if err := d.Delete("3014-f711-a000-0edd-89a8-1dba"); err != nil {
+	if err := d.Delete("3014-f711-a000-0e00-0000-0a05"); err != nil {
 		t.Fatal(err)
 	}
 	if v := d.View(ctx); v.Stored != 1 || v.Pending != 2 {
@@ -152,7 +152,7 @@ func TestDeviceKeysRefusals(t *testing.T) {
 	ctx := context.Background()
 	d, _, root := dkRig(t, nil)
 	var dk ErrDeviceKeys
-	for _, c := range [][3]string{{"WIFI:S:x;;", "", ""}, {"", "3014F711A0000A1B2C3D4E", "6A8XY73U0KZ6YX5284EMT028KS"}, {"", dkPDT, "6A8XY73U0KZ6YX5284EMT028KO"}} {
+	for _, c := range [][3]string{{"WIFI:S:x;;", "", ""}, {"", "3014F711A0000A1B2C3D4E", "014E2PG2EBSQQZXQ5TL1U58CHH"}, {"", dkPDT, "014E2PG2EBSQQZXQ5TL1U58CHO"}} {
 		if _, err := d.Add(ctx, c[0], c[1], c[2]); !errors.As(err, &dk) {
 			t.Fatalf("%v: %v", c, err)
 		}
@@ -178,7 +178,7 @@ func TestDeviceKeysRefusals(t *testing.T) {
 		t.Fatalf("busy: %v", err)
 	}
 	// a hand-edited line that is not a key is counted, not answered
-	if err := os.WriteFile(filepath.Join(root, "etc/config/crRFD/sgtin.map"), []byte(dkPDT+"=CA477C71EC12F9BDD289046D34012259\nnonsense\n"), 0o640); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "etc/config/crRFD/sgtin.map"), []byte(dkPDT+"=0123456789ABCDEFFEDCBA9876543210\nnonsense\n"), 0o640); err != nil {
 		t.Fatal(err)
 	}
 	if v := d.View(ctx); v.BadLines != 1 || v.Stored != 1 {

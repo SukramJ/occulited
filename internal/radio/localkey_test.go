@@ -7,7 +7,7 @@ import (
 
 // task 149: the key lines of hmip_user.conf - written beside the choices, every other line kept
 func TestLocalKeyLines(t *testing.T) {
-	conf := "occulite.hmip.adapter=5F298D97AF\n# a comment\nocculite.hmip.path=direct"
+	conf := "occulite.hmip.adapter=0000000A04\n# a comment\nocculite.hmip.path=direct"
 	if ReadLocalKey(conf).Enabled() {
 		t.Fatal("no key")
 	}
@@ -16,7 +16,7 @@ func TestLocalKeyLines(t *testing.T) {
 	if !k.Enabled() || k.NetworkKey != "00112233445566778899AABBCCDDEEFF" || k.BackboneKey != "FFEEDDCCBBAA99887766554433221100" || k.KeyServerMode != KeyServerLocal {
 		t.Fatalf("on: %+v\n%s", k, on)
 	}
-	for _, keep := range []string{"occulite.hmip.adapter=5F298D97AF\n", "# a comment\n", "occulite.hmip.path=direct\n"} {
+	for _, keep := range []string{"occulite.hmip.adapter=0000000A04\n", "# a comment\n", "occulite.hmip.path=direct\n"} {
 		if !strings.Contains(on, keep) {
 			t.Errorf("lost %q:\n%s", keep, on)
 		}
@@ -54,7 +54,7 @@ func TestLocalKeyLines(t *testing.T) {
 // task 192: the pairing fact for a client - the three modes and an unconfigured system, each with
 // and without device keys; a hand-edited line that is no key does not count
 func TestPairingOf(t *testing.T) {
-	const two = "3014F711A0000B3D1C89D8DF=00112233445566778899AABBCCDDEEFF\n3014F711A0000B3D1C89D8E0=FFEEDDCCBBAA99887766554433221100\nnot a key\n"
+	const two = "3014F711A0000B00000000DF=00112233445566778899AABBCCDDEEFF\n3014F711A0000B00000000E0=FFEEDDCCBBAA99887766554433221100\nnot a key\n"
 	for _, c := range []struct {
 		name, conf, keys string
 		want             Pairing

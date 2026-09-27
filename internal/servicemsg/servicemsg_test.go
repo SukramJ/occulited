@@ -135,8 +135,8 @@ func TestActiveValues(t *testing.T) {
 	// an enum fault code changing is a new message with a new since
 	st := &Store{Now: time.Now}
 	st.active = map[string]Message{}
-	st.Event(rpcsub.Event{Interface: "BidCos-RF", Address: "JEQ0230153:0", Key: "FAULT_REPORTING", Value: 4, Time: time.Unix(100, 0)})
-	st.Event(rpcsub.Event{Interface: "BidCos-RF", Address: "JEQ0230153:0", Key: "FAULT_REPORTING", Value: 6, Time: time.Unix(200, 0)})
+	st.Event(rpcsub.Event{Interface: "BidCos-RF", Address: "JEQ9000001:0", Key: "FAULT_REPORTING", Value: 4, Time: time.Unix(100, 0)})
+	st.Event(rpcsub.Event{Interface: "BidCos-RF", Address: "JEQ9000001:0", Key: "FAULT_REPORTING", Value: 6, Time: time.Unix(200, 0)})
 	l := st.List()
 	if l.Count != 1 || l.Messages[0].Value != 6 || !l.Messages[0].Since.Equal(time.Unix(200, 0)) {
 		t.Fatalf("%+v", l.Messages)

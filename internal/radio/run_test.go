@@ -144,7 +144,7 @@ func boxRoot(t *testing.T, nodes map[string]string) (string, *recorder) {
 	write("proc/meminfo", "MemTotal:        946000 kB\n")
 	write("proc/mounts", "/dev/mmcblk0p3 /usr/local ext4 rw 0 0\n")
 	write("dev/eq3loop", "")
-	fp := &fakeProbe{answers: map[string]string{"raw-uart": "RPI-RF-MOD 58A9A728D4 3014F711A0001F58A9A728D4 0x1F6C2E 0x3FAE2C 4.4.22"}}
+	fp := &fakeProbe{answers: map[string]string{"raw-uart": "RPI-RF-MOD 0000000A03 3014F711A0001F0000000A03 0x1F6C2E 0x3FAE2C 4.4.22"}}
 	return root, &recorder{probe: fp, answers: map[string]string{"systemctl": "inactive\ninactive\ninactive\ninactive\ninactive\n"}}
 }
 
@@ -169,7 +169,7 @@ func TestRunWritesTheBox(t *testing.T) {
 	if hm["HM_HOST"] != "rpi3" || hm["HM_LED_GREEN"] != "/sys/class/leds/ACT" || hm["HM_HMRF_DEV"] != "RPI-RF-MOD" || hm["HM_HMIP_DEVNODE"] != "/dev/raw-uart" {
 		t.Fatalf("hm_mode: %v", hm)
 	}
-	if read("var/board_serial") != "58A9A728D4" || read("var/rf_address") != "0x1F6C2E" || read("var/hmip_board_sgtin") != "3014F711A0001F58A9A728D4" {
+	if read("var/board_serial") != "0000000A03" || read("var/rf_address") != "0x1F6C2E" || read("var/hmip_board_sgtin") != "3014F711A0001F0000000A03" {
 		t.Fatalf("var files: %q %q", read("var/board_serial"), read("var/rf_address"))
 	}
 	if !strings.Contains(read("etc/config/rfd.conf"), "[Interface 0]") || !strings.Contains(read("etc/config/rfd.conf"), "Listen IP = 127.0.0.1") {
@@ -343,7 +343,7 @@ func TestPrepReadyStopped(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(data, "old_20260101"), 0o775); err != nil {
 		t.Fatal(err)
 	}
-	for _, f := range []string{"3014F711A000041709ADFA5B.dev", "3014F711A000041709ADFA5B.apkx", "old_20260101/x.dev"} {
+	for _, f := range []string{"3014F711A000040000000A01.dev", "3014F711A000040000000A01.apkx", "old_20260101/x.dev"} {
 		if err := os.WriteFile(filepath.Join(data, f), []byte("x"), 0o664); err != nil {
 			t.Fatal(err)
 		}
@@ -369,7 +369,7 @@ func TestPrepReadyStopped(t *testing.T) {
 	}
 	for path, want := range map[string]os.FileMode{
 		"etc/config/crRFD": 0o750, "etc/config/crRFD/data": 0o700, "etc/config/crRFD/data/old_20260101": 0o700,
-		"etc/config/crRFD/data/3014F711A000041709ADFA5B.dev": 0o600, "etc/config/crRFD/data/3014F711A000041709ADFA5B.apkx": 0o600,
+		"etc/config/crRFD/data/3014F711A000040000000A01.dev": 0o600, "etc/config/crRFD/data/3014F711A000040000000A01.apkx": 0o600,
 		"etc/config/crRFD/data/old_20260101/x.dev": 0o600,
 	} {
 		if st, err := os.Lstat(filepath.Join(root, path)); err != nil || st.Mode().Perm() != want {
@@ -411,7 +411,7 @@ func TestPrepReadyStopped(t *testing.T) {
 		t.Fatalf("log4j2 after a level change: %v %q", err, firstLine(string(b)))
 	}
 	// hs485d and hmlangw
-	write("etc/config/hs485d.conf", "Listen Port = 2000\n\n[Interface 0]\nType = HMWLGW\nSerial Number = LEQ0636432\n")
+	write("etc/config/hs485d.conf", "Listen Port = 2000\n\n[Interface 0]\nType = HMWLGW\nSerial Number = LEQ9000004\n")
 	if err := Prep(context.Background(), d, "hs485d", p, logf); err != nil {
 		t.Fatal(err)
 	}
@@ -431,7 +431,7 @@ func TestPrepReadyStopped(t *testing.T) {
 	// section carries makes the file root:hs485d 0640
 	varConf := filepath.Join(root, "var/etc/hs485d.conf")
 	b, err := os.ReadFile(varConf)
-	if err != nil || !strings.Contains(string(b), "Listen Port = 32000") || !strings.Contains(string(b), "LEQ0636432") {
+	if err != nil || !strings.Contains(string(b), "Listen Port = 32000") || !strings.Contains(string(b), "LEQ9000004") {
 		t.Fatalf("var hs485d.conf: %v %q", err, b)
 	}
 	if st, _ := os.Stat(varConf); st.Mode().Perm() != 0o640 || !has(*calls, "chown /var/etc/hs485d.conf 0:8113") {
@@ -439,11 +439,11 @@ func TestPrepReadyStopped(t *testing.T) {
 	}
 	// and the same for rfd: a gateway added to /etc/config/rfd.conf while the system runs is in
 	// the file rfd starts from after the next prep (B-161)
-	write("etc/config/rfd.conf", readFile(filepath.Join(root, "etc/config/rfd.conf"))+"\n[Interface 9]\nType = HMLGW2\nSerial Number = KEQ1065511\n")
+	write("etc/config/rfd.conf", readFile(filepath.Join(root, "etc/config/rfd.conf"))+"\n[Interface 9]\nType = HMLGW2\nSerial Number = KEQ9000006\n")
 	if err := Prep(context.Background(), d, "rfd", p, logf); err != nil {
 		t.Fatal(err)
 	}
-	if b, err := os.ReadFile(filepath.Join(root, "var/etc/rfd.conf")); err != nil || !strings.Contains(string(b), "KEQ1065511") || !strings.Contains(string(b), "Listen Port = 32001") {
+	if b, err := os.ReadFile(filepath.Join(root, "var/etc/rfd.conf")); err != nil || !strings.Contains(string(b), "KEQ9000006") || !strings.Contains(string(b), "Listen Port = 32001") {
 		t.Fatalf("var rfd.conf: %v %q", err, b)
 	}
 	if err := Prep(context.Background(), d, "hmlangw", p, logf); err != nil {

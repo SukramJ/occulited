@@ -651,7 +651,7 @@ device's object, named `"<name> INT000000N"`, removed with the group. Reads need
 `system:write`. Without hmipserver's port (a development root) every route is `501 unsupported`; a command
 hmipserver does not answer is `502 hmipserver` with its word (`errorCode 42` = the session check failed).
 
-Member ids are hmipserver's: on openccu-lite the device address (`KEQ0165114`, `000193C9951175:1`), as
+Member ids are hmipserver's: on openccu-lite the device address (`KEQ9000003`, `00010000000A10:1`), as
 `GET /groups/types` and a group's `assignable` list them. `devices_to_configure` after a change are the members
 whose configuration is still pending (hmipserver's `configureDevices`); a client shows them, nothing else to do.
 

@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-var dev = Device{Serial: "3014F711A0001F58A9A728D4", Hostname: "ccu-pi3-1", Server: "Linux/6.6 UPnP/1.0 openccu-lite/1.0.0"}
+var dev = Device{Serial: "3014F711A0001F0000000A03", Hostname: "ccu-pi3-1", Server: "Linux/6.6 UPnP/1.0 openccu-lite/1.0.0"}
 
 func search(lines ...string) []byte { return []byte(strings.Join(lines, "\r\n") + "\r\n\r\n") }
 
@@ -73,7 +73,7 @@ func TestReplyAndNotify(t *testing.T) {
 		"LOCATION: " + loc + "\r\n",
 		"SERVER: Linux/6.6 UPnP/1.0 openccu-lite/1.0.0\r\n",
 		"ST: upnp:rootdevice\r\n",
-		"USN: uuid:upnp-BasicDevice-1_0-3014F711A0001F58A9A728D4::upnp:rootdevice\r\n",
+		"USN: uuid:upnp-BasicDevice-1_0-3014F711A0001F0000000A03::upnp:rootdevice\r\n",
 	} {
 		if !strings.Contains(reply, want) {
 			t.Errorf("the answer misses %q:\n%s", want, reply)
@@ -100,7 +100,7 @@ func TestReplyAndNotify(t *testing.T) {
 }
 
 func TestUDNAndFriendlyName(t *testing.T) {
-	if dev.UDN() != "uuid:upnp-BasicDevice-1_0-3014F711A0001F58A9A728D4" {
+	if dev.UDN() != "uuid:upnp-BasicDevice-1_0-3014F711A0001F0000000A03" {
 		t.Errorf("UDN = %q", dev.UDN())
 	}
 	if dev.FriendlyName() != "openccu-lite - ccu-pi3-1" {
@@ -122,8 +122,8 @@ func TestDescriptionXML(t *testing.T) {
 		"<friendlyName>openccu-lite - ccu-pi3-1</friendlyName>",
 		"<manufacturer>openccu-lite</manufacturer>",
 		"<modelName>openccu-lite</modelName>",
-		"<serialNumber>3014F711A0001F58A9A728D4</serialNumber>",
-		"<UDN>uuid:upnp-BasicDevice-1_0-3014F711A0001F58A9A728D4</UDN>",
+		"<serialNumber>3014F711A0001F0000000A03</serialNumber>",
+		"<UDN>uuid:upnp-BasicDevice-1_0-3014F711A0001F0000000A03</UDN>",
 	} {
 		if !strings.Contains(x, want) {
 			t.Errorf("the description misses %q:\n%s", want, x)

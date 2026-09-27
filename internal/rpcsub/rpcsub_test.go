@@ -279,12 +279,12 @@ func TestRegistersAnswersAndForwards(t *testing.T) {
 		t.Fatalf("up %+v", m)
 	}
 	// a single event, and a multicall whose events share the batch mark
-	rfd.send([][3]string{{"JEQ0230153:1", "TEMPERATURE", "21.5"}}, false)
+	rfd.send([][3]string{{"JEQ9000001:1", "TEMPERATURE", "21.5"}}, false)
 	e := r.next(t, "event")
-	if e.Interface != "BidCos-RF" || e.Address != "JEQ0230153:1" || e.Key != "TEMPERATURE" || e.Value != "21.5" || e.Batch != 0 {
+	if e.Interface != "BidCos-RF" || e.Address != "JEQ9000001:1" || e.Key != "TEMPERATURE" || e.Value != "21.5" || e.Batch != 0 {
 		t.Fatalf("event %+v", e)
 	}
-	rfd.send([][3]string{{"JEQ0230153:0", "UNREACH", ""}, {"JEQ0230153:0", "LOWBAT", ""}}, true)
+	rfd.send([][3]string{{"JEQ9000001:0", "UNREACH", ""}, {"JEQ9000001:0", "LOWBAT", ""}}, true)
 	e1, e2 := r.next(t, "event"), r.next(t, "event")
 	if e1.Batch == 0 || e1.Batch != e2.Batch || e1.Value != 2.5 {
 		t.Fatalf("batch %+v %+v", e1, e2)

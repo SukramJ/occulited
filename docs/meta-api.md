@@ -15,7 +15,7 @@ does not repeat them.
 - Errors: `{"error": "<code>", "message": "<human text>", "detail": {...}}`. Codes are stable and
   listed at the end; `message` is not.
 - Node paths in URLs are literal (`/enums/room/nodes/eg/wohnzimmer`); refs are percent-encoded
-  where they appear in a path segment (`BidCos-RF.JEQ0230153%3A1`).
+  where they appear in a path segment (`BidCos-RF.JEQ9000001%3A1`).
 - All endpoints require a credential except `/version`: a session id (cookie
   `occulite_session` from a login over HTTP or `__Secure-occulite_session` from one over HTTPS,
   both accepted on either scheme; `Authorization: Bearer <sid>`; or `?sid=<sid>` — with or without the CCU's
@@ -136,7 +136,7 @@ it is **not implemented** and 404s. SSE is the change stream; whether the WebSoc
 worth adding is on the backlog. The events:
 
 ```json
-{ "revision": 413, "kind": "object.updated", "ref": "BidCos-RF.JEQ0230153:1", "value": { ...object... } }
+{ "revision": 413, "kind": "object.updated", "ref": "BidCos-RF.JEQ9000001:1", "value": { ...object... } }
 { "revision": 414, "kind": "node.moved", "enum": "room", "from": "room/og/bad", "to": "room/eg/bad" }
 { "revision": 415, "kind": "import", "objects": 212, "enums": 3 }
 ```
@@ -166,7 +166,7 @@ last, then every change as it happens:
 
 ```
 occulite/meta/revision                      412
-occulite/meta/object/BidCos-RF.JEQ0230153:1 {"name": "...", "enums": [...]}
+occulite/meta/object/BidCos-RF.JEQ9000001:1 {"name": "...", "enums": [...]}
 occulite/meta/enum/room                     { ...enum... }
 ```
 

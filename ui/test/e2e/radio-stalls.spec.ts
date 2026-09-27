@@ -15,7 +15,7 @@ const held = {
     checked_at: '2026-09-25T10:57:00Z',
     listeners: [
         {address: '127.0.0.1:8199', connected: true, local: true, owner: 'addon-frozen', verdict: 'holds'},
-        {address: '127.0.0.1:2048', id: 'nr_D24DjW_HmIP-RF', url: 'http://127.0.0.1:2048', connected: false, local: true, owner: 'addon-redmatic', verdict: 'answers'},
+        {address: '127.0.0.1:2048', id: 'nr_Ab1Cd2_HmIP-RF', url: 'http://127.0.0.1:2048', connected: false, local: true, owner: 'addon-redmatic', verdict: 'answers'},
     ],
 };
 

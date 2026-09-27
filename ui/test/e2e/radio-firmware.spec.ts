@@ -58,7 +58,7 @@ test('the HM-CFG-USB-2 is listed with where its firmware comes from', async ({pa
     await page.context().addCookies([{name: 'stub-real', value: '1', url: baseURL!}]);
     await page.goto('/system/updates');
     const card = page.locator('.fw-module', {hasText: 'HM-CFG-USB-2'});
-    await expect(card).toContainText('usb:JEQ0534849');
+    await expect(card).toContainText('usb:JEQ9000002');
     await expect(card.locator('.fw-running')).toHaveText('0.956');
     await expect(card.locator('.fw-hmcfgusb-source')).toContainText('The image does not ship this firmware. Upload hmusbif.03c7.enc (0.967)');
     await expect(card.locator('.fw-hmcfgusb-source a')).toHaveAttribute('href', 'https://git.zerfleddert.de/hmcfgusb/firmware/');

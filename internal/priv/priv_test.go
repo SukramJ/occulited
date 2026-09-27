@@ -1124,12 +1124,12 @@ func TestFlashHMCFGUSB(t *testing.T) {
 		name, family, dev, file string
 		ok                      bool
 	}{
-		{"the adapter by its serial", CoproHMCFGUSB, "usb:JEQ0534849", enc, true},
-		{"an .eq3 for the adapter", CoproHMCFGUSB, "usb:JEQ0534849", eq3, false},
+		{"the adapter by its serial", CoproHMCFGUSB, "usb:JEQ9000002", enc, true},
+		{"an .eq3 for the adapter", CoproHMCFGUSB, "usb:JEQ9000002", eq3, false},
 		{"a raw-uart for the adapter", CoproHMCFGUSB, "/dev/raw-uart1", enc, false},
-		{"a serial that is not one", CoproHMCFGUSB, "usb:JEQ0534849 -x", enc, false},
+		{"a serial that is not one", CoproHMCFGUSB, "usb:JEQ9000002 -x", enc, false},
 		{"an .enc for a module", CoproHmIP, "/dev/raw-uart1", enc, false},
-		{"usb: for a module", CoproHmIP, "usb:JEQ0534849", eq3, false},
+		{"usb: for a module", CoproHmIP, "usb:JEQ9000002", eq3, false},
 	} {
 		if got := p.coproAllowed(c.family, c.dev, c.file, "0.967"); got != c.ok {
 			t.Errorf("%s: %v", c.name, got)
@@ -1143,9 +1143,9 @@ func TestFlashHMCFGUSB(t *testing.T) {
 	coproHMCFGUSB, coproSystemdDir = fake, filepath.Join(dir, "no-systemd")
 	t.Cleanup(func() { coproHMCFGUSB, coproSystemdDir = old, oldDir })
 	var local Local
-	r, err := local.FlashCoprocessor(context.Background(), CoproHMCFGUSB, "usb:JEQ0534849", enc, "0.967")
+	r, err := local.FlashCoprocessor(context.Background(), CoproHMCFGUSB, "usb:JEQ9000002", enc, "0.967")
 	calls, _ := os.ReadFile(log)
-	if err != nil || r.Exit != 0 || string(calls) != "-S JEQ0534849 "+enc+"\n" {
+	if err != nil || r.Exit != 0 || string(calls) != "-S JEQ9000002 "+enc+"\n" {
 		t.Fatalf("argv %q: %v %+v", calls, err, r)
 	}
 	if _, err := local.FlashCoprocessor(context.Background(), CoproHMCFGUSB, "/dev/raw-uart1", enc, ""); err == nil {

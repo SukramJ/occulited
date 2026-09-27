@@ -14,8 +14,8 @@ func TestReadAndSetChoices(t *testing.T) {
 	if c := ReadChoices("", rfdTemplate); c.Explicit() {
 		t.Fatalf("nothing written is auto: %+v", c)
 	}
-	hu := SetHmIPChoice("Legacy.VirtualRemoteControl.Enabled=false\n", "1709ADFA5B")
-	if hu != "Legacy.VirtualRemoteControl.Enabled=false\noccu"+"lite.hmip.adapter=1709ADFA5B\n" {
+	hu := SetHmIPChoice("Legacy.VirtualRemoteControl.Enabled=false\n", "0000000A01")
+	if hu != "Legacy.VirtualRemoteControl.Enabled=false\noccu"+"lite.hmip.adapter=0000000A01\n" {
 		t.Fatalf("hmip_user.conf keeps the user's key and adds lite's:\n%q", hu)
 	}
 	rc := SetBidCosChoice(rfdTemplate, BidCosNone)
@@ -23,12 +23,12 @@ func TestReadAndSetChoices(t *testing.T) {
 		t.Fatalf("the marker is the first line:\n%s", rc)
 	}
 	c := ReadChoices(hu, rc)
-	if c.HmIP != "1709ADFA5B" || c.BidCos != BidCosNone || !c.Explicit() {
+	if c.HmIP != "0000000A01" || c.BidCos != BidCosNone || !c.Explicit() {
 		t.Fatalf("read back: %+v", c)
 	}
 	// changed, then back to auto: the files are as before
-	rc = SetBidCosChoice(rc, "58A9A728D4")
-	if strings.Count(rc, "occulite.bidcos.module") != 1 || ReadChoices("", rc).BidCos != "58A9A728D4" {
+	rc = SetBidCosChoice(rc, "0000000A03")
+	if strings.Count(rc, "occulite.bidcos.module") != 1 || ReadChoices("", rc).BidCos != "0000000A03" {
 		t.Fatalf("one marker line:\n%s", rc)
 	}
 	if SetBidCosChoice(rc, ChoiceAuto) != rfdTemplate {
@@ -40,7 +40,7 @@ func TestReadAndSetChoices(t *testing.T) {
 	if SetHmIPChoice("", ChoiceAuto) != "" || ReadChoices("occulite.hmip.adapter=auto\n", "").HmIP != ChoiceAuto {
 		t.Fatal("auto spelled out is auto")
 	}
-	for id, ok := range map[string]bool{"1709ADFA5B": true, "3014F711A000041709ADFA5B": true, "": false, "a b": false, "../x": false} {
+	for id, ok := range map[string]bool{"0000000A01": true, "3014F711A000040000000A01": true, "": false, "a b": false, "../x": false} {
 		if ValidIdentity(id) != ok {
 			t.Errorf("ValidIdentity(%q) != %v", id, ok)
 		}
@@ -60,10 +60,10 @@ func TestChoiceOptions(t *testing.T) {
 		}
 		return strings.Join(s, ",")
 	}
-	if ids(o.HmIP) != "RPI-RF-MOD:58A9A728D4,HMIP-RFUSB:1709ADFA5B,HMIP-RFUSB-TK:0001TK0001" {
+	if ids(o.HmIP) != "RPI-RF-MOD:0000000A03,HMIP-RFUSB:0000000A01,HMIP-RFUSB-TK:0001TK0001" {
 		t.Fatalf("hmip options: %s", ids(o.HmIP))
 	}
-	if ids(o.BidCos) != "RPI-RF-MOD:58A9A728D4,HMIP-RFUSB:1709ADFA5B,HM-CFG-USB-2:KEQ0123456" {
+	if ids(o.BidCos) != "RPI-RF-MOD:0000000A03,HMIP-RFUSB:0000000A01,HM-CFG-USB-2:KEQ0123456" {
 		t.Fatalf("bidcos options (no TK, the adapter too): %s", ids(o.BidCos))
 	}
 }
@@ -109,18 +109,18 @@ func TestPlanTwoModulesByChoice(t *testing.T) {
 	// HmIP pinned to the stick: hmipserver on it directly, BidCos-RF (auto) keeps the module
 	// through multimacd, which now serves rfd alone
 	in := inputs(mods...)
-	in.HmIPUserConf = SetHmIPChoice("", "3014F711A000041709ADFA5B") // the SGTIN works too
+	in.HmIPUserConf = SetHmIPChoice("", "3014F711A000040000000A01") // the SGTIN works too
 	p = MakePlan(in)
 	if p.HmIP.Node != "/dev/raw-uart1" || p.HmIPServer.Node != "/dev/raw-uart1" || p.HmRF.Node != "/dev/raw-uart" || !p.Multimacd.Run || p.Multimacd.Node != "/dev/raw-uart" || !p.RFDLocal {
 		t.Fatalf("pinned: %+v %+v %+v", p.HmIP, p.HmIPServer, p.Multimacd)
 	}
-	if p.BoardSerial != "1709ADFA5B" {
+	if p.BoardSerial != "0000000A01" {
 		t.Fatalf("the board serial follows the HmIP module, as upstream: %s", p.BoardSerial)
 	}
 	// BidCos-RF pinned to the stick, HmIP to the module: the other way round
 	in = inputs(mods...)
-	in.HmIPUserConf = SetHmIPChoice("", "58A9A728D4")
-	in.RFDConf, in.RFDConfExists = SetBidCosChoice(rfdTemplate, "1709ADFA5B"), true
+	in.HmIPUserConf = SetHmIPChoice("", "0000000A03")
+	in.RFDConf, in.RFDConfExists = SetBidCosChoice(rfdTemplate, "0000000A01"), true
 	p = MakePlan(in)
 	if p.HmRF.Node != "/dev/raw-uart1" || p.HmRF.Address != "0xFF1234" || p.Multimacd.Node != "/dev/raw-uart1" || p.HmIPServer.Node != "/dev/raw-uart" {
 		t.Fatalf("crossed: %+v %+v %+v", p.HmRF, p.Multimacd, p.HmIPServer)
@@ -130,9 +130,9 @@ func TestPlanTwoModulesByChoice(t *testing.T) {
 func TestPlanMissingChosenModule(t *testing.T) {
 	// the stick hmipserver is pinned to is unplugged: no fallback to the RPI-RF-MOD
 	in := inputs(rpiRFMod("/dev/raw-uart"))
-	in.HmIPUserConf = SetHmIPChoice("", "1709ADFA5B")
+	in.HmIPUserConf = SetHmIPChoice("", "0000000A01")
 	p := MakePlan(in)
-	if p.HmIP != nil || p.MissingHmIP != "1709ADFA5B" || p.HmIPServerHmIP || !p.HmIPServer.Run {
+	if p.HmIP != nil || p.MissingHmIP != "0000000A01" || p.HmIPServerHmIP || !p.HmIPServer.Run {
 		t.Fatalf("missing HmIP module: %+v", p)
 	}
 	// rfd keeps the module through multimacd though HmIP is not on it
@@ -168,7 +168,7 @@ func TestPlanUSBAdapterByChoice(t *testing.T) {
 	if p.HmRF == nil || p.HmRF.Hardware != "HM-CFG-USB-2" || !p.RFDUSBAdapter {
 		t.Fatalf("auto takes the adapter: %+v", p.HmRF)
 	}
-	in.RFDConf = SetBidCosChoice(p.RFDConf, "58A9A728D4")
+	in.RFDConf = SetBidCosChoice(p.RFDConf, "0000000A03")
 	p = MakePlan(in)
 	if p.HmRF.Hardware != "RPI-RF-MOD" || p.RFDUSBAdapter || !p.RFDLocal || !p.Multimacd.Run || p.HmIPServer.Node != "/dev/mmd_hmip" {
 		t.Fatalf("the module instead of the adapter: %+v %+v", p.HmRF, p.Multimacd)
@@ -201,13 +201,13 @@ func TestReactivateUSBSectionRenumbers(t *testing.T) {
 }
 
 func pcb(node string) Module {
-	return Module{Name: strings.TrimPrefix(node, "/dev/"), Node: node, DeviceType: "HB-RF-USB@usb-0000:01:00.0-1.3", Hardware: "HM-MOD-RPI-PCB", Serial: "MEQ0835626", SGTIN: "3014F711A061A7D3C996282A", HmRFAddress: "0x3D1BAE", HmIPAddress: "0x1EE437", Version: "2.8.6", Probe: "ok"}
+	return Module{Name: strings.TrimPrefix(node, "/dev/"), Node: node, DeviceType: "HB-RF-USB@usb-0000:01:00.0-1.3", Hardware: "HM-MOD-RPI-PCB", Serial: "MEQ9000005", SGTIN: "3014F711A061A70000000A06", HmRFAddress: "0x3D0A01", HmIPAddress: "0x1E0A02", Version: "2.8.6", Probe: "ok"}
 }
 
 // deviation 15: an HM-MOD-RPI-PCB carries HmIP only through multimacd - .170's PCB beside an
 // HM-CFG-USB-2, where upstream (and auto before) opened it directly and hmipserver hung
 func TestPlanPCBHmIPThroughTheMultiplexer(t *testing.T) {
-	adapter := Module{USBAdapter: true, DeviceType: "USB", Hardware: "HM-CFG-USB-2", Serial: "JEQ0534849", Probe: "ok"}
+	adapter := Module{USBAdapter: true, DeviceType: "USB", Hardware: "HM-CFG-USB-2", Serial: "JEQ9000002", Probe: "ok"}
 	p := MakePlan(inputs(adapter, pcb("/dev/raw-uart1")))
 	if p.HmRF == nil || p.HmRF.Hardware != "HM-CFG-USB-2" || !p.RFDUSBAdapter || p.RFDLocal {
 		t.Fatalf("rfd on the adapter: %+v", p.HmRF)
@@ -223,8 +223,8 @@ func TestPlanPCBHmIPThroughTheMultiplexer(t *testing.T) {
 	}
 	// HmIP on the PCB, BidCos-RF on another module: one multiplexer cannot serve both
 	in = inputs(pcb("/dev/raw-uart1"), rfusb("/dev/raw-uart"))
-	in.HmIPUserConf = SetHmIPChoice("", "MEQ0835626")
-	in.RFDConf, in.RFDConfExists = SetBidCosChoice(rfdTemplate, "1709ADFA5B"), true
+	in.HmIPUserConf = SetHmIPChoice("", "MEQ9000005")
+	in.RFDConf, in.RFDConfExists = SetBidCosChoice(rfdTemplate, "0000000A01"), true
 	if p = MakePlan(in); p.Conflict == "" || p.Multimacd.Node != "/dev/raw-uart" {
 		t.Fatalf("conflict: %q %+v", p.Conflict, p.Multimacd)
 	}
@@ -238,7 +238,7 @@ func TestPlanPCBHmIPThroughTheMultiplexer(t *testing.T) {
 // serial from the SGTIN's tail, HmIP only; beside the HM-CFG-USB-2 of .170
 func TestModuleWithoutASerial(t *testing.T) {
 	root := sandbox(t, map[string]string{"raw-uart1": "HmIP USB Stick@usb-0000:01:00.0-1.3"})
-	fp := &fakeProbe{answers: map[string]string{"raw-uart1": "HM-MOD-RPI-PCB  3014F711A0000000AB12CD34 0x000000 0x782111 2.8.6"}}
+	fp := &fakeProbe{answers: map[string]string{"raw-uart1": "HM-MOD-RPI-PCB  3014F711A0000000AB12CD34 0x000000 0x780a04 2.8.6"}}
 	det := Detector{Root: root, Run: fp.run, Sleep: func(time.Duration) {}}.Detect(context.Background())
 	var m Module
 	for _, x := range det.Modules {
@@ -246,7 +246,7 @@ func TestModuleWithoutASerial(t *testing.T) {
 			m = x
 		}
 	}
-	if !m.OK() || m.Serial != "00AB12CD34" || !m.SerialFromSGTIN || m.SGTIN != "3014F711A0000000AB12CD34" || m.HmIPAddress != "0x782111" {
+	if !m.OK() || m.Serial != "00AB12CD34" || !m.SerialFromSGTIN || m.SGTIN != "3014F711A0000000AB12CD34" || m.HmIPAddress != "0x780a04" {
 		t.Fatalf("module: %+v", m)
 	}
 	if !m.HmIPCapable() || m.BidCosCapable() {
@@ -259,10 +259,10 @@ func TestModuleWithoutASerial(t *testing.T) {
 		t.Fatalf("plan: %+v %+v %+v %+v", p.HmIP, p.HmRF, p.Multimacd, p.HmIPServer)
 	}
 	// a module that reports its serial keeps it
-	fp.answers["raw-uart1"] = "RPI-RF-MOD 58A9A728D4 3014F711A0001F58A9A728D4 0x1F6C2E 0x3FAE2C 4.4.22"
+	fp.answers["raw-uart1"] = "RPI-RF-MOD 0000000A03 3014F711A0001F0000000A03 0x1F6C2E 0x3FAE2C 4.4.22"
 	det = Detector{Root: root, Run: fp.run, Sleep: func(time.Duration) {}}.Detect(context.Background())
 	for _, x := range det.Modules {
-		if x.Name == "raw-uart1" && (x.Serial != "58A9A728D4" || x.SerialFromSGTIN) {
+		if x.Name == "raw-uart1" && (x.Serial != "0000000A03" || x.SerialFromSGTIN) {
 			t.Fatalf("a reported serial: %+v", x)
 		}
 	}
@@ -290,8 +290,8 @@ func TestPlanHmIPPathByChoice(t *testing.T) {
 	}
 	// multimacd while it serves another module for BidCos-RF: a conflict
 	in = path(inputs(rpiRFMod("/dev/raw-uart"), rfusb("/dev/raw-uart1")), PathMultimacd)
-	in.HmIPUserConf = SetHmIPChoice(in.HmIPUserConf, "1709ADFA5B")
-	in.RFDConf, in.RFDConfExists = SetBidCosChoice(rfdTemplate, "58A9A728D4"), true
+	in.HmIPUserConf = SetHmIPChoice(in.HmIPUserConf, "0000000A01")
+	in.RFDConf, in.RFDConfExists = SetBidCosChoice(rfdTemplate, "0000000A03"), true
 	if p := MakePlan(in); p.Conflict == "" {
 		t.Fatalf("multimacd busy: %+v", p.Multimacd)
 	}
@@ -304,7 +304,7 @@ func TestPlanHmIPPathByChoice(t *testing.T) {
 	if p := MakePlan(path(inputs(tk), PathDirect)); p.Conflict != "" || p.HmIPServer.Node != "/dev/raw-uart" {
 		t.Fatalf("TK direct: %q", p.Conflict)
 	}
-	adapter := Module{USBAdapter: true, DeviceType: "USB", Hardware: "HM-CFG-USB-2", Serial: "JEQ0534849", Probe: "ok"}
+	adapter := Module{USBAdapter: true, DeviceType: "USB", Hardware: "HM-CFG-USB-2", Serial: "JEQ9000002", Probe: "ok"}
 	if p := MakePlan(path(inputs(adapter, pcb("/dev/raw-uart1")), PathDirect)); p.Conflict == "" {
 		t.Fatal("the dual PCB directly")
 	}

@@ -109,7 +109,7 @@ func fakeInterface(t *testing.T, typ, fw string) []interfaces.Interface {
 		raw, _ := io.ReadAll(r.Body)
 		w.Header().Set("Content-Type", "text/xml")
 		if strings.Contains(string(raw), "listDevices") {
-			_, _ = w.Write([]byte(`<?xml version="1.0"?><methodResponse><params><param><value><array><data><value><struct><member><name>ADDRESS</name><value><string>000193C9951175</string></value></member><member><name>TYPE</name><value><string>` + typ + `</string></value></member><member><name>FIRMWARE</name><value><string>` + fw + `</string></value></member><member><name>AVAILABLE_FIRMWARE</name><value><string>0.0.0</string></value></member></struct></value></data></array></value></param></params></methodResponse>`))
+			_, _ = w.Write([]byte(`<?xml version="1.0"?><methodResponse><params><param><value><array><data><value><struct><member><name>ADDRESS</name><value><string>00010000000A10</string></value></member><member><name>TYPE</name><value><string>` + typ + `</string></value></member><member><name>FIRMWARE</name><value><string>` + fw + `</string></value></member><member><name>AVAILABLE_FIRMWARE</name><value><string>0.0.0</string></value></member></struct></value></data></array></value></param></params></methodResponse>`))
 			return
 		}
 		_, _ = w.Write([]byte(`<?xml version="1.0"?><methodResponse><params><param><value><boolean>1</boolean></value></param></params></methodResponse>`))

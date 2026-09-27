@@ -48,10 +48,10 @@ func writeSBK(t *testing.T, root system.Root, name string, files map[string]stri
 
 var ccuBackup = map[string]string{
 	"usr/local/etc/config/ids":                                     "BidCoS-Address=0xFF1234\nSerialNumber=1709ADFA00\n",
-	"usr/local/etc/config/rfd/JEQ0230153.dev":                      "device",
-	"usr/local/etc/config/crRFD/data/3014F711A0001F58A9A728D4.ap":  "ap",
-	"usr/local/etc/config/crRFD/data/3014F711A0000193C9951175.dev": "hmip",
-	"usr/local/etc/config/hmip_address.conf":                       "Adapter.1.Address=BCEDC1\n",
+	"usr/local/etc/config/rfd/JEQ9000001.dev":                      "device",
+	"usr/local/etc/config/crRFD/data/3014F711A0001F0000000A03.ap":  "ap",
+	"usr/local/etc/config/crRFD/data/3014F711A000010000000A10.dev": "hmip",
+	"usr/local/etc/config/hmip_address.conf":                       "Adapter.1.Address=BC0A08\n",
 	"usr/local/etc/config/netconfig":                               "HOSTNAME=old\n",
 }
 
@@ -61,7 +61,7 @@ func TestRestoreDevices(t *testing.T) {
 	rig := newPowerRig(t, true)
 	root := string(rig.root)
 	_ = os.MkdirAll(root+"/etc/config", 0o755)
-	_ = os.WriteFile(root+"/etc/config/ids", []byte("BidCoS-Address=0xFF9999\nSerialNumber=1709ADFA5B\n"), 0o644)
+	_ = os.WriteFile(root+"/etc/config/ids", []byte("BidCoS-Address=0xFF9999\nSerialNumber=0000000A01\n"), 0o644)
 	writeSBK(t, rig.root, "restore-ccu.sbk", ccuBackup)
 	writeSBK(t, rig.root, "restore-empty.sbk", map[string]string{"usr/local/etc/config/netconfig": "x"})
 	old := system.PairedDevicesTimeout
@@ -91,7 +91,7 @@ func TestRestoreDevices(t *testing.T) {
 		t.Fatalf("view: %d %v", st, out)
 	}
 	b := out["backup"].(map[string]any)
-	if b["bidcos_rf"].(map[string]any)["devices"] != 1.0 || b["bidcos_rf"].(map[string]any)["address"] != "0xFF1234" || b["hmip"].(map[string]any)["devices"] != 1.0 || b["hmip"].(map[string]any)["identity_sgtin"] != "3014F711A0001F58A9A728D4" {
+	if b["bidcos_rf"].(map[string]any)["devices"] != 1.0 || b["bidcos_rf"].(map[string]any)["address"] != "0xFF1234" || b["hmip"].(map[string]any)["devices"] != 1.0 || b["hmip"].(map[string]any)["identity_sgtin"] != "3014F711A0001F0000000A03" {
 		t.Errorf("backup: %v", b)
 	}
 	tg := out["target"].(map[string]any)
@@ -133,13 +133,13 @@ func TestRestoreDevices(t *testing.T) {
 	if got, _ := os.ReadFile(root + "/etc/config/ids"); string(got) != "BidCoS-Address=0xFF1234\nSerialNumber=1709ADFA00\n" {
 		t.Errorf("ids: %q", got)
 	}
-	if got, _ := os.ReadFile(root + "/etc/config/rfd/JEQ0230153.dev"); string(got) != "device" {
+	if got, _ := os.ReadFile(root + "/etc/config/rfd/JEQ9000001.dev"); string(got) != "device" {
 		t.Errorf("device file: %q", got)
 	}
 	if _, err := os.Stat(root + "/etc/config/netconfig"); !errors.Is(err, os.ErrNotExist) {
 		t.Error("netconfig came out of the backup")
 	}
-	if got, _ := os.ReadFile(root + imp["aside"].(string) + "/ids"); string(got) != "BidCoS-Address=0xFF9999\nSerialNumber=1709ADFA5B\n" {
+	if got, _ := os.ReadFile(root + imp["aside"].(string) + "/ids"); string(got) != "BidCoS-Address=0xFF9999\nSerialNumber=0000000A01\n" {
 		t.Errorf("the old ids aside: %q", got)
 	}
 	if rig.m.Reboots() == 0 {

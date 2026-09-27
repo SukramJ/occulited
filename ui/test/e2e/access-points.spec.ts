@@ -12,12 +12,12 @@ test('the access points stand between the gateways and the LAN devices, one card
     await expect(page.locator('main h2')).toHaveText(['BidCoS Gateways', 'Network radio board (HB-RF-ETH)', 'HmIP Access Points', 'LAN devices']);
     await expect(section(page)).toBeVisible();
 
-    const hap = page.locator('.ol-card[data-access-point="0003DB3393B323"]');
+    const hap = page.locator('.ol-card[data-access-point="00030000000A13"]');
     await expect(hap.locator('.ol-card-title')).toHaveText('Access point cellar');
     await expect(hap.locator('.ol-card-sub')).toHaveText('HmIP-RF · HmIP-HAP-B1');
     await expect(hap.locator('dt')).toHaveText(['State', 'SGTIN', 'Address', 'IP address', 'Firmware', 'Duty cycle', 'Carrier sense']);
     await expect(hap.locator('dd').nth(0)).toHaveText('reachable');
-    await expect(hap.locator('dd').nth(1)).toHaveText('30150377DC0003DB3393B323');
+    await expect(hap.locator('dd').nth(1)).toHaveText('30150377DC00030000000A13');
     // task 220: the mode from the LAN find beside the address
     await expect(hap.locator('dd').nth(3)).toHaveText('192.0.2.155DHCP');
     // B-195's data: eQ-3 lists a newer version, the badge leads to the device firmware
@@ -27,7 +27,7 @@ test('the access points stand between the gateways and the LAN devices, one card
     await expect(hap.locator('[data-ap-duty]')).toHaveText('2.5 %');
 
     // the wired DRAP has no radio budget, and no name: its type is the title
-    const drap = page.locator('.ol-card[data-access-point="00179A4989A4B1"]');
+    const drap = page.locator('.ol-card[data-access-point="00170000000A08"]');
     await expect(drap.locator('.ol-card-title')).toHaveText('HmIPW-DRAP');
     await expect(drap.locator('dt')).toHaveText(['State', 'SGTIN', 'Address', 'IP address', 'Firmware']);
     await expect(drap.locator('[data-ap-firmware] a')).toHaveCount(0);
@@ -57,7 +57,7 @@ for (const [mode, hint, text, error] of [
         else await expect(fw).not.toHaveClass(/error/);
         if (mode === 'blocked') {
             await expect(fw.locator('.fw-port[data-port="9294"]')).toHaveText('tcp 9294 REJECT');
-            await expect(page.locator('.ol-card[data-access-point="00179A4989A4B1"] [data-ap-state]')).toHaveText('unreachableconfiguration pending');
+            await expect(page.locator('.ol-card[data-access-point="00170000000A08"] [data-ap-state]')).toHaveText('unreachableconfiguration pending');
         }
         if (mode === 'none' || mode === 'reopen') await expect(page.locator('[data-ap-none]')).toHaveText('No HmIP access point is paired.');
         if (mode === 'silent') await expect(page.locator('[data-ap-error]')).toContainText('HmIP-RF does not answer: dial tcp');
@@ -75,7 +75,7 @@ test('in German', async ({page}) => {
     await page.addInitScript(() => localStorage.setItem('ol.language', 'de'));
     await page.goto('/system/lan-devices');
     await expect(page.locator('h2#access-points')).toHaveText('HmIP-Access-Points');
-    const hap = page.locator('.ol-card[data-access-point="0003DB3393B323"]');
+    const hap = page.locator('.ol-card[data-access-point="00030000000A13"]');
     await expect(hap.locator('dt')).toHaveText(['Zustand', 'SGTIN', 'Adresse', 'IP-Adresse', 'Firmware', 'Duty Cycle', 'Carrier Sense']);
     await expect(hap.locator('dd').nth(0)).toHaveText('erreichbar');
     // iptables' words stay as iptables says them

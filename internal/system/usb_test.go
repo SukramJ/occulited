@@ -65,7 +65,7 @@ func rpi4USB() []usbFixtureDev {
 			ifaces: map[string]string{"2-0:1.0": "hub"}},
 		{name: "1-1", attrs: map[string]string{"idVendor": "2109", "idProduct": "3431", "busnum": "1", "devnum": "2", "devpath": "1", "speed": "480", "bDeviceClass": "09", "product": "USB2.0 Hub"},
 			ifaces: map[string]string{"1-1:1.0": "hub"}, nodes: map[string][]string{"1-1:1.0": {"1-1-port1", "1-1-port2", "1-1-port3", "1-1-port4"}}},
-		{name: "1-1.3", attrs: map[string]string{"idVendor": "1b1f", "idProduct": "c020", "busnum": "1", "devnum": "3", "devpath": "1.3", "speed": "12", "bDeviceClass": "00", "product": "eQ-3 HmIP-RFUSB", "manufacturer": "Silicon Labs", "serial": "3014F711A061A7C00010CECF"},
+		{name: "1-1.3", attrs: map[string]string{"idVendor": "1b1f", "idProduct": "c020", "busnum": "1", "devnum": "3", "devpath": "1.3", "speed": "12", "bDeviceClass": "00", "product": "eQ-3 HmIP-RFUSB", "manufacturer": "Silicon Labs", "serial": "3014F711A061A70000000A07"},
 			ifaces: map[string]string{"1-1.3:1.0": "hb_rf_usb_2"}},
 	}
 }
@@ -101,7 +101,7 @@ func TestReadUSB(t *testing.T) {
 	if stick.Parent != "1-1" || stick.Bus != 1 || stick.Dev != 3 || stick.Vendor != "1b1f" || stick.Product != "c020" {
 		t.Fatalf("stick: %+v", stick)
 	}
-	if stick.ProductName != "eQ-3 HmIP-RFUSB" || stick.VendorName != "eQ-3" || stick.Manufacturer != "Silicon Labs" || stick.Serial != "3014F711A061A7C00010CECF" || stick.Speed != "12" || stick.Hub {
+	if stick.ProductName != "eQ-3 HmIP-RFUSB" || stick.VendorName != "eQ-3" || stick.Manufacturer != "Silicon Labs" || stick.Serial != "3014F711A061A70000000A07" || stick.Speed != "12" || stick.Hub {
 		t.Fatalf("stick names: %+v", stick)
 	}
 	if stick.Driver != "hb_rf_usb_2" {

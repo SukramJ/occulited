@@ -13,7 +13,7 @@ test('the duty cycle graph shows its start and end time, its top tick, the gap a
     // the times the chart must print, from the stub's own samples, in the browser's zone
     const want = await page.evaluate(async () => {
         const h = (await (await fetch('/api/system/v1/radio/health')).json()) as {history: Record<string, {t: string}[]>};
-        const s = h.history['HmIP-RF/BCEDC1']!;
+        const s = h.history['HmIP-RF/BC0A08']!;
         const last = Date.parse(s[s.length - 1]!.t);
         const f = (ms: number) => new Date(ms).toLocaleTimeString('en', {hour: '2-digit', minute: '2-digit', hourCycle: 'h23'});
         return {start: f(last - 3600_000), end: f(last), first: f(Date.parse(s[0]!.t))};

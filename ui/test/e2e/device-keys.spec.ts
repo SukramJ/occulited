@@ -28,7 +28,7 @@ test('the count, a pasted code, a photo, the SGTIN and printed key, a device not
     await expect(page.locator('[data-qr="camera"]')).toBeVisible();
 
     // a pasted code of the thermostat
-    await page.getByLabel('Device code').fill('EQ01SG3014F711A0000B1B2C3D4E5FDLKCA477C71EC12F9BDD289046D34012259');
+    await page.getByLabel('Device code').fill('EQ01SG3014F711A0000B1B2C3D4E5FDLK0123456789ABCDEFFEDCBA9876543210');
     await page.locator('.dk-paste').getByRole('button', {name: 'Store'}).click();
     await expect(page.locator('[data-notice="device-key-added"]')).toHaveText('Key stored for Heizung Bad.');
     await expect(page.locator('[data-count]')).toHaveText('2 of 3 paired HmIP devices have their key here.');
@@ -47,18 +47,18 @@ test('the count, a pasted code, a photo, the SGTIN and printed key, a device not
 
     // typed from a sticker whose device is not paired: an O is caught, then the confirm
     await page.getByRole('button', {name: 'Type the SGTIN and the key'}).click();
-    await page.getByLabel('SGTIN', {exact: true}).fill('3014-F711-A000-0EDD-89A8-1DBA');
-    await page.getByLabel('Key', {exact: true}).fill('6A8XY-73U0K-Z6YX5-284EM-T028KO');
+    await page.getByLabel('SGTIN', {exact: true}).fill('3014-F711-A000-0E00-0000-0A05');
+    await page.getByLabel('Key', {exact: true}).fill('014E2-PG2EB-SQQZX-Q5TL1-U58CHO');
     await expect(page.locator('[data-note="odiv"]')).toBeVisible();
     await expect(page.locator('.dk-typed').getByRole('button', {name: 'Store'})).toBeDisabled();
-    await page.getByLabel('Key', {exact: true}).fill('6A8XY-73U0K-Z6YX5-284EM-T028KS');
+    await page.getByLabel('Key', {exact: true}).fill('014E2-PG2EB-SQQZX-Q5TL1-U58CHH');
     await page.locator('.dk-typed').getByRole('button', {name: 'Store'}).click();
     const dialog = page.getByRole('dialog');
-    await expect(dialog).toContainText('3014-F711-A000-0EDD-89A8-1DBA is not a paired HmIP device of this system');
+    await expect(dialog).toContainText('3014-F711-A000-0E00-0000-0A05 is not a paired HmIP device of this system');
     await dialog.getByRole('button', {name: 'Store the key'}).click();
-    await expect(page.locator('[data-notice="device-key-added"]')).toHaveText('Key stored for 3014-F711-A000-0EDD-89A8-1DBA; it is used when the device is paired.');
+    await expect(page.locator('[data-notice="device-key-added"]')).toHaveText('Key stored for 3014-F711-A000-0E00-0000-0A05; it is used when the device is paired.');
     await expect(page.locator('[data-count]')).toContainText('1 more for devices not paired yet.');
-    await expect(row(page, '3014F711A0000EDD89A81DBA')).toContainText('device not paired yet');
+    await expect(row(page, '3014F711A0000E0000000A05')).toContainText('device not paired yet');
 
     // apply: HmIP-RF restarts, then nothing waits
     await page.getByRole('button', {name: 'Apply now (restarts HmIP-RF)'}).click();
@@ -69,10 +69,10 @@ test('the count, a pasted code, a photo, the SGTIN and printed key, a device not
     await expect(page.locator('[data-notice="device-keys-applying"]')).toHaveCount(0);
 
     // remove one
-    await row(page, '3014F711A0000EDD89A81DBA').getByRole('button', {name: 'Remove'}).click();
+    await row(page, '3014F711A0000E0000000A05').getByRole('button', {name: 'Remove'}).click();
     await expect(dialog).toContainText("Without it, pairing this device needs eQ-3's key server again");
     await dialog.getByRole('button', {name: 'Remove'}).click();
-    await expect(row(page, '3014F711A0000EDD89A81DBA')).toHaveCount(0);
+    await expect(row(page, '3014F711A0000E0000000A05')).toHaveCount(0);
 });
 
 test('the key sheet asks for the password every time and shows every key as its code', async ({page, baseURL}) => {

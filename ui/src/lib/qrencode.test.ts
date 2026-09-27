@@ -26,7 +26,7 @@ function decode(text: string): {data: string; version: number} | null {
 
 describe('qrencode', () => {
     it("draws a device's code that reads back, alphanumeric in version 4", () => {
-        const payload = 'EQ01SG3014F711A0000EDD89A81DBADLKCA477C71EC12F9BDD289046D34012259';
+        const payload = 'EQ01SG3014F711A0000E0000000A05DLK0123456789ABCDEFFEDCBA9876543210';
         expect(qrMatrix(payload).length).toBe(33);
         expect(decode(payload)).toEqual({data: payload, version: 4});
     });

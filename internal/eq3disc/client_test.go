@@ -21,18 +21,19 @@ func unhex(t *testing.T, s string) []byte {
 }
 
 // Answers captured in the lab (openccu-lite task 220, 2026-09-24): the HAP-B1 answers with version
-// 4, the HM-LGW with version 2 and its two service ports.
+// 4, the HM-LGW with version 2 and its two service ports. The devices' serials and the encrypted
+// answer's 16 bytes are invented ones in place of the captured (B-24); the shape is the capture's.
 const (
-	capHAPIdentify = "0470fafe016551332d484d49502d4841502d41707000333031353033373744433030303344423333393342333233003e4901322e322e3138000000"
-	capLGWIdentify = "0270fafe016551332d484d2d4c47572d417070004b455131303635353131003e4901312e312e3500000207d0002a07d10000"
-	capHAPCurrent  = "048a7eb0016551332d484d49502d4841502d41707000333031353033373744433030303344423333393342333233003e6e01c000029bc0000201ffffff00c0000201c00002e1"
-	capHAPConfig   = "04645543016551332d484d49502d4841502d41707000333031353033373744433030303344423333393342333233003e6301c0a801e0c0a80101ffffff00c0a801010000000003011043303030334442333339334233323300"
-	capHAPEncrypt  = "04a31442016551332d484d49502d4841502d41707000333031353033373744433030303344423333393342333233003e4303ed74a07b3c3e2344a8df5f1edba9ca69"
+	capHAPIdentify = "0470fafe016551332d484d49502d4841502d41707000333031353033373744433030303330303030303030413133003e4901322e322e3138000000"
+	capLGWIdentify = "0270fafe016551332d484d2d4c47572d417070004b455139303030303036003e4901312e312e3500000207d0002a07d10000"
+	capHAPCurrent  = "048a7eb0016551332d484d49502d4841502d41707000333031353033373744433030303330303030303030413133003e6e01c000029bc0000201ffffff00c0000201c00002e1"
+	capHAPConfig   = "04645543016551332d484d49502d4841502d41707000333031353033373744433030303330303030303030413133003e6301c0a801e0c0a80101ffffff00c0a801010000000003011043303030333030303030303041313300"
+	capHAPEncrypt  = "04a31442016551332d484d49502d4841502d41707000333031353033373744433030303330303030303030413133003e4303000102030405060708090a0b0c0d0e0f"
 )
 
 func TestParseCaptures(t *testing.T) {
 	a, ok := ParseAnswer(unhex(t, capHAPIdentify))
-	if !ok || a.Version != 4 || a.Type != "eQ3-HMIP-HAP-App" || a.Serial != "30150377DC0003DB3393B323" || a.Opcode != 'I' || a.Code != CodeOK || a.Sender != [3]byte{0x70, 0xfa, 0xfe} || a.Counter != 1 {
+	if !ok || a.Version != 4 || a.Type != "eQ3-HMIP-HAP-App" || a.Serial != "30150377DC00030000000A13" || a.Opcode != 'I' || a.Code != CodeOK || a.Sender != [3]byte{0x70, 0xfa, 0xfe} || a.Counter != 1 {
 		t.Fatalf("%+v %v", a, ok)
 	}
 	if v, s := ParseIdentify(a.Data); v != "2.2.18" || len(s) != 0 {
@@ -48,13 +49,13 @@ func TestParseCaptures(t *testing.T) {
 	}
 	a, _ = ParseAnswer(unhex(t, capHAPConfig))
 	c, ok := ParseConfig(a.Data)
-	if !ok || c.IP != "192.168.1.224" || c.Gateway != "192.168.1.1" || c.DNS2 != "0.0.0.0" || !c.DHCP || !c.AutoIP || c.Crypt != CryptOn || c.NameMax != 16 || c.Name != "C0003DB3393B323" {
+	if !ok || c.IP != "192.168.1.224" || c.Gateway != "192.168.1.1" || c.DNS2 != "0.0.0.0" || !c.DHCP || !c.AutoIP || c.Crypt != CryptOn || c.NameMax != 16 || c.Name != "C00030000000A13" {
 		t.Errorf("%+v", c)
 	}
 	// the configuration written back unchanged is the configuration read (without the name's
 	// maximum length, which is the device's)
 	p, err := SetConfigPayload(c)
-	if err != nil || !bytes.Equal(p, append(append(append([]byte{}, a.Data[0:22]...), "C0003DB3393B323"...), 0)) {
+	if err != nil || !bytes.Equal(p, append(append(append([]byte{}, a.Data[0:22]...), "C00030000000A13"...), 0)) {
 		t.Errorf("%x %v", p, err)
 	}
 	a, _ = ParseAnswer(unhex(t, capHAPEncrypt))
@@ -124,19 +125,19 @@ func fakeDevices(t *testing.T) (*net.UDPConn, func() map[byte]int) {
 			}
 			switch r.Opcode {
 			case 'I':
-				reply(4, "eQ3-HMIP-HAP-App", "30150377DC0003DB3393B323", 1, []byte("2.2.18\x00\x00\x00"))
-				reply(4, "eQ3-HMIP-HAP-App", "30150377DC0003DB3393B323", 1, []byte("2.2.18\x00\x00\x00"))
-				reply(2, "eQ3-HM-LGW-App", "KEQ1065511", 1, []byte("1.1.5\x00\x00\x02\x07\xd0\x00\x00"))
-				reply(2, "eQ3-HmIP-CCU3-App", "4118f6a32", 1, []byte("3.89.8\x00\x00"))
+				reply(4, "eQ3-HMIP-HAP-App", "30150377DC00030000000A13", 1, []byte("2.2.18\x00\x00\x00"))
+				reply(4, "eQ3-HMIP-HAP-App", "30150377DC00030000000A13", 1, []byte("2.2.18\x00\x00\x00"))
+				reply(2, "eQ3-HM-LGW-App", "KEQ9000006", 1, []byte("1.1.5\x00\x00\x02\x07\xd0\x00\x00"))
+				reply(2, "eQ3-HmIP-CCU3-App", "4110000a1", 1, []byte("3.89.8\x00\x00"))
 				// somebody else's answer (another sender id) is not ours
 				_, _ = srv.WriteToUDP([]byte{2, 9, 9, 9, 1, 'x', 0, 'y', 0, '>', 'I', 1}, from)
 			case 'n':
-				if r.Serial == "KEQ1065511" {
+				if r.Serial == "KEQ9000006" {
 					continue // the gateway does not answer n: asked twice, left without
 				}
 				reply(4, "eQ3-HMIP-HAP-App", r.Serial, 1, unhex(t, "c000029bc0000201ffffff00c0000201c00002e1"))
 			case 'c':
-				reply(4, "eQ3-HMIP-HAP-App", r.Serial, 1, unhex(t, "c0a801e0c0a80101ffffff00c0a801010000000003011043303030334442333339334233323300"))
+				reply(4, "eQ3-HMIP-HAP-App", r.Serial, 1, unhex(t, "c0a801e0c0a80101ffffff00c0a801010000000003011043303030333030303030303041313300"))
 			}
 		}
 	}()

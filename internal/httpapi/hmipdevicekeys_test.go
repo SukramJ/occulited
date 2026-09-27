@@ -72,21 +72,21 @@ func TestDeviceKeysOverHTTP(t *testing.T) {
 		}
 	}
 	// the administrator stores two keys: a code, and a typed SGTIN with the printed key
-	st, out, _ := do(t, srv, "POST", dkBase, `{"code":"EQ01SG3014F711A0000A1B2C3D4E5FDLKCA477C71EC12F9BDD289046D34012259"}`, admin)
+	st, out, _ := do(t, srv, "POST", dkBase, `{"code":"EQ01SG3014F711A0000A1B2C3D4E5FDLK0123456789ABCDEFFEDCBA9876543210"}`, admin)
 	if st != 200 || out["sgtin"] != "3014F711A0000A1B2C3D4E5F" || out["paired"] != false {
 		t.Fatalf("add: %d %v", st, out)
 	}
-	if st, out, _ := do(t, srv, "POST", dkBase, `{"sgtin":"3014-F711-A000-0EDD-89A8-1DBA","key":"6A8XY-73U0K-Z6YX5-284EM-T028KS"}`, admin); st != 200 {
+	if st, out, _ := do(t, srv, "POST", dkBase, `{"sgtin":"3014-F711-A000-0E00-0000-0A05","key":"014E2-PG2EB-SQQZX-Q5TL1-U58CHH"}`, admin); st != 200 {
 		t.Fatalf("add typed: %d %v", st, out)
 	}
 	if st, out, _ := do(t, srv, "POST", dkBase, `{"code":"WIFI:S:x;;"}`, admin); st != 422 || out["error"] != "invalid-code" {
 		t.Errorf("a wrong code: %d %v", st, out)
 	}
 	st, out, body := do(t, srv, "GET", dkBase, "", admin)
-	if st != 200 || out["stored"] != float64(2) || out["pending"] != float64(2) || out["devices_known"] != false || strings.Contains(body, "CA477C71") {
+	if st != 200 || out["stored"] != float64(2) || out["pending"] != float64(2) || out["devices_known"] != false || strings.Contains(body, "01234567") {
 		t.Fatalf("view: %d %s", st, body)
 	}
-	if b, _ := os.ReadFile(filepath.Join(root, "etc/config/crRFD/sgtin.map")); !strings.Contains(string(b), "3014F711A0000A1B2C3D4E5F=CA477C71EC12F9BDD289046D34012259\n") {
+	if b, _ := os.ReadFile(filepath.Join(root, "etc/config/crRFD/sgtin.map")); !strings.Contains(string(b), "3014F711A0000A1B2C3D4E5F=0123456789ABCDEFFEDCBA9876543210\n") {
 		t.Fatalf("the map: %s", b)
 	}
 
@@ -125,7 +125,7 @@ func TestDeviceKeysOverHTTP(t *testing.T) {
 	withTk := map[string]string{"Cookie": admin["Cookie"], "X-Occulite-Confirm": tk}
 	st, out, body = do(t, srv, "GET", dkBase+"/export", "", withTk)
 	keys, _ := out["keys"].([]any)
-	if st != 200 || len(keys) != 2 || !strings.Contains(body, `"payload":"EQ01SG3014F711A0000A1B2C3D4E5FDLKCA477C71EC12F9BDD289046D34012259"`) {
+	if st != 200 || len(keys) != 2 || !strings.Contains(body, `"payload":"EQ01SG3014F711A0000A1B2C3D4E5FDLK0123456789ABCDEFFEDCBA9876543210"`) {
 		t.Fatalf("export: %d %s", st, body)
 	}
 	// nothing is remembered: the same ticket again, or none, asks again
@@ -154,10 +154,10 @@ func TestDeviceKeysOverHTTP(t *testing.T) {
 	}
 
 	// remove one, apply
-	if st, out, _ := do(t, srv, "DELETE", dkBase+"/3014-F711-A000-0EDD-89A8-1DBA", "", admin); st != 200 || out["stored"] != float64(1) {
+	if st, out, _ := do(t, srv, "DELETE", dkBase+"/3014-F711-A000-0E00-0000-0A05", "", admin); st != 200 || out["stored"] != float64(1) {
 		t.Errorf("delete: %d %v", st, out)
 	}
-	if st, _, _ := do(t, srv, "DELETE", dkBase+"/3014F711A0000EDD89A81DBA", "", admin); st != 404 {
+	if st, _, _ := do(t, srv, "DELETE", dkBase+"/3014F711A0000E0000000A05", "", admin); st != 404 {
 		t.Errorf("delete twice: %d", st)
 	}
 	if st, _, _ := do(t, srv, "POST", dkBase+"/apply", "", admin); st != 202 {

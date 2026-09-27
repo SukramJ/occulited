@@ -17,16 +17,16 @@ test('the panels say what each process runs on, and the choices are the detected
     const hmip = page.locator('[data-process="hmipserver"]');
     const rfd = page.locator('[data-process="rfd"]');
     const mmd = page.locator('[data-process="multimacd"]');
-    await expect(hmip.locator('.conn-now')).toHaveText('Automatic: HMIP-RFUSB 1709ADFA5E, shared with BidCos-RF through multimacd');
+    await expect(hmip.locator('.conn-now')).toHaveText('Automatic: HMIP-RFUSB 0000000A02, shared with BidCos-RF through multimacd');
     await expect(hmip).toContainText('HmIP-HAPs and DRAPs can route through this module.');
-    await expect(rfd.locator('.conn-now')).toHaveText('Automatic: HMIP-RFUSB 1709ADFA5E through multimacd + LAN gateways');
+    await expect(rfd.locator('.conn-now')).toHaveText('Automatic: HMIP-RFUSB 0000000A02 through multimacd + LAN gateways');
     // multimacd: the nodes it provides on top, the one it opens at the foot
     await expect(mmd.locator('.conn-mmd-provides dt')).toHaveText(['/dev/mmd_bidcos', '/dev/mmd_hmip']);
     await expect(mmd.locator('.conn-mmd-provides dd')).toHaveText(['↑ rfd (BidCos-RF)', '↑ hmipserver (HmIP-RF)']);
-    await expect(mmd.locator('.conn-mmd-uses')).toHaveText('connected to /dev/raw-uart · HMIP-RFUSB 1709ADFA5E');
+    await expect(mmd.locator('.conn-mmd-uses')).toHaveText('connected to /dev/raw-uart · HMIP-RFUSB 0000000A02');
     // HmIP is never offered as off (D-98); one entry per path; BidCos-RF has "none"
-    await expect(page.getByLabel('Module for HmIP-RF').locator('option')).toHaveText(['Automatic', 'HMIP-RFUSB · 1709ADFA5E · /dev/raw-uart', 'HMIP-RFUSB · 1709ADFA5E · /dev/mmd_hmip through multimacd on /dev/raw-uart']);
-    await expect(page.getByLabel('Module for BidCos-RF').locator('option')).toHaveText(['Automatic', 'HMIP-RFUSB · 1709ADFA5E · /dev/mmd_bidcos through multimacd on /dev/raw-uart', 'No local radio (LAN gateways only)']);
+    await expect(page.getByLabel('Module for HmIP-RF').locator('option')).toHaveText(['Automatic', 'HMIP-RFUSB · 0000000A02 · /dev/raw-uart', 'HMIP-RFUSB · 0000000A02 · /dev/mmd_hmip through multimacd on /dev/raw-uart']);
+    await expect(page.getByLabel('Module for BidCos-RF').locator('option')).toHaveText(['Automatic', 'HMIP-RFUSB · 0000000A02 · /dev/mmd_bidcos through multimacd on /dev/raw-uart', 'No local radio (LAN gateways only)']);
     await expect(page.getByRole('button', {name: 'Apply changes'})).toBeDisabled();
     // the module card names its USB device
     await expect(page.locator('.ol-module-usb').first()).toHaveText('1b1f:c020 · eQ-3 HmIP-RFUSB (Silicon Labs)');
@@ -82,12 +82,12 @@ test('HmIP-direct: the dialog lists the paired BidCos devices, then the change r
     await expect(dialog).toContainText('Change the radio connections?');
     await expect(dialog).toContainText('HmIP-RF: Automatic');
     await expect(dialog).toContainText('BidCos-RF: No local radio (LAN gateways only)');
-    await expect(dialog).toContainText('hmipserver: HMIP-RFUSB 1709ADFA5E, directly on /dev/raw-uart');
+    await expect(dialog).toContainText('hmipserver: HMIP-RFUSB 0000000A02, directly on /dev/raw-uart');
     await expect(dialog).toContainText('multimacd: not needed');
     await expect(dialog).toContainText('multimacd, rfd, hmipserver are stopped and started again');
     await expect(dialog).toContainText('BidCos-RF loses its local radio.');
     await expect(dialog).toContainText('Paired BidCos-RF devices (2):');
-    await expect(dialog).toContainText('JEQ0230153 · HM-CC-TC');
+    await expect(dialog).toContainText('JEQ9000001 · HM-CC-TC');
     // a warning: the cancel button has the focus, cancel sends nothing
     await expect(dialog.getByRole('button', {name: 'Cancel'})).toBeFocused();
     await dialog.getByRole('button', {name: 'Cancel'}).click();
@@ -97,7 +97,7 @@ test('HmIP-direct: the dialog lists the paired BidCos devices, then the change r
     await expect(dialog).toBeHidden();
     expect(puts).toHaveLength(1);
     expect(JSON.parse(puts[0]!)).toEqual({hmip: '', hmip_path: '', bidcos: 'none', confirm: true});
-    await expect(page.locator('[data-process="hmipserver"] .conn-now')).toHaveText('Automatic: HMIP-RFUSB 1709ADFA5E, directly on /dev/raw-uart');
+    await expect(page.locator('[data-process="hmipserver"] .conn-now')).toHaveText('Automatic: HMIP-RFUSB 0000000A02, directly on /dev/raw-uart');
     await expect(page.locator('[data-process="rfd"] .conn-now')).toHaveText('Chosen: LAN gateways');
     await expect(page.locator('[data-process="multimacd"] .conn-now')).toHaveText('not needed');
     await expect(page.locator('.conn-last summary')).toContainText('succeeded');
@@ -126,26 +126,26 @@ test('HmIP through multimacd by choice, and a path the box refuses', async ({pag
     await page.goto('/radio');
     const pick = page.getByLabel('Module for HmIP-RF');
     // directly while BidCos-RF shares the module through multimacd: the box says why not
-    await pick.selectOption('1709ADFA5E|direct');
+    await pick.selectOption('0000000A02|direct');
     await page.getByRole('button', {name: 'Apply changes'}).click();
     // the connections' own error line (the device descriptions below carry an .ol-warn of their own, task 97)
     await expect(page.locator('div.ol-warn')).toContainText('HmIP cannot open the module directly while BidCos-RF uses it through the multiplexer');
     await expect(page.getByRole('dialog')).toBeHidden();
     // BidCos-RF off, HmIP through multimacd
-    await pick.selectOption('1709ADFA5E|multimacd');
+    await pick.selectOption('0000000A02|multimacd');
     await page.getByLabel('Module for BidCos-RF').selectOption('none');
     await page.getByRole('button', {name: 'Apply changes'}).click();
     const dialog = page.getByRole('dialog');
-    await expect(dialog).toContainText('HmIP-RF: HMIP-RFUSB · 1709ADFA5E · /dev/mmd_hmip through multimacd on /dev/raw-uart');
-    await expect(dialog).toContainText('hmipserver: HMIP-RFUSB 1709ADFA5E, through multimacd on /dev/raw-uart');
+    await expect(dialog).toContainText('HmIP-RF: HMIP-RFUSB · 0000000A02 · /dev/mmd_hmip through multimacd on /dev/raw-uart');
+    await expect(dialog).toContainText('hmipserver: HMIP-RFUSB 0000000A02, through multimacd on /dev/raw-uart');
     await expect(dialog).toContainText('multimacd: runs on /dev/raw-uart');
     await dialog.getByRole('button', {name: 'Change'}).click();
     await expect(dialog).toBeHidden();
-    expect(JSON.parse(puts[0]!)).toEqual({hmip: '1709ADFA5E', hmip_path: 'multimacd', bidcos: 'none', confirm: true});
+    expect(JSON.parse(puts[0]!)).toEqual({hmip: '0000000A02', hmip_path: 'multimacd', bidcos: 'none', confirm: true});
     const mmd = page.locator('[data-process="multimacd"]');
     await expect(mmd.locator('.conn-mmd-provides dd')).toHaveText(['not used', '↑ hmipserver (HmIP-RF)']);
-    await expect(page.locator('[data-process="hmipserver"] .conn-now')).toHaveText('Chosen: HMIP-RFUSB 1709ADFA5E, through multimacd on /dev/raw-uart');
-    await expect(pick).toHaveValue('1709ADFA5E|multimacd');
+    await expect(page.locator('[data-process="hmipserver"] .conn-now')).toHaveText('Chosen: HMIP-RFUSB 0000000A02, through multimacd on /dev/raw-uart');
+    await expect(pick).toHaveValue('0000000A02|multimacd');
 });
 
 test('a pinned module that is missing is named on the Interfaces and the Status page', async ({page, baseURL}) => {
@@ -197,8 +197,8 @@ test('the module was refused: the fresh start asks for the host name, moves the 
     await page.goto('/radio');
     const notice = page.locator('[data-notice="hmip-fatal"]');
     await expect(notice).toHaveAttribute('data-cause', 'refused');
-    await expect(notice).toContainText("eQ-3's key server does not know the module 3014F711A000041709ADFA5E");
-    await expect(notice).toContainText('The network belongs to the previous module 3014F711A0001F5F298D97AF.');
+    await expect(notice).toContainText("eQ-3's key server does not know the module 3014F711A000040000000A02");
+    await expect(notice).toContainText('The network belongs to the previous module 3014F711A0001F0000000A04.');
     await expect(notice).toContainText('put the previous module back, or start fresh with this module');
     await expect(notice).not.toContainText('Try again');
     const local = notice.getByLabel(/Switch to local key mode in the same step/);
@@ -206,7 +206,7 @@ test('the module was refused: the fresh start asks for the host name, moves the 
     await notice.getByRole('button', {name: 'Start fresh with this module…'}).click();
     const dialog = page.getByRole('dialog');
     await expect(dialog).toContainText('Start fresh with this module?');
-    await expect(dialog).toContainText('The HmIP identity of the previous module 3014F711A0001F5F298D97AF is moved aside and kept, nothing is deleted.');
+    await expect(dialog).toContainText('The HmIP identity of the previous module 3014F711A0001F0000000A04 is moved aside and kept, nothing is deleted.');
     await expect(dialog).toContainText('every HmIP device has to be reset and paired again');
     await expect(dialog).toContainText('Local key mode is switched on in the same step');
     await expect(dialog).toContainText('Type the host name lab-ccu to confirm.');
@@ -228,7 +228,7 @@ test('the module was refused: the fresh start asks for the host name, moves the 
     await expect(page).toHaveURL(/\/system\/keys#device-keys$/);
     // the Keys page: local key mode on, and the previous module's identity kept as a fresh-start snapshot
     await expect(page.locator('[data-state="on"]')).toContainText('the HmIP network key is kept on this system');
-    const snap = page.locator('.lk-snapshots li[data-sgtin="3014F711A0001F5F298D97AF"]');
+    const snap = page.locator('.lk-snapshots li[data-sgtin="3014F711A0001F0000000A04"]');
     await expect(snap).toHaveAttribute('data-kind', 'fresh-start');
     await expect(snap).toContainText('the previous module, moved aside by the fresh start');
 });
@@ -254,7 +254,7 @@ test('the fresh start without local key mode, and a marker from before the cause
     await page.context().addCookies([{name: 'stub-conn', value: `${id}-2`, url: baseURL!}, {name: 'stub-conn-fatal', value: 'plain', url: baseURL!}]);
     await page.goto('/radio');
     await expect(notice).toHaveAttribute('data-cause', 'unknown');
-    await expect(notice).toContainText("eQ-3's key server rejected the adapter exchange to 3014F711A000041709ADFA5E");
+    await expect(notice).toContainText("eQ-3's key server rejected the adapter exchange to 3014F711A000040000000A02");
     await expect(notice.getByRole('button')).toHaveCount(0);
 });
 

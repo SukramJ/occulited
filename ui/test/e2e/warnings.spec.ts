@@ -203,7 +203,7 @@ test('classic RPC without a login: the warning and its link', async ({page, base
 // the system's key list is wrong. Until this, such a device simply never appeared and nothing said
 // why. The warning names the device and its button goes to the key list.
 test('a declined pairing names the device, marks the System tab and leads to the device keys', async ({page, baseURL}, info) => {
-    const sgtin = '3014F711A0001F5F298D97AF';
+    const sgtin = '3014F711A0001F0000000A04';
     await plant(page, baseURL!, info, {'stub-declined': sgtin});
     await page.goto('/');
     const notice = page.locator('[data-warnings] [data-notice="hmip-key-declined"]');
@@ -226,7 +226,7 @@ test('a declined pairing names the device, marks the System tab and leads to the
 });
 
 test('in German the declined pairing is translated', async ({page, baseURL}, info) => {
-    const sgtin = '3014F711A0001F5F298D97AF';
+    const sgtin = '3014F711A0001F0000000A04';
     await page.addInitScript(() => localStorage.setItem('ol.language', 'de'));
     await plant(page, baseURL!, info, {'stub-declined': sgtin});
     await page.goto('/');

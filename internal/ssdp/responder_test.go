@@ -248,10 +248,10 @@ func TestResponderFollowsTheIdentity(t *testing.T) {
 	// the detection writes the serial inside the hold: the first alive already carries it
 	time.Sleep(100 * time.Millisecond)
 	mu.Lock()
-	serial, settled = "3014F711A000041709ADFA5E", true
+	serial, settled = "3014F711A000040000000A02", true
 	mu.Unlock()
 	first := read(t, client)
-	if !strings.Contains(first, "NTS: ssdp:alive") || !strings.Contains(first, "USN: uuid:upnp-BasicDevice-1_0-3014F711A000041709ADFA5E::upnp:rootdevice") {
+	if !strings.Contains(first, "NTS: ssdp:alive") || !strings.Contains(first, "USN: uuid:upnp-BasicDevice-1_0-3014F711A000040000000A02::upnp:rootdevice") {
 		t.Fatalf("the first alive must carry the settled identity:\n%s", first)
 	}
 	if time.Since(start) > 350*time.Millisecond {
@@ -266,14 +266,14 @@ func TestResponderFollowsTheIdentity(t *testing.T) {
 
 	// the identity changes later (a serial that appears after the hold): byebye for the old, alive for the new
 	mu.Lock()
-	serial = "JEQ0534849"
+	serial = "JEQ9000002"
 	mu.Unlock()
 	bye := read(t, client)
-	if !strings.Contains(bye, "NTS: ssdp:byebye") || !strings.Contains(bye, "USN: uuid:upnp-BasicDevice-1_0-3014F711A000041709ADFA5E::upnp:rootdevice") {
+	if !strings.Contains(bye, "NTS: ssdp:byebye") || !strings.Contains(bye, "USN: uuid:upnp-BasicDevice-1_0-3014F711A000040000000A02::upnp:rootdevice") {
 		t.Fatalf("the old identity must be taken back:\n%s", bye)
 	}
 	alive := read(t, client)
-	if !strings.Contains(alive, "NTS: ssdp:alive") || !strings.Contains(alive, "USN: uuid:upnp-BasicDevice-1_0-JEQ0534849::upnp:rootdevice") || !strings.Contains(alive, "LOCATION: http://192.168.1.5"+DescriptionPath) {
+	if !strings.Contains(alive, "NTS: ssdp:alive") || !strings.Contains(alive, "USN: uuid:upnp-BasicDevice-1_0-JEQ9000002::upnp:rootdevice") || !strings.Contains(alive, "LOCATION: http://192.168.1.5"+DescriptionPath) {
 		t.Fatalf("the new identity must be announced:\n%s", alive)
 	}
 	// and nothing more while it stays
@@ -318,8 +318,8 @@ func TestIdentitySettled(t *testing.T) {
 	if id.Settled() {
 		t.Fatal("settled without a file")
 	}
-	writeVar(t, root, "var/board_serial", "JEQ0534849\n")
-	if !id.Settled() || id.Serial() != "JEQ0534849" {
+	writeVar(t, root, "var/board_serial", "JEQ9000002\n")
+	if !id.Settled() || id.Serial() != "JEQ9000002" {
 		t.Fatalf("settled=%v serial=%q", id.Settled(), id.Serial())
 	}
 }

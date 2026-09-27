@@ -35,7 +35,7 @@ func (f *fakeLAN) Scan(context.Context) ([]eq3disc.Found, error) {
 	defer f.mu.Unlock()
 	f.scans++
 	out := []eq3disc.Found{}
-	for _, s := range []string{"LEQ0636432", "30150377DC0003DB3393B323", "4118f6a32"} {
+	for _, s := range []string{"LEQ9000004", "30150377DC00030000000A13", "4110000a1"} {
 		out = append(out, *f.devices[s])
 	}
 	return out, nil
@@ -90,7 +90,7 @@ func lanRig(t *testing.T) (*fakeLAN, *restarts, func(role auth.Role, method, pat
 	t.Helper()
 	root := fakeRoot(t)
 	_ = os.MkdirAll(filepath.Join(string(root), "etc/config"), 0o755)
-	_ = os.WriteFile(filepath.Join(string(root), "etc/config/hs485d.conf"), []byte("[Interface 0]\nType = HMWLGW\nName = Wired\nSerial Number = LEQ0636432\nEncryption Key = gwkey123\nIP Address = 192.0.2.116\n\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(string(root), "etc/config/hs485d.conf"), []byte("[Interface 0]\nType = HMWLGW\nName = Wired\nSerial Number = LEQ9000004\nEncryption Key = gwkey123\nIP Address = 192.0.2.116\n\n"), 0o644)
 	cfg := func(ip string, dhcp bool) *eq3disc.Config {
 		return &eq3disc.Config{Addresses: eq3disc.Addresses{IP: ip, Gateway: "192.168.1.1", Netmask: "255.255.255.0"}, DHCP: dhcp, AutoIP: true, Crypt: 1, Name: "n"}
 	}
@@ -98,9 +98,9 @@ func lanRig(t *testing.T) (*fakeLAN, *restarts, func(role auth.Role, method, pat
 		return &eq3disc.Addresses{IP: ip, Gateway: "192.0.2.1", Netmask: "255.255.255.0"}
 	}
 	f := &fakeLAN{devices: map[string]*eq3disc.Found{
-		"LEQ0636432":               {Type: "eQ3-HMW-LGW-App", Serial: "LEQ0636432", IP: "192.0.2.116", ProtocolVersion: 2, Runtime: run("192.0.2.116"), Config: cfg("192.168.1.223", true)},
-		"30150377DC0003DB3393B323": {Type: "eQ3-HMIP-HAP-App", Serial: "30150377DC0003DB3393B323", IP: "192.0.2.155", ProtocolVersion: 4, Runtime: run("192.0.2.155"), Config: cfg("192.168.1.224", true)},
-		"4118f6a32":                {Type: "eQ3-HmIP-CCU3-App", Serial: "4118f6a32", IP: "192.0.2.230", ProtocolVersion: 2},
+		"LEQ9000004":               {Type: "eQ3-HMW-LGW-App", Serial: "LEQ9000004", IP: "192.0.2.116", ProtocolVersion: 2, Runtime: run("192.0.2.116"), Config: cfg("192.168.1.223", true)},
+		"30150377DC00030000000A13": {Type: "eQ3-HMIP-HAP-App", Serial: "30150377DC00030000000A13", IP: "192.0.2.155", ProtocolVersion: 4, Runtime: run("192.0.2.155"), Config: cfg("192.168.1.224", true)},
+		"4110000a1":                {Type: "eQ3-HmIP-CCU3-App", Serial: "4110000a1", IP: "192.0.2.230", ProtocolVersion: 2},
 	}}
 	svc := &restarts{}
 	inUse := map[string]bool{"192.0.2.50": true}
@@ -186,11 +186,11 @@ func jsonOf(v any) string {
 
 func TestLANDevicesNetwork(t *testing.T) {
 	f, svc, do, root := lanRig(t)
-	hap := "/radio/lan-devices/30150377DC0003DB3393B323/network"
+	hap := "/radio/lan-devices/30150377DC00030000000A13/network"
 	static := `{"dhcp":false,"ip":"192.0.2.160","netmask":"255.255.255.0","gateway":"192.0.2.1","dns1":"192.0.2.1","password":"stickerpw"}`
 
 	// a user's session lacks system:write: the middleware refuses it (TestRouteTable)
-	if st, out := do(auth.RoleAdmin, "POST", "/radio/lan-devices/4118f6a32/network", `{"dhcp":true}`); st != 403 || out["error"] != "not-writable" {
+	if st, out := do(auth.RoleAdmin, "POST", "/radio/lan-devices/4110000a1/network", `{"dhcp":true}`); st != 403 || out["error"] != "not-writable" {
 		t.Errorf("another CCU: %d %v", st, out)
 	}
 	if st, _ := do(auth.RoleAdmin, "POST", "/radio/lan-devices/NOPE/network", `{"dhcp":true}`); st != 404 {
@@ -236,13 +236,13 @@ func TestLANDevicesNetwork(t *testing.T) {
 		t.Errorf("%+v %v %v", f.set[0], f.passwords, f.to)
 	}
 	// the other subnet, confirmed: sent by broadcast, since it may not be reachable any more
-	f.devices["30150377DC0003DB3393B323"].IP = "10.1.2.3"
+	f.devices["30150377DC00030000000A13"].IP = "10.1.2.3"
 	if st, out := do(auth.RoleAdmin, "POST", hap, `{"dhcp":true,"password":"stickerpw"}`); st != 200 || f.to[1].String() != "255.255.255.255" || !f.set[1].DHCP {
 		t.Errorf("back to DHCP from another subnet: %d %v %v", st, out, f.to)
 	}
 
 	// the configured gateway: its key from hs485d.conf, the file follows the new address, hs485d restarts
-	st, out = do(auth.RoleAdmin, "POST", "/radio/lan-devices/LEQ0636432/network", `{"ip":"192.0.2.117","netmask":"255.255.255.0","gateway":"192.0.2.1"}`)
+	st, out = do(auth.RoleAdmin, "POST", "/radio/lan-devices/LEQ9000004/network", `{"ip":"192.0.2.117","netmask":"255.255.255.0","gateway":"192.0.2.1"}`)
 	if st != 200 || out["gateway_file"] != true || out["restarted"] != "hs485d" {
 		t.Fatalf("%d %v", st, out)
 	}
@@ -266,7 +266,7 @@ func TestLANDevicesNetwork(t *testing.T) {
 	}
 	// a device that takes the addresses but keeps DHCP on: said, not claimed as done
 	f.keepDHCP = true
-	f.devices["30150377DC0003DB3393B323"].IP = "192.0.2.155"
+	f.devices["30150377DC00030000000A13"].IP = "192.0.2.155"
 	if st, out := do(auth.RoleAdmin, "POST", hap, static); st != 200 || jsonOf(out["differs"]) != `["dhcp"]` {
 		t.Errorf("kept DHCP: %d %v", st, out)
 	}

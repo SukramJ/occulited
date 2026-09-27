@@ -6,7 +6,7 @@ import "testing"
 // included. The Java file's "\:" is what java.util.Properties writes and is the whole reason
 // LegacyService needs its own parser.
 const (
-	rfdHandlers = "http://127.0.0.1:2048\tnr_D24DjW_BidCos-RF\n" +
+	rfdHandlers = "http://127.0.0.1:2048\tnr_Ab1Cd2_BidCos-RF\n" +
 		"http://127.0.0.1:39292/bidcos\tBidCos-RF_java\n" +
 		"http://198.51.100.9:2049\tmb_BidCos_RF\n" +
 		"xmlrpc_bin://127.0.0.1:31999\t1007\n"
@@ -16,7 +16,7 @@ const (
 		"18732=http\\://127.0.0.1\\:31999\n" +
 		"HmIP-RF_java=http\\://127.0.0.1\\:39292/bidcos\n" +
 		"mb_HmIP_RF=http\\://198.51.100.9\\:2049\n" +
-		"nr_D24DjW_HmIP-RF=http\\://127.0.0.1\\:2048\n"
+		"nr_Ab1Cd2_HmIP-RF=http\\://127.0.0.1\\:2048\n"
 )
 
 func TestParsePlainHandlers(t *testing.T) {

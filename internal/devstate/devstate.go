@@ -45,7 +45,7 @@ const (
 // Entry is one datapoint as the API answers it.
 type Entry struct {
 	Interface string `json:"interface"`
-	Address   string `json:"address"` // the channel: 000193C9951175:1
+	Address   string `json:"address"` // the channel: 00010000000A10:1
 	Datapoint string `json:"datapoint"`
 	Value     any    `json:"value"`
 	// TS is when the last report arrived, the same value or not; LC when the value last became

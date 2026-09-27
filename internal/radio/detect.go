@@ -547,7 +547,7 @@ func (d Detector) probe(ctx context.Context, m *Module, limit time.Duration, log
 	m.Serial, m.SGTIN, m.HmRFAddress, m.HmIPAddress, m.Version = f[1], f[2], f[3], f[4], f[5]
 	// deviation 16 (maintainer, 2026-09-18): a module without a serial takes the SGTIN's last ten
 	// characters, the serial every other module reports as that tail (the RPI-RF-MOD's
-	// ...58A9A728D4, the TK's ...1D899272DB); upstream uses such a module for nothing. It is an
+	// ...0000000A03, the TK's ...0000000A09); upstream uses such a module for nothing. It is an
 	// HmIP-only stick, like the TK
 	if m.Serial == "" && len(m.SGTIN) >= 10 {
 		m.Serial, m.SerialFromSGTIN = m.SGTIN[len(m.SGTIN)-10:], true

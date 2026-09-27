@@ -14,7 +14,7 @@ func rig(t *testing.T) (*hmgroupstest.Fake, *Client) {
 	s := NewSession()
 	f := hmgroupstest.New(s.SID())
 	t.Cleanup(f.Close)
-	f.Devices = []hmgroupstest.Device{{ID: "KEQ0165114", Serial: "KEQ0165114", Type: "HM-Sec-SC"}, {ID: "000193C9951175:1", Serial: "000193C9951175:1", Type: "HmIP-eTRV"}}
+	f.Devices = []hmgroupstest.Device{{ID: "KEQ9000003", Serial: "KEQ9000003", Type: "HM-Sec-SC"}, {ID: "00010000000A10:1", Serial: "00010000000A10:1", Type: "HmIP-eTRV"}}
 	return f, &Client{Base: f.URL() + "/", Session: s}
 }
 
@@ -43,10 +43,10 @@ func TestRoundTrip(t *testing.T) {
 		t.Fatalf("create: %v %+v", err, ev)
 	}
 	assignable, leftover, err := c.SuitableMembers(ctx, "HomeMatic.heating")
-	if err != nil || len(assignable) != 2 || len(leftover) != 0 || assignable[0].Serial != "KEQ0165114" {
+	if err != nil || len(assignable) != 2 || len(leftover) != 0 || assignable[0].Serial != "KEQ9000003" {
 		t.Fatalf("suitable: %v %+v %+v", err, assignable, leftover)
 	}
-	res, err := c.Save(ctx, SaveBody{ID: ev.ID, Name: "Bad äöü/1", TypeID: "HomeMatic.heating", MemberIDs: []string{"KEQ0165114"}, IsNew: true, GroupDeviceName: "Bad INT0000001"})
+	res, err := c.Save(ctx, SaveBody{ID: ev.ID, Name: "Bad äöü/1", TypeID: "HomeMatic.heating", MemberIDs: []string{"KEQ9000003"}, IsNew: true, GroupDeviceName: "Bad INT0000001"})
 	if err != nil || res.ID != 1 {
 		t.Fatalf("save: %v %+v", err, res)
 	}
@@ -62,7 +62,7 @@ func TestRoundTrip(t *testing.T) {
 		t.Fatalf("edit: %v %+v", err, ev)
 	}
 	// the second device fits a second group; after that it is nobody's assignable
-	res, err = c.Save(ctx, SaveBody{ID: 0, Name: "Two", TypeID: "HomeMatic.heating", MemberIDs: []string{"000193C9951175:1"}, IsNew: true})
+	res, err = c.Save(ctx, SaveBody{ID: 0, Name: "Two", TypeID: "HomeMatic.heating", MemberIDs: []string{"00010000000A10:1"}, IsNew: true})
 	if err != nil || res.ID != 2 {
 		t.Fatalf("save 2: %v %+v", err, res)
 	}
@@ -74,7 +74,7 @@ func TestRoundTrip(t *testing.T) {
 	if err != nil || len(lv.Groups) != 2 || lv.Groups[1].Name != "Two" || lv.Groups[0].TypeLabel != "Heating_Control" {
 		t.Fatalf("list: %v %+v", err, lv)
 	}
-	f.Pending[Serial(1)] = []hmgroupstest.Device{{ID: "KEQ0165114", Serial: "KEQ0165114", Type: "HM-Sec-SC"}}
+	f.Pending[Serial(1)] = []hmgroupstest.Device{{ID: "KEQ9000003", Serial: "KEQ9000003", Type: "HM-Sec-SC"}}
 	pending, err := c.ConfigureDevices(ctx, Serial(1))
 	if err != nil || len(pending) != 1 || pending[0].Type != "HM-Sec-SC" {
 		t.Fatalf("configure: %v %+v", err, pending)
@@ -83,7 +83,7 @@ func TestRoundTrip(t *testing.T) {
 		t.Fatalf("configure 2: %v %+v", err, pending)
 	}
 	former, err := c.Delete(ctx, 1)
-	if err != nil || len(former) != 1 || former[0].Serial != "KEQ0165114" || former[0].Type != "HM-Sec-SC" {
+	if err != nil || len(former) != 1 || former[0].Serial != "KEQ9000003" || former[0].Type != "HM-Sec-SC" {
 		t.Fatalf("delete: %v %+v", err, former)
 	}
 	if _, err := c.Delete(ctx, 1); err == nil || !strings.Contains(err.Error(), "code 1") {

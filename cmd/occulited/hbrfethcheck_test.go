@@ -16,9 +16,9 @@ import (
 // the lab system's plan with the HB-RF-ETH as its only radio (.116, 2026-09-25)
 func boardPlan() radio.Plan {
 	on := func(addr string) *radio.Role {
-		return &radio.Role{Hardware: "HM-MOD-RPI-PCB", Node: "/dev/raw-uart1", DeviceType: "HB-RF-ETH@192.0.2.209", Address: addr, Serial: "MEQ0835626", SGTIN: "3014F711A061A7D3C996282A"}
+		return &radio.Role{Hardware: "HM-MOD-RPI-PCB", Node: "/dev/raw-uart1", DeviceType: "HB-RF-ETH@192.0.2.209", Address: addr, Serial: "MEQ9000005", SGTIN: "3014F711A061A70000000A06"}
 	}
-	return radio.Plan{HmRF: on("0x3D1BAE"), HmIP: on("0xB4C139"), HmIPServerHmIP: true,
+	return radio.Plan{HmRF: on("0x3D0A01"), HmIP: on("0xB40A03"), HmIPServerHmIP: true,
 		Multimacd: radio.Daemon{Run: true, Node: "/dev/raw-uart1"}, RFD: radio.Daemon{Run: true}, HmIPServer: radio.Daemon{Run: true}}
 }
 
@@ -29,7 +29,7 @@ func TestOnHBRFETH(t *testing.T) {
 	}
 	// HmIP on a USB stick beside it: only BidCos-RF is the board's; multimacd's node is the board's
 	p := boardPlan()
-	p.HmIP = &radio.Role{Node: "/dev/raw-uart", DeviceType: "eQ-3 HmIP-RFUSB@usb-1", SGTIN: "3014F711A000041709ADFA5E"}
+	p.HmIP = &radio.Role{Node: "/dev/raw-uart", DeviceType: "eQ-3 HmIP-RFUSB@usb-1", SGTIN: "3014F711A000040000000A02"}
 	if hmrf, hmip, d := p.OnHBRFETH(); hmrf == nil || hmip != nil || strings.Join(d, ",") != "multimacd,rfd" {
 		t.Errorf("mixed: %v %v %v", hmrf, hmip, d)
 	}
@@ -42,18 +42,18 @@ func TestOnHBRFETH(t *testing.T) {
 func TestBoardHealth(t *testing.T) {
 	p := boardPlan()
 	good := []interfaces.RadioInterface{
-		{Interface: "BidCos-RF", Address: "MEQ0835626", Connected: true, Default: true},
-		{Interface: "HmIP-RF", Address: "3014F711A061A7D3C996282A", Connected: true, Default: true},
+		{Interface: "BidCos-RF", Address: "MEQ9000005", Connected: true, Default: true},
+		{Interface: "HmIP-RF", Address: "3014F711A061A70000000A06", Connected: true, Default: true},
 	}
 	if ok, why, err := boardHealth(p, good, nil); !ok || why != "" || err != nil {
 		t.Errorf("good: %v %q %v", ok, why, err)
 	}
 	bad := append([]interfaces.RadioInterface(nil), good...)
 	bad[0].Connected = false
-	if ok, why, _ := boardHealth(p, bad, nil); ok || !strings.Contains(why, "BidCos-RF: MEQ0835626 not connected") {
+	if ok, why, _ := boardHealth(p, bad, nil); ok || !strings.Contains(why, "BidCos-RF: MEQ9000005 not connected") {
 		t.Errorf("rfd without its module: %v %q", ok, why)
 	}
-	if ok, why, _ := boardHealth(p, good[:1], nil); ok || !strings.Contains(why, "HmIP-RF: the module 3014F711A061A7D3C996282A is not listed") {
+	if ok, why, _ := boardHealth(p, good[:1], nil); ok || !strings.Contains(why, "HmIP-RF: the module 3014F711A061A70000000A06 is not listed") {
 		t.Errorf("hmipserver without its module: %v %q", ok, why)
 	}
 	if _, _, err := boardHealth(p, nil, map[string]error{"BidCos-RF": errors.New("no answer within 5s")}); err == nil {

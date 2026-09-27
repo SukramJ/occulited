@@ -3,7 +3,7 @@ import {clientKind, processAddress, processOrder} from './subscribers';
 
 describe('the subscriber rows', () => {
     it.each([
-        ['nr_D24DjW_HmIP-RF', 'node-red'],
+        ['nr_Ab1Cd2_HmIP-RF', 'node-red'],
         ['hmm_VirtualDevices', 'hmm'],
         ['BidCos-RF_java', 'java'],
         ['1007', 'rega'],

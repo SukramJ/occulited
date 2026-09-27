@@ -45,7 +45,7 @@ A `ref` identifies a device or a channel: `<interface>.<address>`.
 - The separator is the first `.`; everything after it is the address.
 - Refs are case-sensitive and compared byte-wise.
 
-Examples: `BidCos-RF.JEQ0230153`, `BidCos-RF.JEQ0230153:1`, `HmIP-RF.000A1B2C3D4E5F:4`.
+Examples: `BidCos-RF.JEQ9000001`, `BidCos-RF.JEQ9000001:1`, `HmIP-RF.000A1B2C3D4E5F:4`.
 
 ## Objects
 

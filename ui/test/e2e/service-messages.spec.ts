@@ -10,7 +10,7 @@ test('the Status page lists the service messages with the device name and since 
     await expect(h).toContainText('Service messages');
     await expect(h.locator('.sm-count')).toHaveAttribute('data-count', '2');
     const card = page.locator('[data-service-messages="2"]');
-    const wrc2 = card.locator('[data-message="000193C9951175:0:LOW_BAT"]');
+    const wrc2 = card.locator('[data-message="00010000000A10:0:LOW_BAT"]');
     // the name from the metadata store, the room, the message in words, and "at least since" for
     // one that was already active when the system looked
     await expect(wrc2.locator('.sm-device')).toContainText('Wandtaster Flur');
@@ -18,8 +18,8 @@ test('the Status page lists the service messages with the device name and since 
     await expect(wrc2.locator('.sm-text')).toHaveText('Low battery');
     await expect(wrc2.locator('.sm-meta')).toContainText('at least since');
     // a device without an object: the CCU's default name, and "since" for one seen happening
-    const tc = card.locator('[data-message="JEQ0230153:0:UNREACH"]');
-    await expect(tc.locator('.sm-device')).toHaveText('HM-CC-TC JEQ0230153');
+    const tc = card.locator('[data-message="JEQ9000001:0:UNREACH"]');
+    await expect(tc.locator('.sm-device')).toHaveText('HM-CC-TC JEQ9000001');
     await expect(tc.locator('.sm-text')).toHaveText('Communication disturbed');
     await expect(tc.locator('.sm-meta')).toContainText('since');
     await expect(tc.locator('.sm-meta')).not.toContainText('at least');
@@ -43,7 +43,7 @@ test('the Interfaces page marks the system\'s own subscriber and says when each 
     await expect(own.locator('.ol-badge')).toHaveText('own');
     // no removal for the system's own registration; the others keep theirs
     await expect(own.getByRole('button', {name: 'Remove subscription'})).toHaveCount(0);
-    await expect(hmip.locator('.ol-sub', {hasText: 'nr_D24DjW_HmIP-RF'}).getByRole('button', {name: 'Remove subscription'})).toHaveCount(1);
+    await expect(hmip.locator('.ol-sub', {hasText: 'nr_Ab1Cd2_HmIP-RF'}).getByRole('button', {name: 'Remove subscription'})).toHaveCount(1);
     // the liveness from the RPC process
     await expect(page.locator('[data-last-event="BidCos-RF"]')).toContainText('last event');
     await expect(page.locator('[data-last-event="VirtualDevices"]')).toHaveCount(0); // never spoke

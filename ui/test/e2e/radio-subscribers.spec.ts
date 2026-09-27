@@ -58,7 +58,7 @@ test('the Interfaces page lists the clients on this system, after the connection
     expect(after).toBe(true);
     const rf = page.locator('.ol-process[data-interface="BidCos-RF"]');
     await expect(rf.locator('.ol-sub-count')).toHaveText('3 subscribers');
-    await expect(rf.locator('li.ol-sub', {hasText: 'nr_D24DjW_BidCos-RF'})).toContainText('node-red-contrib-ccu');
+    await expect(rf.locator('li.ol-sub', {hasText: 'nr_Ab1Cd2_BidCos-RF'})).toContainText('node-red-contrib-ccu');
     await expect(rf.locator('li.ol-sub', {hasText: '1007'})).toContainText('ReGa');
     await expect(rf.locator('li.ol-sub', {hasText: 'BidCos-RF_java'})).toContainText('hmipserver');
     await expect(rf.locator('li.ol-sub', {hasText: 'mb_BidCos_RF'})).toHaveCount(0);
@@ -130,7 +130,7 @@ test('the dialog explains, Escape cancels, Remove calls the route and the row go
         await route.fulfill({json: {removed: true, subscribers: [
             {id: '1007', url: 'xmlrpc_bin://127.0.0.1:31999', local: true},
             {id: 'BidCos-RF_java', url: 'http://127.0.0.1:39292/bidcos', local: true},
-            {id: 'nr_D24DjW_BidCos-RF', url: 'http://127.0.0.1:2048', local: true},
+            {id: 'nr_Ab1Cd2_BidCos-RF', url: 'http://127.0.0.1:2048', local: true},
         ]}});
     });
     await classicOn(page);

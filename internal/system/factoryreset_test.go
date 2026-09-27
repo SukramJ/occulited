@@ -46,15 +46,15 @@ func xmlrpcURL(srv *httptest.Server) string {
 func TestCountPaired(t *testing.T) {
 	rfd := listDevicesServer(t, [][3]string{
 		{"BidCoS-RF", "HM-RCV-50 BidCoS-RF", ""}, {"BidCoS-RF:1", "VIRTUAL_KEY", "BidCoS-RF"},
-		{"JEQ0230153", "HM-CC-TC", ""}, {"JEQ0230153:1", "WEATHER", "JEQ0230153"},
-		{"KEQ0165114", "HM-Sec-SC", ""}, {"KEQ0165114:1", "SHUTTER_CONTACT", "KEQ0165114"},
+		{"JEQ9000001", "HM-CC-TC", ""}, {"JEQ9000001:1", "WEATHER", "JEQ9000001"},
+		{"KEQ9000003", "HM-Sec-SC", ""}, {"KEQ9000003:1", "SHUTTER_CONTACT", "KEQ9000003"},
 	})
 	defer rfd.Close()
 	hmip := listDevicesServer(t, [][3]string{
-		{"3014F711A000041709ADFA5B", "HmIP-RFUSB", ""}, {"3014F711A000041709ADFA5B:0", "MAINTENANCE", "3014F711A000041709ADFA5B"},
+		{"3014F711A000040000000A01", "HmIP-RFUSB", ""}, {"3014F711A000040000000A01:0", "MAINTENANCE", "3014F711A000040000000A01"},
 		{"000A1B2C3D4E5F", "HmIP-PDT", ""}, {"000A1B2C3D4E5F:0", "MAINTENANCE", "000A1B2C3D4E5F"},
-		{"001618A99C5F30", "HmIPW-DRS8", ""},
-		{"00041709ADFA5B", "HmIP-RCV-50", ""},
+		{"00160000000A12", "HmIPW-DRS8", ""},
+		{"00040000000A01", "HmIP-RCV-50", ""},
 	})
 	defer hmip.Close()
 	dead := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))

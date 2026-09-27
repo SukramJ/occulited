@@ -4,13 +4,13 @@ import "testing"
 
 // Task 201: the decline hmipserver writes when a device's key in the map is not that device's.
 func TestInclusionDeclinedSGTIN(t *testing.T) {
-	const sgtin = "3014F711A0001F5F298D97AF"
+	const sgtin = "3014F711A0001F0000000A04"
 	cases := []struct {
 		name, line, want string
 	}{
-		{"the decline", "AP 3014F711A000041709ADFA5B: The inclusion for device " + sgtin + " is declined, the local key is wrong", sgtin},
+		{"the decline", "AP 3014F711A000040000000A01: The inclusion for device " + sgtin + " is declined, the local key is wrong", sgtin},
 		{"with a journal prefix", "Sep 22 20:01:02 lab hmipserver[812]: AP 30: The inclusion for device " + sgtin + " is declined, the local key is wrong", sgtin},
-		{"lower case in the log", "AP 30: The inclusion for device " + "3014f711a0001f5f298d97af" + " is declined, the local key is wrong", sgtin},
+		{"lower case in the log", "AP 30: The inclusion for device " + "3014f711a0001f0000000a04" + " is declined, the local key is wrong", sgtin},
 		// the neighbouring lines about the same map are not a failed pairing
 		{"the key was taken from the map", "AP 30: Add local key of device " + sgtin + " for inclusion from map to whitelist", ""},
 		{"a map entry of the wrong length", "AP 30: Invalid local key (size) of device " + sgtin + " in local key map", ""},
@@ -30,7 +30,7 @@ func TestInclusionDeclinedSGTIN(t *testing.T) {
 // The substring journalctl pre-filters on must be in a line the matcher then accepts, or the
 // two would disagree and the warning would never be raised.
 func TestInclusionDeclinedMatchIsInTheLine(t *testing.T) {
-	line := "AP 30: The inclusion for device 3014F711A0001F5F298D97AF is declined, the local key is wrong"
+	line := "AP 30: The inclusion for device 3014F711A0001F0000000A04 is declined, the local key is wrong"
 	if got := InclusionDeclinedSGTIN(line); got == "" {
 		t.Fatal("the matcher does not accept the line the constant filters for")
 	}

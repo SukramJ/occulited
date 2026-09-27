@@ -9,7 +9,7 @@ import (
 // id and counter, type `eQ3-*`, serial `*`, opcode `I`.
 var probe = append([]byte{0x02, 0x8f, 0x91, 0xc0, 0x01}, []byte("eQ3-*\x00*\x00I")...)
 
-var box = Device{Serial: "3014F711A0001F58A9A728D4", Version: "1.0.0-dev.19"}
+var box = Device{Serial: "3014F711A0001F0000000A03", Version: "1.0.0-dev.19"}
 
 func TestParseRequest(t *testing.T) {
 	r, ok := ParseRequest(probe)
@@ -165,7 +165,7 @@ func TestSerialFunc(t *testing.T) {
 	if got := d.Answer(r); !bytes.Contains(got, []byte("\x00ccu-vm-1\x00>I")) {
 		t.Fatalf("before: %q", got)
 	}
-	serial = "3014F711A000041709ADFA5E"
+	serial = "3014F711A000040000000A02"
 	if got := d.Answer(r); !bytes.Contains(got, []byte("\x00"+serial+"\x00>I")) {
 		t.Fatalf("after: %q", got)
 	}

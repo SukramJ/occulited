@@ -386,8 +386,8 @@ func SampleInterfaces(ctx context.Context, ifs []Interface, timeout time.Duratio
 	return out, answered, errs
 }
 
-// A listBidcosInterfaces ADDRESS is the module's SGTIN (3014F711A000041709ADFA5B), its device in
-// listDevices the SGTIN's last 14 digits, 00041709ADFA5B (SUBTYPE CCU) - measured on the
+// A listBidcosInterfaces ADDRESS is the module's SGTIN (3014F711A000040000000A01), its device in
+// listDevices the SGTIN's last 14 digits, 00040000000A01 (SUBTYPE CCU) - measured on the
 // HmIP-RFUSB and the RPI-RF-MOD. The first ten digits are the SGTIN-96 header, filter, partition
 // and the GS1 company prefix, which is not always eQ-3's 3014F711A0: the SilverCrest HmIP-HAP-B1
 // is 30150377DC... (TARGA's prefix, openccu-lite task 217), so the rule is the SGTIN-96 shape,

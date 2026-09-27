@@ -37,7 +37,7 @@ func (f *fakeCopro) Run(_ context.Context, name string, args []string, _ []byte)
 	f.calls = append(f.calls, "run "+filepath.Base(name)+" "+strings.Join(args, " "))
 	switch filepath.Base(name) {
 	case "detect_radio_module":
-		return priv.Result{Stdout: []byte("HMIP-RFUSB 1709ADFA5B 3014F711A000041709ADFA5B 0xFF01A8 0xBDF5DC " + f.version + "\n")}, nil
+		return priv.Result{Stdout: []byte("HMIP-RFUSB 0000000A01 3014F711A000040000000A01 0xFF0A09 0xBD0A07 " + f.version + "\n")}, nil
 	case "eq3configcmd":
 		return priv.Result{Stdout: []byte("Bootloader and Application Version: " + f.version + "\n")}, nil
 	}
@@ -482,7 +482,7 @@ func TestRadioFirmwareFlashFailures(t *testing.T) {
 
 	// the radio is busy: refused before anything is stopped
 	s4, svc4 := newRadioFW(t, root, &fakeCopro{version: "4.4.18"})
-	s4.Health = busyChecker{busy: true, which: "HmIP-RF 0xBDF5DC"}
+	s4.Health = busyChecker{busy: true, which: "HmIP-RF 0xBD0A07"}
 	if err := s4.Flash("HMIP-RFUSB", "dualcopro_update_blhmip-4.4.22.eq3"); err == nil || !strings.Contains(err.Error(), "busy") {
 		t.Fatalf("busy: %v", err)
 	}
@@ -646,7 +646,7 @@ func TestRadioFirmwareHMCFGUSB(t *testing.T) {
 	usb := "sys/bus/usb/devices/1-1.4/"
 	w(usb+"idVendor", "1b1f\n")
 	w(usb+"idProduct", "c00f\n")
-	w(usb+"serial", "JEQ0534849\n")
+	w(usb+"serial", "JEQ9000002\n")
 	w(usb+"bcdDevice", "0956\n")
 	fp := &fakeCopro{version: "2.8.6"}
 	fp.onFlash = func() { w(usb+"bcdDevice", "0967\n") }
@@ -658,7 +658,7 @@ func TestRadioFirmwareHMCFGUSB(t *testing.T) {
 			ad = &st.Modules[i]
 		}
 	}
-	if ad == nil || ad.DeviceNode != "usb:JEQ0534849" || ad.RunningVersion != "0.956" || ad.Family != "hmcfgusb" || ad.Verdict != "no-file" || !ad.Flashable || len(ad.Protocols) != 1 {
+	if ad == nil || ad.DeviceNode != "usb:JEQ9000002" || ad.RunningVersion != "0.956" || ad.Family != "hmcfgusb" || ad.Verdict != "no-file" || !ad.Flashable || len(ad.Protocols) != 1 {
 		t.Fatalf("adapter: %+v (%d modules)", ad, len(st.Modules))
 	}
 	if _, err := s.Upload("HM-CFG-USB-2", "dualcopro_update_blhmip-4.4.22.eq3", bytes.NewReader([]byte("x"))); err == nil {
@@ -680,7 +680,7 @@ func TestRadioFirmwareHMCFGUSB(t *testing.T) {
 	if a == nil || !a.OK || a.Before != "0.956" || a.After != "0.967" {
 		t.Fatalf("attempt: %+v", a)
 	}
-	if !strings.Contains(strings.Join(fp.calls, "\n"), "flash hmcfgusb usb:JEQ0534849 hmusbif.03c7.enc 0.967") {
+	if !strings.Contains(strings.Join(fp.calls, "\n"), "flash hmcfgusb usb:JEQ9000002 hmusbif.03c7.enc 0.967") {
 		t.Fatalf("calls: %v", fp.calls)
 	}
 	// rfd alone stops and starts, and the detection does not run again
