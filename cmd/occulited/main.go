@@ -1074,7 +1074,7 @@ func run(opts daemonOptions) error {
 	case <-ctx.Done():
 		log.Info("occulited stopping")
 		ledCtl.Stop() // the shutdown pattern: a box going down never looks fine
-		stopHTTPServer(srv, endRequests, shutdownLimit, log)
+		stopHTTPServer(srv, endRequests, shutdownLimit, log, liteSvc.Wait)
 		users.Close() // the sessions' last-seen times the store does not have yet (B-102)
 		// task 75: the subscriber deregisters at the daemons (init(url, "")), a few loopback
 		// calls; a daemon that does not answer is left with the fixed entry, which the next

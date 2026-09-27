@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"io"
 	"log/slog"
@@ -14,7 +15,9 @@ import (
 	"time"
 
 	"github.com/hobbyquaker/occulited/internal/httpapi"
+	"github.com/hobbyquaker/occulited/internal/literpc"
 	"github.com/hobbyquaker/occulited/internal/meta"
+	"github.com/hobbyquaker/occulited/internal/pairing"
 	"github.com/hobbyquaker/occulited/internal/servicemsg"
 	"github.com/hobbyquaker/occulited/internal/system"
 )
@@ -69,10 +72,13 @@ func TestStopEndsTheStreams(t *testing.T) {
 	mux := http.NewServeMux()
 	(&httpapi.MetaAPI{Store: store}).Register(mux)
 	(&httpapi.SystemAPI{Root: system.Root(t.TempDir()), ServiceMessages: &servicemsg.Store{}, Journal: &system.JournalLog{}}).Register(mux)
+	// B-14: the token pairing card's stream as well (lite-rpc's are in httpapi's
+	// TestLiteRPCStreamsEndAtStop, which needs a subscriber)
+	(&httpapi.AuthAPI{ConfigFile: filepath.Join(t.TempDir(), "occulited.json"), Pairing: &pairing.Manager{}}).Register(mux)
 	srv, endRequests, base, served := startServer(t, mux)
 
 	var bodies []io.ReadCloser
-	for _, p := range []string{"/api/meta/v1/events/sse", "/api/system/v1/service-messages/stream", "/api/system/v1/log/stream"} {
+	for _, p := range []string{"/api/meta/v1/events/sse", "/api/system/v1/service-messages/stream", "/api/system/v1/log/stream", "/api/auth/v1/pairing/stream"} {
 		bodies = append(bodies, openStream(t, base+p))
 	}
 
@@ -186,5 +192,50 @@ func TestIdleTimeoutSparesTheStreams(t *testing.T) {
 	}
 	if d := time.Since(start); d > 2*time.Second {
 		t.Errorf("closed after %v", d)
+	}
+}
+
+// B-14: the stop cancels the requests with literpc.ErrStopping as the cause (a stream tells the
+// stop from a client that went by it), and it waits, within its limit, for what Shutdown does
+// not track - the hijacked WebSocket streams - with a warning when they outlive it.
+func TestStopCauseAndHijackedWait(t *testing.T) {
+	srv, endRequests := newHTTPServer("127.0.0.1:0", http.NewServeMux())
+	ctx := srv.BaseContext(nil)
+	endRequests()
+	if err := context.Cause(ctx); !errors.Is(err, literpc.ErrStopping) {
+		t.Fatalf("the requests' cause: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		closes bool // the hijacked streams end in time
+		warn   bool
+	}{{"closed in time", true, false}, {"still open at the limit", false, true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, endRequests := newHTTPServer("127.0.0.1:0", http.NewServeMux())
+			var asked bool
+			wait := func(ctx context.Context) bool {
+				asked = true
+				if ctx.Err() != nil {
+					t.Error("the wait got a context that had ended already")
+				}
+				if !tc.closes {
+					<-ctx.Done()
+				}
+				return tc.closes
+			}
+			var logged strings.Builder
+			start := time.Now()
+			stopHTTPServer(srv, endRequests, 100*time.Millisecond, slog.New(slog.NewTextHandler(&logged, nil)), wait)
+			if !asked {
+				t.Fatal("the hijacked wait was not called")
+			}
+			if got := strings.Contains(logged.String(), "WebSocket streams still open"); got != tc.warn {
+				t.Errorf("warning %v, want %v: %q", got, tc.warn, logged.String())
+			}
+			if d := time.Since(start); d > time.Second {
+				t.Errorf("the stop took %v", d)
+			}
+		})
 	}
 }

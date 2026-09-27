@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -440,5 +442,94 @@ func TestLiteRPCHistory(t *testing.T) {
 		if st, _, _ := do(t, rig.srv, "GET", "/api/rpc/v1/history?"+q, "", nil); st != 400 {
 			t.Fatalf("%s: %d", q, st)
 		}
+	}
+}
+
+// occulited B-14: the stop ends every lite-rpc stream at once - the SSE response ends, and the
+// WebSocket, whose connection the server no longer tracks after the upgrade, gets a close frame
+// 1001 "going away" (a client reconnects at once) instead of lingering until the process exits.
+func TestLiteRPCStreamsEndAtStop(t *testing.T) {
+	rig := newLiteRig(t)
+	rig.as(tokenRead)
+	// a server like cmd/occulited's: request contexts derive from a base the stop cancels
+	base, stop := context.WithCancelCause(context.Background())
+	defer stop(nil)
+	srv := httptest.NewUnstartedServer(rig.srv.Config.Handler)
+	srv.Config.BaseContext = func(net.Listener) context.Context { return base }
+	srv.Start()
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/rpc/v1/events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	sse := bufio.NewReader(resp.Body)
+	if _, ev, _ := sseNext(t, sse); ev != "hello" {
+		t.Fatalf("sse hello: %s", ev)
+	}
+
+	conn, err := net.Dial("tcp", strings.TrimPrefix(srv.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_, _ = io.WriteString(conn, "GET /api/rpc/v1/events/ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"+
+		"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n")
+	ws := bufio.NewReader(conn)
+	up, err := http.ReadResponse(ws, nil)
+	if err != nil || up.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("upgrade: %v %v", up, err)
+	}
+	// one server frame: FIN+opcode, a 7-bit or 16-bit length, never masked
+	frame := func() (byte, []byte) {
+		t.Helper()
+		var h [2]byte
+		if _, err := io.ReadFull(ws, h[:]); err != nil {
+			t.Fatalf("websocket frame: %v", err)
+		}
+		n := int(h[1] & 0x7f)
+		if n == 126 {
+			var b [2]byte
+			_, _ = io.ReadFull(ws, b[:])
+			n = int(b[0])<<8 | int(b[1])
+		}
+		p := make([]byte, n)
+		if _, err := io.ReadFull(ws, p); err != nil {
+			t.Fatalf("websocket payload: %v", err)
+		}
+		return h[0] & 0x0f, p
+	}
+	if op, p := frame(); op != 0x1 || !strings.Contains(string(p), `"hello"`) {
+		t.Fatalf("websocket hello: %x %s", op, p)
+	}
+
+	start := time.Now()
+	stop(literpc.ErrStopping)
+	_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+	for {
+		op, p := frame()
+		if op != 0x8 {
+			continue // a ping or an event that was under way
+		}
+		if len(p) < 2 || int(p[0])<<8|int(p[1]) != literpc.CloseGoingAway {
+			t.Fatalf("websocket close: %x", p)
+		}
+		break
+	}
+	sseDone := make(chan error, 1)
+	go func() { _, err := io.Copy(io.Discard, sse); sseDone <- err }()
+	select {
+	case <-sseDone:
+	case <-time.After(time.Second):
+		t.Fatal("the SSE stream is still open after the stop")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if !rig.svc.Wait(ctx) {
+		t.Fatalf("streams left after the stop: %+v", rig.svc.Streams())
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("the stop took %v", d)
 	}
 }

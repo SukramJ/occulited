@@ -145,6 +145,28 @@ func (s *Service) release(st *Stream) {
 	s.mu.Unlock()
 }
 
+// Wait returns once no stream is open any more, or when ctx ends (false then). The stop waits
+// with it for the WebSocket streams: their connections are hijacked, so http.Server.Shutdown
+// neither tracks nor waits for them, and without the wait the process could exit before a
+// stream's close frame is written (occulited B-14).
+func (s *Service) Wait(ctx context.Context) bool {
+	t := time.NewTicker(10 * time.Millisecond)
+	defer t.Stop()
+	for {
+		s.mu.Lock()
+		n := len(s.streams)
+		s.mu.Unlock()
+		if n == 0 {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-t.C:
+		}
+	}
+}
+
 // Close ends one stream from outside (the page's x): true when there was one.
 func (s *Service) Close(id, reason string) bool {
 	s.mu.Lock()
@@ -197,13 +219,21 @@ type Sink interface {
 	Close(code int, reason string)
 }
 
-// Close codes (D-79), the WebSocket ones; SSE just ends.
+// Close codes (D-79), the WebSocket ones; SSE just ends. CloseGoingAway is RFC 6455's 1001:
+// occulited stops or restarts, and the client reconnects at once (occulited B-14) - unlike
+// 4004, which says lite-rpc was switched off.
 const (
 	CloseOverflow     = 4001
 	CloseUnauthorized = 4003
 	CloseDisabled     = 4004
 	CloseNormal       = 1000
+	CloseGoingAway    = 1001
 )
+
+// ErrStopping is the cause the HTTP server's base context is cancelled with when occulited stops
+// (cmd/occulited's endRequests): a stream whose context ends with it says "going away" rather
+// than "client gone" (occulited B-14).
+var ErrStopping = errors.New("occulited is stopping")
 
 // RunOptions are one connection's query: the resume point, whether to send the device lists
 // first, and how to re-check the credential (every heartbeat; a revoked token is closed).
@@ -387,6 +417,10 @@ func (s *Service) Run(ctx context.Context, st *Stream, opt RunOptions, sink Sink
 			case "disabled":
 				sink.Close(CloseDisabled, "disabled")
 			case "":
+				if errors.Is(context.Cause(ctx), ErrStopping) {
+					sink.Close(CloseGoingAway, "stopping")
+					return "stopping"
+				}
 				sink.Close(CloseNormal, "")
 				return "client gone"
 			default:
@@ -395,7 +429,8 @@ func (s *Service) Run(ctx context.Context, st *Stream, opt RunOptions, sink Sink
 			return reason
 		case m, ok := <-ch:
 			if !ok {
-				sink.Close(CloseDisabled, "shutdown")
+				// the subscriber stopped: occulited is going down (B-14), not lite-rpc switched off
+				sink.Close(CloseGoingAway, "stopping")
 				return "shutdown"
 			}
 			if m.Seq <= last {

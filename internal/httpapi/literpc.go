@@ -478,10 +478,17 @@ func (a *SystemAPI) liteEventsWS(w http.ResponseWriter, r *http.Request) {
 	}
 	log := a.liteLog().With("stream", st.ID, "transport", "websocket", "user", sess.User, "remote", st.Remote)
 	log.Info("lite-rpc: stream opened", "filter", st.Filter)
-	ctx, cancel := context.WithCancel(context.Background())
+	// the request's context, not a fresh one: it stays valid after the hijack until this
+	// handler returns, and it is what the stop cancels - a background context left the
+	// WebSocket streams open through the stop, to end without a close frame when the process
+	// exited (occulited B-14)
+	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	go func() {
-		<-c.Done()
+		select {
+		case <-c.Done():
+		case <-ctx.Done():
+		}
 		cancel()
 	}()
 	why := a.LiteRPC.Run(ctx, st, opt, literpc.NewWSSink(c))

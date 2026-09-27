@@ -6,6 +6,8 @@ import (
 	"net"
 	"net/http"
 	"time"
+
+	"github.com/hobbyquaker/occulited/internal/literpc"
 )
 
 // shutdownLimit is how long a stop waits for the requests still running. Every long-lived
@@ -26,22 +28,34 @@ var idleTimeout = 120 * time.Second
 // idles that long). No ReadTimeout - a backup restore streams its upload for minutes - and no
 // WriteTimeout - the streams write for hours; neither is an idle connection, so IdleTimeout
 // leaves them alone.
+//
+// The cancel carries literpc.ErrStopping as its cause, so a stream can tell the stop from a
+// client that went: lite-rpc's WebSocket closes with 1001 "going away" then (occulited B-14).
 func newHTTPServer(addr string, h http.Handler) (srv *http.Server, endRequests context.CancelFunc) {
-	reqCtx, endRequests := context.WithCancel(context.Background())
+	reqCtx, cancel := context.WithCancelCause(context.Background())
 	srv = &http.Server{Addr: addr, Handler: h, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: idleTimeout,
 		BaseContext: func(net.Listener) context.Context { return reqCtx }}
-	return srv, endRequests
+	return srv, func() { cancel(literpc.ErrStopping) }
 }
 
 // stopHTTPServer ends the requests, then shuts the server down. A stop is not a failure: a
 // connection still open after the limit is closed with a warning, and the caller exits 0, so the
 // unit ends as deactivated rather than failed (exit 1 on "context deadline exceeded" before).
-func stopHTTPServer(srv *http.Server, endRequests context.CancelFunc, limit time.Duration, log *slog.Logger) {
+//
+// hijacked are the waits for what Shutdown does not track - the WebSocket streams, whose
+// connections left the server at the upgrade: within the same limit, so their close frames are
+// written before the process exits (occulited B-14).
+func stopHTTPServer(srv *http.Server, endRequests context.CancelFunc, limit time.Duration, log *slog.Logger, hijacked ...func(context.Context) bool) {
 	endRequests()
 	ctx, cancel := context.WithTimeout(context.Background(), limit)
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
 		log.Warn("occulited stopping: connections still open were closed", "err", err)
 		_ = srv.Close()
+	}
+	for _, wait := range hijacked {
+		if !wait(ctx) {
+			log.Warn("occulited stopping: WebSocket streams still open at the limit")
+		}
 	}
 }
