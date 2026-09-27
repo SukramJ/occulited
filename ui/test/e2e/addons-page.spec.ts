@@ -144,6 +144,11 @@ test('after a restore: the reinstall section, Reinstall from the catalogue, by h
     await expect(dialog).toContainText('Hide the reinstall hint for Foo?');
     await dialog.getByRole('button', {name: 'Dismiss', exact: true}).click();
     await expect.poll(() => posts).toEqual(['install redmatic', 'dismiss foo']);
+    // occulited B-12: the page loads /addons again after each action, and the patched route is
+    // still inside r.fetch() or res.json() when the last poll above is satisfied - the context's
+    // close then disposed the response under it (1 run in ~400 in the full suite). Let the
+    // handlers finish before the test ends.
+    await page.unrouteAll({behavior: 'wait'});
 });
 
 test('after a restore, in German; no section when nothing is missing', async ({page}) => {
@@ -163,4 +168,5 @@ test('after a restore, in German; no section when nothing is missing', async ({p
     await expect(section.getByRole('heading', {name: 'Nach der Wiederherstellung neu zu installierende Addons'})).toBeVisible();
     await expect(section.locator('li')).toHaveCount(2);
     await expect(section.locator('[data-action="reinstall-all"]')).toHaveText('Alle neu installieren (2)');
+    await page.unrouteAll({behavior: 'wait'}); // B-12: as above
 });
