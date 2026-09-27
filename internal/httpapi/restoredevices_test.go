@@ -138,6 +138,22 @@ func TestRestoreDevices(t *testing.T) {
 		t.Errorf("view bad name: %d", st)
 	}
 	paired = false
+	// the daemons down but their device files on the userfs (task 275's lab run): still paired
+	_ = os.MkdirAll(root+"/etc/config/rfd", 0o755)
+	_ = os.WriteFile(root+"/etc/config/rfd/KEQ0000001.dev", []byte("x"), 0o644)
+	_ = os.MkdirAll(root+"/etc/config/crRFD/data", 0o755)
+	_ = os.WriteFile(root+"/etc/config/crRFD/data/3014F711A000010000000A55.dev", []byte("x"), 0o600)
+	_ = os.WriteFile(root+"/etc/config/crRFD/data/linkData.conf", []byte("x"), 0o600)
+	st, out = rig.get(t, "/restore/devices?file=restore-ccu.sbk")
+	tg = out["target"].(map[string]any)
+	if st != 200 || tg["importable"] != false || tg["devices"] != 2.0 || tg["paired"].(map[string]any)["BidCos-RF"].(map[string]any)["devices"] != 1.0 || tg["paired"].(map[string]any)["HmIP-RF"].(map[string]any)["devices"] != 1.0 {
+		t.Errorf("paired from the files: %d %v", st, tg)
+	}
+	if st, e, _ := rig.do(t, "POST", "/restore/import-devices", `{"file":"restore-ccu.sbk"}`); st != 409 || e.Error != "paired" {
+		t.Errorf("paired from the files: %d %+v", st, e)
+	}
+	_ = os.Remove(root + "/etc/config/rfd/KEQ0000001.dev")
+	_ = os.Remove(root + "/etc/config/crRFD/data/3014F711A000010000000A55.dev")
 	if st, e, _ := rig.do(t, "POST", "/restore/import-devices", `{"file":"restore-empty.sbk"}`); st != 422 || e.Error != "nothing_to_import" {
 		t.Errorf("empty: %d %+v", st, e)
 	}

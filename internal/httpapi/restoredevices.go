@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -100,6 +101,26 @@ func (a *SystemAPI) restoreTargetState(ctx context.Context) restoreTarget {
 			continue
 		}
 		t.Devices += p.Devices
+	}
+	// the daemons' files on the userfs count too (task 275's lab run): an interface that is not
+	// listed because its daemon is down - the module unplugged, the HB-RF-ETH off - still has its
+	// pairings on the disk, and the import must not run over them
+	for name, n := range a.Root.PairedFromFiles() {
+		p, listed := t.Paired[name]
+		if listed && p.Known {
+			if n > p.Devices {
+				t.Devices += n - p.Devices
+				p.Devices = n
+				t.Paired[name] = p
+			}
+			continue
+		}
+		if listed {
+			// asked and silent: the files say there is something, which is what matters here
+			t.Unknown = slices.DeleteFunc(t.Unknown, func(u string) bool { return u == name })
+		}
+		t.Paired[name] = system.PairedDevices{Devices: n, Known: true, Error: "counted from the device files; the interface is not running"}
+		t.Devices += n
 	}
 	if set, known, err := a.Root.SecurityKeyState(ctx); known && err == nil {
 		t.UserKey = set

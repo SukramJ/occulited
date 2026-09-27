@@ -137,3 +137,28 @@ func TestHmIPLocalKeyEnabled(t *testing.T) {
 		t.Fatal("a network key is set and not seen")
 	}
 }
+
+// openccu-lite task 275: the pairings on the disk, for a system whose daemons are down
+func TestPairedFromFiles(t *testing.T) {
+	root := t.TempDir()
+	r := Root(root)
+	if got := r.PairedFromFiles(); len(got) != 0 {
+		t.Fatalf("empty root: %v", got)
+	}
+	w := func(p string) {
+		_ = os.MkdirAll(filepath.Dir(filepath.Join(root, p)), 0o755)
+		_ = os.WriteFile(filepath.Join(root, p), []byte("x"), 0o644)
+	}
+	w("etc/config/rfd/JEQ0000001.dev")
+	w("etc/config/rfd/JEQ0000001.meta")
+	w("etc/config/rfd/KEQ0000002.dev")
+	w("etc/config/crRFD/data/3014F711A000010000000A10.dev")
+	w("etc/config/crRFD/data/3014F711A0001F0000000A03.ap")
+	w("etc/config/crRFD/data/linkData.conf")
+	w("etc/config/crRFD/data/notasgtin.dev")
+	w("etc/config/hs485d/LEQ0000001.dev")
+	got := r.PairedFromFiles()
+	if got["BidCos-RF"] != 2 || got["HmIP-RF"] != 1 || got["BidCos-Wired"] != 1 || len(got) != 3 {
+		t.Errorf("counts: %v", got)
+	}
+}

@@ -90,6 +90,31 @@ func CountPaired(ctx context.Context, ifs []interfaces.Interface) map[string]Pai
 	return out
 }
 
+// PairedFromFiles counts the paired devices from the daemons' own files on the userfs, per
+// interface: rfd's /etc/config/rfd/<serial>.dev, hmipserver's crRFD/data/<SGTIN>.dev, hs485d's
+// hs485d/<serial>.dev. The daemons' answer (CountPaired) is the count while they run; this is the
+// count when they do not - a system whose radio module is unplugged or whose HB-RF-ETH is off has
+// no BidCos-RF or HmIP-RF interface to ask, and its pairings are on the disk all the same
+// (openccu-lite task 275's lab run: an import went onto such a system because nothing answered).
+func (r Root) PairedFromFiles() map[string]int {
+	out := map[string]int{}
+	count := func(name, dir string, ok func(string) bool) {
+		n := 0
+		for _, e := range readDir(r.join(dir)) {
+			if strings.HasSuffix(e, ".dev") && ok(strings.TrimSuffix(e, ".dev")) {
+				n++
+			}
+		}
+		if n > 0 {
+			out[name] = n
+		}
+	}
+	count("BidCos-RF", "/etc/config/rfd", func(string) bool { return true })
+	count("HmIP-RF", crRFDDataDir, func(id string) bool { return sgtinRe.MatchString(strings.ToUpper(id)) })
+	count("BidCos-Wired", "/etc/config/hs485d", func(string) bool { return true })
+	return out
+}
+
 // ownEntry is a device the CCU lists for itself: rfd's central "BidCoS-RF" and the virtual
 // receivers, hmipserver's module and its receivers (the same list HmIPDeviceKeys.paired skips).
 func ownEntry(d interfaces.Device) bool {
