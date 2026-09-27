@@ -186,13 +186,22 @@ func (r *ImportRecord) Outcome(ctx context.Context, rec ImportedRadio) ImportOut
 		now = strings.ToUpper(p.HmIP.SGTIN)
 	}
 	out.HmIP.ModuleNow = now
-	data := filepath.Join(root, crRFDDataDir)
+	// hmipserver's data directory is its own (0700, B-253): the names come through readDir, which
+	// asks the privilege helper when the directory is closed to occulited - a plain stat as
+	// occulited's user saw neither file and answered "unknown" on every system (seen on a lab
+	// system after a real import onto another module, 2026-09-27)
+	var aps map[string]bool
 	apExists := func(sg string) bool {
 		if sg == "" {
 			return false
 		}
-		_, err := os.Stat(filepath.Join(data, sg+".ap"))
-		return err == nil
+		if aps == nil {
+			aps = map[string]bool{}
+			for _, n := range readDir(filepath.Join(root, crRFDDataDir)) {
+				aps[strings.ToUpper(n)] = true
+			}
+		}
+		return aps[strings.ToUpper(sg)+".AP"]
 	}
 	switch {
 	case rec.HmIP.FromSGTIN == "":
@@ -236,23 +245,48 @@ func (r *ImportRecord) Outcome(ctx context.Context, rec ImportedRadio) ImportOut
 			if err := errs["BidCos-RF"]; err != nil {
 				out.BidCosRF.Error = err.Error()
 			} else {
-				took := false
-				for _, e := range list {
-					local := strings.EqualFold(e.Type, "CCU2") || strings.EqualFold(e.Address, rec.BidCosRF.Serial)
-					if !local {
-						continue
-					}
-					out.BidCosRF.Interface, out.BidCosRF.Connected = strings.TrimSpace(e.Type+" "+e.Address), e.Connected
-					if strings.EqualFold(e.Address, rec.BidCosRF.Serial) {
-						took = true
-						break
-					}
-				}
-				out.BidCosRF.Took = &took
+				out.BidCosRF.Took = bidcosTook(list, rec, p, ok, &out)
 			}
 		}
 	}
 	return out
+}
+
+// bidcosTook says whether rfd runs with the imported BidCos identity, from its
+// listBidcosInterfaces entries. A module rfd reaches through multimacd is its "CCU2" entry, named
+// by the serial rfd runs with - the imported one when the address took. A USB adapter (the
+// HM-CFG-USB-2) or a LAN gateway is named by its own serial whatever address rfd sends with, so
+// there the entry of the plan's BidCos module counts, and the address rfd runs with is the one the
+// boot's radio run read from the ids file (the plan's active address), which rfd would have
+// rewritten had it not taken it. nil when there is no local entry at all.
+func bidcosTook(list []interfaces.RadioInterface, rec ImportedRadio, p radio.Plan, hasPlan bool, out *ImportOutcome) *bool {
+	module := ""
+	if hasPlan && p.HmRF != nil {
+		module = p.HmRF.Serial
+	}
+	var found *interfaces.RadioInterface
+	for i := range list {
+		e := &list[i]
+		if strings.EqualFold(e.Address, rec.BidCosRF.Serial) {
+			found = e
+			break
+		}
+		if found == nil && (strings.EqualFold(e.Type, "CCU2") || (module != "" && strings.EqualFold(e.Address, module))) {
+			found = e
+		}
+	}
+	took := false
+	if found == nil {
+		return &took
+	}
+	out.BidCosRF.Interface, out.BidCosRF.Connected = strings.TrimSpace(found.Type+" "+found.Address), found.Connected
+	switch {
+	case strings.EqualFold(found.Address, rec.BidCosRF.Serial):
+		took = true
+	case !strings.EqualFold(found.Type, "CCU2") && rec.BidCosRF.Address != "" && hasPlan:
+		took = strings.EqualFold(p.HmRFAddressActive, rec.BidCosRF.Address)
+	}
+	return &took
 }
 
 func (r *ImportRecord) plan() (radio.Plan, bool) {

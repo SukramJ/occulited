@@ -12,12 +12,21 @@ import (
 	"time"
 
 	"github.com/hobbyquaker/occulited/internal/interfaces"
+	"github.com/hobbyquaker/occulited/internal/priv"
 	"github.com/hobbyquaker/occulited/internal/radio"
 )
 
 // rfdInterfacesStub answers listBidcosInterfaces with rfd's local CCU2 entry under the serial rfd
 // runs with, connected or not.
 func rfdInterfacesStub(t *testing.T, serial string, connected bool) *httptest.Server {
+	t.Helper()
+	return rfdInterfaceStub(t, "CCU2", serial, connected)
+}
+
+// rfdInterfaceStub answers listBidcosInterfaces with one entry of the given type: "CCU2" for a
+// module behind multimacd, "USB Interface" for the HM-CFG-USB-2, which rfd names by the adapter's
+// own serial.
+func rfdInterfaceStub(t *testing.T, typ, serial string, connected bool) *httptest.Server {
 	t.Helper()
 	conn := "0"
 	if connected {
@@ -27,10 +36,10 @@ func rfdInterfacesStub(t *testing.T, serial string, connected bool) *httptest.Se
 		w.Header().Set("Content-Type", "text/xml")
 		_, _ = w.Write([]byte(`<?xml version="1.0"?><methodResponse><params><param><value><array><data><value><struct>
 <member><name>ADDRESS</name><value>` + serial + `</value></member>
-<member><name>DESCRIPTION</name><value>CCU2 ` + serial + `</value></member>
+<member><name>DESCRIPTION</name><value>` + typ + ` ` + serial + `</value></member>
 <member><name>CONNECTED</name><value><boolean>` + conn + `</boolean></value></member>
 <member><name>DEFAULT</name><value><boolean>1</boolean></value></member>
-<member><name>TYPE</name><value>CCU2</value></member>
+<member><name>TYPE</name><value>` + typ + `</value></member>
 <member><name>FIRMWARE_VERSION</name><value>2.8.6</value></member>
 <member><name>DUTY_CYCLE</name><value><i4>1</i4></value></member>
 </struct></value></data></array></value></param></params></methodResponse>`))
@@ -179,5 +188,79 @@ func TestImportRecordOutcome(t *testing.T) {
 	}
 	if err := rec0.Clear(); err != nil {
 		t.Fatal("a second clear fails")
+	}
+}
+
+// openccu-lite task 275, the lab run onto an HmIP-RFUSB-TK and an HM-CFG-USB-2 (2026-09-27): the
+// page said "unknown" for HmIP and "not the imported identity" for BidCos although both had taken.
+// hmipserver's data directory is closed to occulited (B-253), so the identity files are seen
+// through the helper; and rfd names the HM-CFG-USB-2's entry by the adapter's serial, so there the
+// address rfd runs with (the plan's active one, from the ids file) is what says it took.
+func TestImportOutcomeUSBAdapterAndClosedData(t *testing.T) {
+	root := t.TempDir()
+	plan := radio.Plan{HmIP: &radio.Role{Hardware: "HMIP-RFUSB-TK", Serial: "0000000B01", SGTIN: "3014F5AC940004000000B01"},
+		HmRF: &radio.Role{Hardware: "HM-CFG-USB-2", Serial: "JEQ0000001"}, HmRFAddressActive: "0xFF5678"}
+	b := RadioBackup{KeyIndex: 1}
+	b.HmIP.IdentitySGTIN, b.HmIP.Devices = "3014F711A0001F5F000000AF", 2
+	b.BidCosRF.Address, b.BidCosRF.Serial, b.BidCosRF.Devices = "0xFF5678", "5F000000AF", 1
+	at := time.Date(2026, 9, 27, 19, 38, 0, 0, time.UTC)
+	rec := NewImportedRadio(at, "restore-x.sbk", b, plan, true, false)
+
+	usb := rfdInterfaceStub(t, "USB Interface", "JEQ0000001", true)
+	r := &ImportRecord{Root: Root(root), Plan: func() (radio.Plan, bool) { return plan, true },
+		Journal: func(context.Context, time.Time) []string { return nil },
+		Interfaces: func() []interfaces.Interface {
+			return interfaces.FromList([]struct{ Name, URL string }{{"BidCos-RF", "xmlrpc://" + strings.TrimPrefix(usb.URL, "http://")}})
+		}, InterfacesTimeout: 2 * time.Second}
+
+	data := filepath.Join(root, crRFDDataDir)
+	if err := os.MkdirAll(data, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// hmipserver took the identity over: this module's file (its own name case), the previous one gone
+	if err := os.WriteFile(filepath.Join(data, "3014F5AC940004000000B01.ap"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := r.Outcome(context.Background(), rec)
+	if out.HmIP.State != ImportDone {
+		t.Errorf("hmip: %+v", out.HmIP)
+	}
+	if out.BidCosRF.Took == nil || !*out.BidCosRF.Took || !out.BidCosRF.Connected || out.BidCosRF.Interface != "USB Interface JEQ0000001" {
+		t.Errorf("bidcos on the USB adapter: %+v", out.BidCosRF)
+	}
+
+	// rfd runs with another address than the imported one: not taken
+	plan.HmRFAddressActive = "0xABCDEF"
+	if out = r.Outcome(context.Background(), rec); out.BidCosRF.Took == nil || *out.BidCosRF.Took {
+		t.Errorf("another address: %+v", out.BidCosRF)
+	}
+	plan.HmRFAddressActive = "0xff5678"
+
+	// an entry that is neither the module nor a CCU2 one (a LAN gateway beside it): no local entry
+	other := rfdInterfaceStub(t, "Lan Interface", "KEQ0000001", true)
+	r.Interfaces = func() []interfaces.Interface {
+		return interfaces.FromList([]struct{ Name, URL string }{{"BidCos-RF", "xmlrpc://" + strings.TrimPrefix(other.URL, "http://")}})
+	}
+	if out = r.Outcome(context.Background(), rec); out.BidCosRF.Took == nil || *out.BidCosRF.Took || out.BidCosRF.Interface != "" {
+		t.Errorf("no local entry: %+v", out.BidCosRF)
+	}
+
+	// the data directory closed to occulited: without the helper nothing is seen, with it the move
+	if os.Geteuid() == 0 {
+		return
+	}
+	if err := os.Chmod(data, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(data, 0o755) })
+	old := Priv
+	t.Cleanup(func() { Priv = old })
+	Priv = priv.Local{}
+	if out = r.Outcome(context.Background(), rec); out.HmIP.State != ImportUnknown {
+		t.Errorf("closed without the helper: %+v", out.HmIP)
+	}
+	Priv = rootReader{}
+	if out = r.Outcome(context.Background(), rec); out.HmIP.State != ImportDone {
+		t.Errorf("closed, through the helper: %+v", out.HmIP)
 	}
 }
