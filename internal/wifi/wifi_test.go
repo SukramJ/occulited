@@ -190,4 +190,19 @@ func TestCtrlRequest(t *testing.T) {
 	if _, err := (Ctrl{Dir: dir, Iface: "wlan1", LocalDir: local, Timeout: time.Second}).Request("PING"); err == nil {
 		t.Fatal("no socket: no error")
 	}
+	// B-8: the failed connect leaves no bound socket behind
+	if ents, _ := os.ReadDir(local); len(ents) != 0 {
+		t.Fatalf("a failed request left its socket: %v", ents)
+	}
+	// B-8: no directory, or a relative one, is an error - never a socket in the working directory
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+	for _, ld := range []string{"", "local"} {
+		if _, err := (Ctrl{Dir: dir, Iface: "wlan0", LocalDir: ld, Timeout: time.Second}).Request("PING"); err == nil {
+			t.Errorf("LocalDir %q: no error", ld)
+		}
+	}
+	if ents, _ := os.ReadDir(cwd); len(ents) != 0 {
+		t.Fatalf("a socket in the working directory: %v", ents)
+	}
 }

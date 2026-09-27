@@ -30,13 +30,21 @@ func (c Ctrl) Request(cmd string) (string, error) {
 	if timeout == 0 {
 		timeout = 3 * time.Second
 	}
+	// occulited B-8: the answer socket only ever in the absolute directory given - an empty one
+	// put it into the process's working directory (a test's package directory)
+	if !filepath.IsAbs(c.LocalDir) {
+		return "", fmt.Errorf("wpa_supplicant on %s: no directory for the answer socket", c.Iface)
+	}
 	local := filepath.Join(c.LocalDir, fmt.Sprintf("wpa-%d-%d", os.Getpid(), ctrlSeq.Add(1)))
 	_ = os.Remove(local)
+	// removed however the request ends: DialUnix binds it before it connects, and a connect that
+	// fails (wpa_supplicant not running yet, the "starting" state) left the bound file behind, one
+	// per request (B-8)
+	defer os.Remove(local)
 	conn, err := net.DialUnix("unixgram", &net.UnixAddr{Name: local, Net: "unixgram"}, &net.UnixAddr{Name: filepath.Join(c.Dir, c.Iface), Net: "unixgram"})
 	if err != nil {
 		return "", fmt.Errorf("wpa_supplicant on %s: %w", c.Iface, err)
 	}
-	defer os.Remove(local)
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(timeout))
 	if _, err := conn.Write([]byte(cmd)); err != nil {
