@@ -497,7 +497,9 @@ type Policy struct {
 	// for a .service or .timer and an own timer's local-<name>.timer and local-<name>.service,
 	// and mkdir only such a <unit>.d. Empty = nothing there.
 	RunUnitDir string
-	// Paths are the prefixes (or exact files) that may be written, removed, linked, chowned.
+	// Paths are what may be written, removed, linked, renamed: a directory entry ends in "/" and
+	// admits everything below it, an entry with a "*" is a pattern for one name, and any other
+	// entry is exactly one file (pathEntryAllows, B-6).
 	Paths []string
 	// StagingDirs are where the unprivileged side writes big files it then asks to Rename
 	// into a Path: the addon archive, an update image.
@@ -596,7 +598,8 @@ func DefaultPolicy(root, stateDir string) Policy {
 			"/bin/detect_radio_module"}, // task 41: the coprocessor's running version, read off the raw-uart
 		ProgramDirs: []string{"/etc/init.d", "/usr/local/etc/config/rc.d"},
 		Paths: []string{"/etc/config/", "/usr/local/etc/config/", "/usr/local/tmp/", "/usr/local/.firmwareUpdate", "/usr/local/.recoveryMode", "/usr/local/.doFactoryReset",
-			"/usr/local/etc/monit-", "/etc/hostname", "/etc/hosts",
+			// an addon's monit file, removed at its uninstall (system.RemoveAddon)
+			"/usr/local/etc/monit-*.cfg", "/etc/hostname", "/etc/hosts",
 			// B-53: on the image the two are links into /var/etc; a write resolves through them
 			// (B-235) and the target has to be on the list as well
 			"/var/etc/hostname", "/var/etc/hosts",
@@ -758,16 +761,29 @@ func (p Policy) pathAllowed(path string) bool {
 		return false
 	}
 	for _, a := range p.Paths {
-		if strings.HasSuffix(a, "/") {
-			// the directory itself too: the installer creates /usr/local/tmp before using it (B-6)
-			if strings.HasPrefix(rel, a) || rel == strings.TrimSuffix(a, "/") {
-				return true
-			}
-		} else if rel == a || strings.HasPrefix(rel, a) {
+		if pathEntryAllows(a, rel) {
 			return true
 		}
 	}
 	return false
+}
+
+// pathEntryAllows is the one rule for a Paths entry (occulited B-6): an entry ending in "/" is a
+// directory - itself (the installer creates /usr/local/tmp before using it) and everything below
+// it; an entry with a "*" is a filepath.Match pattern for one name, where "*" never crosses a "/"
+// (/usr/local/etc/monit-*.cfg); every other entry is exactly one file. Before, an entry without
+// the slash matched by prefix, so /usr/local/.recoveryMode also let /usr/local/.recoveryModeXYZ
+// and /etc/hosts also /etc/hosts.allow through.
+func pathEntryAllows(entry, rel string) bool {
+	switch {
+	case strings.HasSuffix(entry, "/"):
+		return strings.HasPrefix(rel, entry) || rel == strings.TrimSuffix(entry, "/")
+	case strings.Contains(entry, "*"):
+		ok, err := filepath.Match(entry, rel)
+		return err == nil && ok
+	default:
+		return rel == entry
+	}
 }
 
 // localUnitNameRe is the one shape of an own unit's name, <name> in local-<name>.timer (task 50).
