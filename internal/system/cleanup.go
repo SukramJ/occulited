@@ -172,8 +172,45 @@ type LeftoverRun struct {
 	Paths   []string `json:"paths,omitempty"`
 	Freed   int64    `json:"freed_bytes"`
 	// Hardened lists the world-writable directories under /usr/local/etc/config whose mode was
-	// fixed at first boot, and the removed empty addons/mh leftover (B-257).
+	// fixed at first boot, and the removed empty addons/mh leftover (B-257). Markers written
+	// between B-257 and B-264 carry it; since B-264 the hardening keeps a marker of its own
+	// (HardenConfigDirsOnce) and this field stays empty.
 	Hardened []string `json:"hardened,omitempty"`
+}
+
+// HardenMarker is the file (in the state directory) that says the config-dir hardening ran
+// (openccu-lite B-264).
+const HardenMarker = "harden-config-dirs.done"
+
+// HardenRun is what the hardening did, as its marker keeps it.
+type HardenRun struct {
+	At       string   `json:"at"`
+	Hardened []string `json:"hardened"`
+}
+
+// HardenConfigDirsOnce runs hardenConfigDirs unless its own marker says it ran (openccu-lite
+// B-264). B-257 put the hardening into the leftovers pass, whose marker every system that ran an
+// image with task 250 already had (dev.24 to dev.28, the first public release among them): there
+// the pass never ran again and addons/mh stayed 0777. A marker of its own makes it run once on every
+// system, those included, whatever the leftovers pass did. Not while the ReGa runs (the CCU's own
+// processes may still need the directories as they are). ran is false when the marker was there.
+func (r Root) HardenConfigDirsOnce(stateDir string, now time.Time) (run HardenRun, ran bool, err error) {
+	marker := filepath.Join(stateDir, HardenMarker)
+	if _, err := os.Stat(marker); err == nil {
+		return HardenRun{}, false, nil
+	}
+	if r.HasReGa() {
+		return HardenRun{}, false, fmt.Errorf("%w: the ReGa runs on this system", ErrMigrationIncomplete)
+	}
+	run = HardenRun{At: now.UTC().Format(time.RFC3339), Hardened: r.hardenConfigDirs()}
+	if run.Hardened == nil {
+		run.Hardened = []string{}
+	}
+	b, _ := json.Marshal(run)
+	if werr := os.WriteFile(marker, append(b, '\n'), 0o600); werr != nil {
+		return run, true, fmt.Errorf("the marker: %w", werr)
+	}
+	return run, true, nil
 }
 
 // hardenConfigDirs (B-257) is the first-boot cleanup of the CCU's world-writable leftover
@@ -266,8 +303,6 @@ func (r Root) RemoveLeftoversOnce(stateDir string, importSettled bool, now time.
 	if run.Removed == nil {
 		run.Removed = []string{}
 	}
-	// B-257: fix the CCU's world-writable leftover directories in the same first-boot pass
-	run.Hardened = r.hardenConfigDirs()
 	if err != nil {
 		return run, true, err // no marker: what is left is tried again at the next start
 	}

@@ -1576,6 +1576,13 @@ func firstBootLeftovers(root system.Root, services httpapi.ServiceManager, manag
 		stop = func(unit string) { _, _ = services.Control(context.Background(), unit, "stop") }
 		reload = func() { sd.Reload(context.Background()) }
 	}
+	// B-257's hardening of the world-writable config directories, once, with a marker of its own
+	// (B-264): also on a system whose leftovers pass ran before the hardening existed
+	if h, ran, err := root.HardenConfigDirsOnce(stateDir, time.Now()); err != nil && !errors.Is(err, system.ErrMigrationIncomplete) {
+		log.Warn("config directories: the hardening's marker could not be written; the next start runs it again", "err", err)
+	} else if ran {
+		log.Info("config directories: world-writable leftovers hardened", "changed", strings.Join(h.Hardened, ", "))
+	}
 	run, ran, err := root.RemoveLeftoversOnce(stateDir, importSettled(root, store, stateDir), time.Now(), stop, reload)
 	switch {
 	case !ran && err == nil:

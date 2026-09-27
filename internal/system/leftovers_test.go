@@ -84,9 +84,9 @@ func TestRemoveLeftoversOnce(t *testing.T) {
 	}
 }
 
-// B-257: the first-boot pass removes the empty world-writable CCU leftover addons/mh and takes the
+// B-257: the hardening (once, B-264: its own marker) removes the empty world-writable CCU leftover addons/mh and takes the
 // world-writable bit off any other 0777 directory under /usr/local/etc/config, and leaves the rest.
-func TestRemoveLeftoversHardensConfig(t *testing.T) {
+func TestHardenConfigDirs(t *testing.T) {
 	root := Root(t.TempDir())
 	state := t.TempDir()
 	cfg := filepath.Join(string(root), "usr/local/etc/config")
@@ -106,7 +106,7 @@ func TestRemoveLeftoversHardensConfig(t *testing.T) {
 	// addons itself must stay traversable and not world-writable so the walk can reach the leaves
 	_ = os.Chmod(filepath.Join(cfg, "addons"), 0o755)
 
-	run, ran, err := root.RemoveLeftoversOnce(state, true, time.Now(), nil, nil)
+	run, ran, err := root.HardenConfigDirsOnce(state, time.Now())
 	if err != nil || !ran {
 		t.Fatalf("%v %v", ran, err)
 	}
@@ -124,8 +124,74 @@ func TestRemoveLeftoversHardensConfig(t *testing.T) {
 	if len(run.Hardened) < 2 {
 		t.Errorf("the run did not record both changes: %v", run.Hardened)
 	}
-	// once only: the marker keeps it from running again
-	if _, ran, _ := root.RemoveLeftoversOnce(state, true, time.Now(), nil, nil); ran {
+	// once only: its marker keeps it from running again
+	mkdir("usr/local/etc/config/addons/late", 0o777)
+	if _, ran, _ := root.HardenConfigDirsOnce(state, time.Now()); ran {
 		t.Error("the hardening ran twice")
+	}
+	if fi, _ := os.Stat(filepath.Join(cfg, "addons/late")); fi == nil || fi.Mode().Perm() != 0o777 {
+		t.Error("a second start hardened again")
+	}
+	// the leftovers pass does not do it any more
+	lrun, lran, err := root.RemoveLeftoversOnce(t.TempDir(), true, time.Now(), nil, nil)
+	if err != nil || !lran || len(lrun.Hardened) != 0 {
+		t.Errorf("the leftovers pass hardened: %+v %v %v", lrun, lran, err)
+	}
+	if fi, _ := os.Stat(filepath.Join(cfg, "addons/late")); fi == nil || fi.Mode().Perm() != 0o777 {
+		t.Error("the leftovers pass changed a mode")
+	}
+}
+
+// openccu-lite B-264: a system upgraded from dev.24-dev.28 has the leftovers marker from before
+// B-257 (no "hardened" key) and no hardening marker: the hardening runs once there, writes its own
+// marker, and leaves the leftovers marker as it was.
+func TestHardenConfigDirsOnUpgradedSystem(t *testing.T) {
+	root := Root(t.TempDir())
+	state := t.TempDir()
+	cfg := filepath.Join(string(root), "usr/local/etc/config")
+	mh := filepath.Join(cfg, "addons/mh")
+	if err := os.MkdirAll(filepath.Join(mh, "html"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(mh, "html", "index.html"), []byte("x"), 0o777)
+	for _, d := range []string{mh, filepath.Join(mh, "html")} {
+		if err := os.Chmod(d, 0o777); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := []byte(`{"at":"2026-09-25T16:49:47Z","removed":["measurement"],"freed_bytes":12}` + "\n")
+	leftovers := filepath.Join(state, LeftoversMarker)
+	if err := os.WriteFile(leftovers, old, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// the leftovers pass: done long ago, nothing happens
+	if _, ran, err := root.RemoveLeftoversOnce(state, true, time.Now(), nil, nil); ran || err != nil {
+		t.Fatalf("the leftovers pass ran again: %v %v", ran, err)
+	}
+	// the hardening: runs, both directories lose the world-writable bit, mh stays (not empty)
+	at := time.Date(2026, 9, 28, 8, 0, 0, 0, time.UTC)
+	run, ran, err := root.HardenConfigDirsOnce(state, at)
+	if err != nil || !ran || len(run.Hardened) != 2 || run.At != "2026-09-28T08:00:00Z" {
+		t.Fatalf("%+v %v %v", run, ran, err)
+	}
+	for _, d := range []string{mh, filepath.Join(mh, "html")} {
+		if fi, err := os.Stat(d); err != nil || fi.Mode().Perm() != 0o775 {
+			t.Errorf("%s: %v %v", d, fi.Mode().Perm(), err)
+		}
+	}
+	var m HardenRun
+	if b, err := os.ReadFile(filepath.Join(state, HardenMarker)); err != nil || json.Unmarshal(b, &m) != nil || len(m.Hardened) != 2 {
+		t.Fatalf("marker: %+v %v", m, err)
+	}
+	if b, _ := os.ReadFile(leftovers); string(b) != string(old) {
+		t.Errorf("the leftovers marker changed: %s", b)
+	}
+	if _, ran, _ := root.HardenConfigDirsOnce(state, at); ran {
+		t.Error("ran twice")
+	}
+	// a state directory it cannot write: the run is reported, no marker, the next start tries again
+	ro := filepath.Join(t.TempDir(), "missing", "state")
+	if _, ran, err := root.HardenConfigDirsOnce(ro, at); !ran || err == nil {
+		t.Errorf("no marker written: %v %v", ran, err)
 	}
 }
