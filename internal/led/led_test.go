@@ -673,6 +673,28 @@ func TestControllerBootStatesShutdown(t *testing.T) {
 	r.steps(1)
 	r.expectShown(Look{Color: Blue, Pattern: Solid}, StateNormal)
 
+	// openccu-lite task 283: units in a crash loop are service-failed, beside a failed one, and
+	// not a status warning; the state goes with the warning
+	r.mu.Lock()
+	r.warns = []warnings.Warning{{ID: "crash-loop", Variant: "addon-mosquitto,sshd", Severity: warnings.SeverityError}}
+	r.mu.Unlock()
+	r.setUnit("lighttpd.service", "failed", "failed")
+	r.steps(3)
+	r.expectShown(Look{Color: Red, Pattern: Slow}, StateServiceFailed)
+	if st := r.c.State(); st.Shown.Detail != "addon-mosquitto, lighttpd, sshd" {
+		t.Errorf("crash-loop detail %q", st.Shown.Detail)
+	}
+	r.setUnit("lighttpd.service", "active", "running")
+	r.steps(1)
+	if st := r.c.State(); st.Shown.ID != StateServiceFailed || st.Shown.Detail != "addon-mosquitto, sshd" {
+		t.Errorf("the loop alone: %+v", st.Shown)
+	}
+	r.mu.Lock()
+	r.warns = nil
+	r.mu.Unlock()
+	r.steps(1)
+	r.expectShown(Look{Color: Blue, Pattern: Solid}, StateNormal)
+
 	// no network: hasIP gone
 	r.file("var/status/hasIP", false)
 	r.steps(3)

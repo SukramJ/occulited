@@ -45,6 +45,7 @@ h1{margin:0 0 4px;font-size:18px;font-weight:600}
 .bar.indeterminate .fill{opacity:.35;background:repeating-linear-gradient(-45deg,var(--accent) 0 8px,transparent 8px 16px);background-size:22.63px 100%;animation:stripe 1.6s linear infinite}
 @keyframes stripe{to{background-position:22.63px 0}}
 .text{margin:8px 0 0;color:var(--muted);font-variant-numeric:tabular-nums}
+.state{margin:16px 0 0;overflow-wrap:anywhere}
 .hint{margin:20px 0 0;overflow-wrap:anywhere}
 a{color:var(--accent)}
 @media (prefers-reduced-motion:reduce){.spinner,.fill{animation:none!important}}
@@ -59,6 +60,7 @@ a{color:var(--accent)}
 <div class="spinner" id="spinner" role="img" aria-label="…"></div>
 <div class="bar" id="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" hidden><div class="fill" id="fill"></div></div>
 <p class="text" id="text" aria-live="polite" hidden></p>
+<p class="state" id="state" aria-live="polite" hidden></p>
 <p class="hint" id="hint" hidden></p>
 <noscript><p class="text">openccu-lite startet … — this page reloads every 10 seconds · diese Seite lädt alle 10 Sekunden neu</p></noscript>
 </main>

@@ -7,8 +7,12 @@
 // in localStorage (lib/bootbar.ts); this page is on the same origin, reads it and goes on with the
 // same bar: lighttpd answering is the checkpoint it stands on, occulited answering the one it waits
 // for. Without such an entry it shows the spinner only. It never shows diagnostics.
+//
+// openccu-lite task 283: without a countdown, lighttpd's 503 on the health route carries
+// occulited's unit state (systemd's hooks keep it in /run), and the page says which case it is:
+// restarting after a crash, a crash loop, stopped on purpose, the system going down.
 
-import {BAR_KINDS, barView, bootText, classifyHealth, defaultExpect, EASE_MS, estimatedEnd, HINT_AFTER_MS, markSeen, observe, pickLanguage, recoveryHint, type BootEntry} from '../lib/bootbar';
+import {BAR_KINDS, barView, bootText, classifyHealth, defaultExpect, EASE_MS, estimatedEnd, HINT_AFTER_MS, markSeen, observe, pickLanguage, recoveryHint, unitStateOf, unitStateView, type BootEntry, type UnitState} from '../lib/bootbar';
 import {probeHealth, readEntry, writeEntry} from '../lib/bootwatch';
 
 const FAST_MS = 2000;
@@ -69,6 +73,8 @@ const bar = byId('bar');
 const fill = byId('fill');
 const text = byId('text');
 const hint = byId('hint');
+const stateLine = byId('state');
+let unit: UnitState | null = null;
 byId('spinner').hidden = entry !== null;
 bar.hidden = text.hidden = entry === null;
 bar.setAttribute('aria-label', bootText('barLabel', lang));
@@ -95,9 +101,18 @@ function showHint(s: string) {
 function render() {
     const now = Date.now();
     if (!entry) {
-        showHint(now - loadedAt >= hintWithoutEntryMs ? recoveryHint(url, lang) : '');
+        const v = unitStateView(unit, now, lang);
+        const heading = v ? v.title : title;
+        if (byId('title').textContent !== heading) {
+            byId('title').textContent = heading;
+            document.title = heading;
+        }
+        stateLine.textContent = v ? v.line : '';
+        stateLine.hidden = !v;
+        showHint((v && v.hint) || now - loadedAt >= hintWithoutEntryMs ? recoveryHint(url, lang) : '');
         return;
     }
+    stateLine.hidden = true;
     const v = barView(entry, now, lang, url);
     fill.style.width = v.indeterminate ? '100%' : `${(v.fill * 100).toFixed(2)}%`;
     bar.classList.toggle('indeterminate', v.indeterminate);
@@ -111,6 +126,7 @@ function render() {
 async function poll() {
     const {status, body} = await probeHealth();
     const cls = classifyHealth(status, body);
+    unit = cls === 'http' ? unitStateOf(body) : null;
     if (cls === 'ui') {
         if (!entry) {
             location.reload();

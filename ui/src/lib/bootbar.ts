@@ -234,6 +234,30 @@ const TEXT = {
     barLabel: {en: 'Time until the system is back', de: 'Zeit, bis das System wieder da ist'},
     readyLabel: {en: 'Time until the radio interfaces are up', de: 'Zeit, bis die Funkschnittstellen bereit sind'},
     shuttingDown: {en: 'Shutting down…', de: 'Wird heruntergefahren…'},
+    // openccu-lite task 283: what the waiting page says from occulited's unit state (lighttpd's 503)
+    restartingTitle: {en: 'openccu-lite is restarting …', de: 'openccu-lite startet neu …'},
+    restartingIn: {
+        en: 'The system service stopped unexpectedly at {time}. It starts again in about {n} ({restarts} restarts so far).',
+        de: 'Der Systemdienst wurde um {time} unerwartet beendet. Er startet in etwa {n} neu (bisher {restarts} Neustarts).',
+    },
+    restartingNow: {
+        en: 'The system service stopped unexpectedly at {time} and is starting again ({restarts} restarts so far).',
+        de: 'Der Systemdienst wurde um {time} unerwartet beendet und startet gerade neu (bisher {restarts} Neustarts).',
+    },
+    loopTitle: {en: 'The system service keeps failing', de: 'Der Systemdienst scheitert immer wieder'},
+    loop: {
+        en: 'It failed {fails} times in a row since {time}; the system keeps trying at longer and longer intervals{next}. Wait a few minutes or restart the system. Why it fails is in the journal: over SSH, journalctl -u occulited.',
+        de: 'Er ist seit {time} {fails}-mal in Folge gescheitert; das System versucht es in immer längeren Abständen weiter{next}. Warten Sie einige Minuten oder starten Sie das System neu. Warum er scheitert, steht im Journal: per SSH mit journalctl -u occulited.',
+    },
+    loopNext: {en: ' (next attempt in about {n})', de: ' (nächster Versuch in etwa {n})'},
+    stoppedTitle: {en: 'The system service is stopped', de: 'Der Systemdienst ist angehalten'},
+    stopped: {
+        en: 'It was stopped on purpose – for an update, a restore or by an administrator – and starts again when that is done.',
+        de: 'Er wurde absichtlich angehalten – für ein Update, eine Wiederherstellung oder von einem Administrator – und startet wieder, wenn das erledigt ist.',
+    },
+    goingDown: {en: 'The system is shutting down or restarting.', de: 'Das System wird heruntergefahren oder neu gestartet.'},
+    seconds: {en: '{n} s', de: '{n} s'},
+    minutes: {en: '{n} min', de: '{n} min'},
     haltWait: {en: 'Wait until the system has stopped answering before you unplug it.', de: 'Warten Sie, bis das System nicht mehr antwortet, bevor Sie den Stecker ziehen.'},
 } satisfies Record<string, {en: string; de: string}>;
 
@@ -411,4 +435,67 @@ export function readyDone(services: readonly ServiceState[]): boolean {
 /** POST /api/system/v1/boot-timing's body: what the page saw. */
 export function timingBody(entry: BootEntry, readyAt?: number): {kind: BootKind; started: number; down?: number; http?: number; ui?: number; ready?: number} {
     return {kind: entry.kind, started: entry.started, ...entry.seen, ...(readyAt !== undefined && entry.seen.ui !== undefined ? {ready: Math.max(readyAt, entry.seen.ui)} : {})};
+}
+
+/**
+ * occulited's unit state as lighttpd's 503 carries it (openccu-lite task 283): the file systemd's
+ * hooks keep in /run while occulited does not answer. Times are Unix seconds.
+ */
+export interface UnitState {
+    state: 'starting' | 'running' | 'restarting' | 'crash-loop' | 'stopped' | string;
+    since?: number;
+    restarts?: number;
+    fails?: number;
+    first_fail?: number;
+    last_fail?: number;
+    result?: string;
+    next_retry?: number;
+    reason?: string;
+}
+
+/** The unit state out of a health answer's body, when lighttpd put one there. */
+export function unitStateOf(body: unknown): UnitState | null {
+    const u = (body as {unit?: unknown} | null)?.unit;
+    if (!u || typeof u !== 'object' || typeof (u as UnitState).state !== 'string') return null;
+    return u as UnitState;
+}
+
+export interface UnitStateView {
+    title: string;
+    line: string;
+    /** the recovery hint belongs to the view at once (a crash loop) */
+    hint: boolean;
+}
+
+function span(seconds: number, lang: Lang): string {
+    const n = Math.max(1, Math.ceil(seconds));
+    return n < 90 ? bootText('seconds', lang, {n}) : bootText('minutes', lang, {n: Math.round(n / 60)});
+}
+
+function clock(unix: number | undefined, lang: Lang): string {
+    if (!unix) return '';
+    return new Date(unix * 1000).toLocaleTimeString(lang === 'de' ? 'de-DE' : 'en-GB', {hour: '2-digit', minute: '2-digit', second: '2-digit'});
+}
+
+/**
+ * What the waiting page says for the unit state at `now` (ms): null for a start (the page's own
+ * words), a title and a line for a restart after a crash, a crash loop and a stop on purpose.
+ */
+export function unitStateView(u: UnitState | null, now: number, lang: Lang): UnitStateView | null {
+    if (!u) return null;
+    const wait = u.next_retry ? u.next_retry - now / 1000 : 0;
+    switch (u.state) {
+        case 'restarting': {
+            const p = {time: clock(u.last_fail, lang), restarts: u.restarts ?? 0, n: span(wait, lang)};
+            return {title: bootText('restartingTitle', lang), line: bootText(wait > 0 ? 'restartingIn' : 'restartingNow', lang, p), hint: false};
+        }
+        case 'crash-loop': {
+            const next = wait > 0 ? bootText('loopNext', lang, {n: span(wait, lang)}) : '';
+            return {title: bootText('loopTitle', lang), line: bootText('loop', lang, {fails: u.fails ?? 0, time: clock(u.first_fail, lang), next}), hint: true};
+        }
+        case 'stopped':
+            if (u.reason === 'shutdown') return {title: bootText('shuttingDown', lang), line: bootText('goingDown', lang), hint: false};
+            return {title: bootText('stoppedTitle', lang), line: bootText('stopped', lang), hint: false};
+    }
+    return null;
 }

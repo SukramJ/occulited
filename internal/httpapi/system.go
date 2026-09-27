@@ -276,6 +276,9 @@ type SystemAPI struct {
 	Warnings *WarningTracker
 	// warn is the warnings' own state: the cached security key, B-92's ownership check
 	warn warningsState
+	// CrashLoops is the crash-loop sampler and addon supervisor (openccu-lite task 283); nil = no
+	// crash-loop warning.
+	CrashLoops *system.CrashLoops
 	// Legacy keeps the legacy session switches (task 125, legacysession.go); nil = on for every
 	// addon, and the routes answer 501.
 	Legacy LegacySessions

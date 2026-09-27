@@ -32,9 +32,17 @@ SupplementaryGroups=systemd-journal
 RuntimeDirectory=occulite/sessions occulite/legacy-sessions occulite/wpa
 RuntimeDirectoryMode=0711
 RuntimeDirectoryPreserve=yes
+# lighttpd's waiting page says whether this service is starting,
+# restarting after a crash, in a crash loop or stopped on purpose - from a small file in /run that
+# these hooks keep as root around every run, outside the sandbox ("+") and never in the way of a
+# start ("-"). The script needs nothing of this daemon, its helper or the userfs.
+ExecStartPre=-+/usr/libexec/occulited/unit-state start
 ExecStart=/usr/bin/occulited --config /usr/local/etc/occulite/occulited.json --session-dir /run/occulite/sessions
+ExecStartPost=-+/usr/libexec/occulited/unit-state up
+ExecStopPost=-+/usr/libexec/occulited/unit-state stop
 # essential: always back, with backoff instead of a tight loop: 2 s doubling to 5 min,
-# never giving up
+# never giving up. A loop is reported instead: the waiting page while it lasts, the
+# Status page's occulited-crash-loop warning once the daemon runs again.
 Restart=always
 RestartSec=2
 RestartSteps=8

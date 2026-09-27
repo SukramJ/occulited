@@ -1,0 +1,148 @@
+#!/bin/sh
+# occulited-unit-state start|up|stop
+#
+# What lighttpd's waiting page says while occulited does not answer. The
+# page runs in lighttpd's sandbox as www-data and cannot ask systemd, and occulited cannot say it
+# either - it is the one not answering - so its unit calls this script as root around every run
+# (ExecStartPre=, ExecStartPost=, ExecStopPost=, each "-+": never in the way of a start) and the
+# script keeps one small file under /run: the case, since when, how often, the next attempt.
+# lighttpd's occulite-starting.lua hands it to the page with its 503; once occulited is back, it
+# reads the same file for the Status page's warning about its own crash loop.
+#
+# Cases (state):
+#   starting    a start at boot, by hand, or a restart someone asked for
+#   running     occulited was started (Type=simple: forked, not yet necessarily listening)
+#   restarting  it failed (no stop or restart was asked for, the result was not success) and
+#               systemd restarts it after RestartUSecNext
+#   crash-loop  CRASH_LOOP failures in a row, each within STABLE_S of the start before it
+#   stopped     stopped on purpose (reason "stop"), or the system is going down ("shutdown")
+#
+# Nothing in the file is secret: states, counts and times. It needs nothing of occulited, its
+# helper or the userfs, only systemctl and a writable /run.
+
+STATE_FILE=${OCCULITE_UNIT_STATE:-/run/occulite/occulited-state.json}
+UNIT=${OCCULITE_UNIT:-occulited.service}
+SYSTEMCTL=${SYSTEMCTL:-systemctl}
+STABLE_S=120
+CRASH_LOOP=3
+
+now=${OCCULITE_NOW:-$(date +%s)}
+
+# the previous file's number and word fields (the file is one line, written below)
+num() {
+	v=$(sed -n "s/.*\"$1\":\([0-9][0-9]*\).*/\1/p" "$STATE_FILE" 2>/dev/null | head -n 1)
+	echo "${v:-0}"
+}
+word() {
+	sed -n "s/.*\"$1\":\"\([a-z-]*\)\".*/\1/p" "$STATE_FILE" 2>/dev/null | head -n 1
+}
+
+# a property of the unit, from systemctl show
+prop() {
+	"$SYSTEMCTL" show -p "$1" "$UNIT" 2>/dev/null | sed -n "s/^$1=//p" | head -n 1
+}
+
+# systemd's time span ("2s", "1min 4.500s", "5min", "150ms") in whole seconds, rounded up
+span_s() {
+	echo "$1" | awk '{
+		t = 0
+		for (i = 1; i <= NF; i++) {
+			v = $i; u = $i
+			sub(/[a-z]+$/, "", v); sub(/^[0-9.]+/, "", u)
+			if (u == "us") t += v / 1000000
+			else if (u == "ms") t += v / 1000
+			else if (u == "s" || u == "") t += v
+			else if (u == "min") t += v * 60
+			else if (u == "h") t += v * 3600
+			else if (u == "d") t += v * 86400
+		}
+		s = int(t); if (s < t) s++
+		print s
+	}'
+}
+
+# the job queued for the unit now: stop, restart, start, ... or nothing
+job() {
+	"$SYSTEMCTL" list-jobs --no-legend --plain 2>/dev/null | awk -v u="$UNIT" '$2 == u { print $3; exit }'
+}
+
+state=$(word state)
+reason=""
+result=$(word result)
+since=$(num since)
+started=$(num started)
+restarts=$(num restarts)
+fails=$(num fails)
+first_fail=$(num first_fail)
+last_fail=$(num last_fail)
+next_retry=0
+
+n=$(prop NRestarts)
+case "$n" in '' | *[!0-9]*) ;; *) restarts=$n ;; esac
+
+case "$1" in
+start)
+	started=$now
+	case "$state" in
+	restarting | crash-loop)
+		# the attempt after a failure: the case stays, the attempt is under way
+		;;
+	*)
+		state=starting
+		since=$now
+		fails=0
+		first_fail=0
+		last_fail=0
+		result=""
+		;;
+	esac
+	;;
+up)
+	state=running
+	since=$now
+	;;
+stop)
+	j=$(job)
+	running=$("$SYSTEMCTL" is-system-running 2>/dev/null)
+	if [ "$running" = stopping ] || "$SYSTEMCTL" list-jobs --no-legend --plain 2>/dev/null | awk '$2 ~ /^(shutdown|reboot|poweroff|halt|kexec)\.target$/ { f = 1 } END { exit !f }'; then
+		state=stopped reason=shutdown fails=0 first_fail=0
+	elif [ "$j" = stop ]; then
+		state=stopped reason=stop fails=0 first_fail=0
+	elif [ -n "$j" ]; then
+		# restart, try-restart, start: asked for, it comes back
+		state=starting reason=restart fails=0 first_fail=0
+	elif [ "${SERVICE_RESULT:-success}" = success ]; then
+		# a clean exit nobody asked for: Restart=always brings it back, not a failure
+		state=starting fails=0 first_fail=0
+	else
+		result=$(printf %s "$SERVICE_RESULT" | tr -cd "a-z-")
+		if [ "$started" -gt 0 ] && [ $((now - started)) -lt "$STABLE_S" ] && [ "$fails" -gt 0 ]; then
+			fails=$((fails + 1))
+		else
+			fails=1
+			first_fail=$now
+		fi
+		last_fail=$now
+		next_retry=$((now + $(span_s "$(prop RestartUSecNext)")))
+		if [ "$fails" -ge "$CRASH_LOOP" ]; then
+			state=crash-loop
+		else
+			state=restarting
+		fi
+	fi
+	since=$now
+	;;
+*)
+	echo "usage: $0 start|up|stop" >&2
+	exit 2
+	;;
+esac
+
+dir=$(dirname "$STATE_FILE")
+mkdir -p "$dir" || exit 0
+tmp="$STATE_FILE.$$"
+printf '{"state":"%s","since":%s,"started":%s,"restarts":%s,"fails":%s,"first_fail":%s,"last_fail":%s,"result":"%s","next_retry":%s,"reason":"%s"}\n' \
+	"$state" "$since" "$started" "$restarts" "$fails" "$first_fail" "$last_fail" "$result" "$next_retry" "$reason" >"$tmp" &&
+	chmod 0644 "$tmp" && mv -f "$tmp" "$STATE_FILE"
+rm -f "$tmp"
+exit 0

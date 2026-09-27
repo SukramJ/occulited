@@ -94,3 +94,18 @@ describe('hmip-port-open (B-89)', () => {
         expect(text).toBe("hmipserver's port 39292 listens on 0.0.0.0, ::, not only on this system: the image's loopback shim did not take. The firewall still closes it.");
     });
 });
+
+describe('crash loops (openccu-lite task 283)', () => {
+    it('names the units, their restarts and since when', () => {
+        const text = warningText(w('crash-loop', 'addon-mosquitto,rfd', {units: [{unit: 'addon-mosquitto', restarts: 3, total: 3, since: '2026-09-27T20:00:00Z', addon: true}, {unit: 'rfd', restarts: 4, total: 9, since: '2026-09-27T20:01:00Z', result: 'exit-code'}]}, '/system/services'), words);
+        expect(text).toBe('Keeps failing and restarting: addon-mosquitto (3 restarts since at 2026-09-27T20:00:00Z), rfd (4 restarts since at 2026-09-27T20:01:00Z). The system tries again at longer and longer intervals; the log says why.');
+        expect(warningText(w('crash-loop', 'rfd'), words)).toContain('restarting: rfd.');
+        expect(warningLink(w('crash-loop', 'rfd', {}, '/system/services'), t)).toEqual({href: '/system/services', label: 'Services'});
+    });
+
+    it("says occulited's own loop after it came back", () => {
+        const text = warningText(w('occulited-crash-loop', '1790000000', {fails: 3, restarts: 5, first: '2026-09-27T20:00:00Z', last: '2026-09-27T20:05:00Z'}, '/system/log?unit=occulited'), words);
+        expect(text).toBe('The system service occulited kept failing: 3 failures in a row between at 2026-09-27T20:00:00Z and at 2026-09-27T20:05:00Z. It runs again; the log of that time says why.');
+        expect(warningLink(w('occulited-crash-loop', 'x', {}, '/system/log?unit=occulited'), t)).toEqual({href: '/system/log?unit=occulited', label: 'Log'});
+    });
+});

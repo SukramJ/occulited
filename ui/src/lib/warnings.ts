@@ -25,6 +25,16 @@ export interface WarnAddon {
     path?: string;
 }
 
+/** a unit in a crash loop (openccu-lite task 283) */
+export interface WarnLoopUnit {
+    unit: string;
+    restarts: number;
+    total: number;
+    since: string;
+    result?: string;
+    addon?: boolean;
+}
+
 export interface WarnDevice {
     name: string;
     kind: string;
@@ -35,7 +45,7 @@ export interface Warning {
     id: string;
     variant: string;
     severity: Severity;
-    params?: {addons?: WarnAddon[]; account?: string; at?: string; path?: string; days?: number; verdict?: string; reasons?: StorageReason[]; devices?: WarnDevice[]; mode?: string; reason?: string; adapter?: string; cause?: string; line?: string; families?: string[]; unreachable?: number; total?: number; port?: number; addresses?: string; sgtin?: string; address?: string; name?: string; detail?: string; label?: string; dir?: string; target?: string; share?: string; reconnecting?: boolean; interface?: string; kind?: string; since?: string; checked?: boolean; listeners?: StallListener[]; folder?: string; device?: string; running?: string; newest?: string; node?: string; drops_off?: boolean; hosts?: string[]; issuer?: string; store?: string; candidate?: boolean; from?: string; module?: string; count?: number};
+    params?: {addons?: WarnAddon[]; account?: string; at?: string; path?: string; days?: number; verdict?: string; reasons?: StorageReason[]; devices?: WarnDevice[]; mode?: string; reason?: string; adapter?: string; cause?: string; line?: string; families?: string[]; unreachable?: number; total?: number; port?: number; addresses?: string; sgtin?: string; address?: string; name?: string; detail?: string; label?: string; dir?: string; target?: string; share?: string; reconnecting?: boolean; interface?: string; kind?: string; since?: string; checked?: boolean; listeners?: StallListener[]; folder?: string; device?: string; running?: string; newest?: string; node?: string; drops_off?: boolean; hosts?: string[]; issuer?: string; store?: string; candidate?: boolean; from?: string; module?: string; count?: number; units?: WarnLoopUnit[]; fails?: number; restarts?: number; result?: string; first?: string; last?: string};
     href?: string;
     /** this administrator's own silence (D-64) */
     silenced?: Silence;
@@ -95,6 +105,14 @@ export function warningText(w: Warning, words: Words): string {
         case 'addon-failed':
             // task 248: an addon's unit is in systemd's failed state
             return t('Addons that failed: {list}. The Addons page starts them again; the log says why they failed.', {list: names(addons)});
+        case 'crash-loop': {
+            // openccu-lite task 283: units that keep failing, each restart hidden by the backoff
+            const list = (p.units ?? []).map((u) => t('{unit} ({n} restarts since {when})', {unit: u.unit, n: u.restarts, when: words.when(u.since)})).join(', ');
+            return t('Keeps failing and restarting: {list}. The system tries again at longer and longer intervals; the log says why.', {list: list || w.variant});
+        }
+        case 'occulited-crash-loop':
+            // task 283: occulited itself looped; it could not say so until it ran again
+            return t('The system service occulited kept failing: {n} failures in a row between {first} and {last}. It runs again; the log of that time says why.', {n: p.fails ?? 0, first: p.first ? words.when(p.first) : '', last: p.last ? words.when(p.last) : ''});
         case 'meta':
             return t('The metadata store had to be recovered from its backup. The last change before the failure may be lost.');
         case 'trust-ca': {
@@ -262,6 +280,8 @@ const LINK_LABELS: Record<string, string> = {
     'addon-ownership': 'Services',
     'addon-ended': 'Addons',
     'addon-failed': 'Addons',
+    'crash-loop': 'Services',
+    'occulited-crash-loop': 'Log',
     'security-key': 'Set security key',
     'hmip-adapter': 'Interfaces',
     'devices-import': 'Interfaces',

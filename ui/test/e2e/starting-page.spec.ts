@@ -111,3 +111,56 @@ test('placeholders sed did not fill show nothing', async ({page}) => {
     await expect(page.locator('#ident')).toBeHidden();
     await expect(page.locator('body')).not.toContainText('@');
 });
+
+// openccu-lite task 283: lighttpd's 503 carries occulited's unit state, and the page says which
+// case it is - here without a countdown, as after a crash nobody started from the web interface.
+async function unitState(page: Page, unit: Record<string, unknown> | null) {
+    let current = unit;
+    await page.route('**/api/system/v1/health', (r) => r.fulfill({status: 503, json: {error: 'starting', message: 'occulited is not answering yet', unit: current}}));
+    await page.route((url) => url.pathname === '/state', (r) => r.fulfill({status: 503, contentType: 'text/html; charset=utf-8', body: served()}));
+    return (u: Record<string, unknown> | null) => {
+        current = u;
+    };
+}
+
+for (const lang of [
+    {locale: 'en-US', restarting: 'openccu-lite is restarting …', restartLine: 'stopped unexpectedly at', restarts: '(4 restarts so far)', loop: 'The system service keeps failing', loopLine: 'It failed 3 times in a row since', journal: 'journalctl -u occulited', stopped: 'The system service is stopped', stoppedLine: 'stopped on purpose', down: 'The system is shutting down or restarting.', starting: 'openccu-lite is starting …', hint: 'recovery system'},
+    {locale: 'de-DE', restarting: 'openccu-lite startet neu …', restartLine: 'unerwartet beendet', restarts: '(bisher 4 Neustarts)', loop: 'Der Systemdienst scheitert immer wieder', loopLine: '3-mal in Folge gescheitert', journal: 'journalctl -u occulited', stopped: 'Der Systemdienst ist angehalten', stoppedLine: 'absichtlich angehalten', down: 'Das System wird heruntergefahren oder neu gestartet.', starting: 'openccu-lite startet …', hint: 'Recovery-System'},
+]) {
+    test(`the waiting page says what the system service does, ${lang.locale}`, async ({browser}) => {
+        const ctx = await browser.newContext({locale: lang.locale});
+        const page = await ctx.newPage();
+        const now = Math.floor(Date.now() / 1000);
+        const set = await unitState(page, {state: 'restarting', since: now - 3, restarts: 4, fails: 1, first_fail: now - 3, last_fail: now - 3, result: 'exit-code', next_retry: now + 60, reason: ''});
+        await page.goto('/state');
+        const title = page.locator('#title');
+        const line = page.locator('#state');
+        await expect(title).toHaveText(lang.restarting);
+        await expect(line).toContainText(lang.restartLine);
+        await expect(line).toContainText(lang.restarts);
+        await expect(page.locator('#hint')).toBeHidden();
+
+        set({state: 'crash-loop', since: now, restarts: 6, fails: 3, first_fail: now - 300, last_fail: now, result: 'signal', next_retry: now + 120, reason: ''});
+        await expect(title).toHaveText(lang.loop);
+        await expect(line).toContainText(lang.loopLine);
+        await expect(line).toContainText(lang.journal);
+        // the recovery hint at once, with the address
+        await expect(page.locator('#hint')).toContainText(lang.hint);
+        await expect(page.locator('#hint').getByRole('link', {name: `http://${IP}/`})).toBeVisible();
+
+        set({state: 'stopped', since: now, reason: 'stop'});
+        await expect(title).toHaveText(lang.stopped);
+        await expect(line).toContainText(lang.stoppedLine);
+
+        set({state: 'stopped', since: now, reason: 'shutdown'});
+        await expect(line).toHaveText(lang.down);
+
+        // starting again, or no state at all: the page's own words
+        set({state: 'starting', since: now});
+        await expect(title).toHaveText(lang.starting);
+        await expect(line).toBeHidden();
+        set(null);
+        await expect(title).toHaveText(lang.starting);
+        await ctx.close();
+    });
+}

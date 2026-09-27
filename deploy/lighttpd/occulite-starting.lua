@@ -12,6 +12,12 @@
 -- and reloads the URL the user asked for, since it is served under that URL. The API gets
 -- {"error":"starting",...}, anything else a line of text. Always 503, Retry-After: 5 and
 -- Cache-Control: no-store, so no browser or proxy keeps the page.
+--
+-- The API's answer carries occulited's unit state as "unit" - the small
+-- file systemd's hooks on occulited.service keep in /run (deploy/systemd/occulited-unit-state):
+-- starting, restarting after a crash, a crash loop, stopped on purpose. The waiting page polls
+-- the health route and says which it is. The file is passed on only when it is what the script
+-- writes: one short line of a JSON object with nothing but plain characters in it.
 local r = lighty.r
 local status = r.req_item.http_status
 if status ~= 502 and status ~= 503 and status ~= 504 then
@@ -31,8 +37,18 @@ r.resp_header["Cache-Control"] = "no-store"
 r.resp_header["Retry-After"] = "5"
 
 if string.find(path, "^/api/") then
+  local unit = "null"
+  local f = io.open("/run/occulite/occulited-state.json", "rb")
+  if f then
+    local s = f:read(1024) or ""
+    f:close()
+    s = string.gsub(s, "%s+$", "")
+    if #s < 1024 and string.find(s, '^{"state":"[a-z-]+"[%w",:_-]*}$') then
+      unit = s
+    end
+  end
   r.resp_header["Content-Type"] = "application/json"
-  r.resp_body.set({ '{"error":"starting","message":"occulited is not answering yet"}\n' })
+  r.resp_body.set({ '{"error":"starting","message":"occulited is not answering yet","unit":' .. unit .. '}\n' })
   return 503
 end
 if not string.find(accept, "text/html", 1, true) then

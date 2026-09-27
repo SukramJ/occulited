@@ -693,6 +693,13 @@ const CATALOGUE: Record<string, {de: string; en?: string}> = {
         de: 'Addons, deren Programm beendet ist: {list}. Die Addons-Seite startet sie wieder; das Protokoll sagt, warum sie endeten.',
     },
     Failed: {de: 'Fehlgeschlagen'},
+    '{unit} ({n} restarts since {when})': {de: '{unit} ({n} Neustarts seit {when})'},
+    'Keeps failing and restarting: {list}. The system tries again at longer and longer intervals; the log says why.': {
+        de: 'Scheitert immer wieder und wird neu gestartet: {list}. Das System versucht es in immer längeren Abständen erneut; das Protokoll sagt, warum.',
+    },
+    'The system service occulited kept failing: {n} failures in a row between {first} and {last}. It runs again; the log of that time says why.': {
+        de: 'Der Systemdienst occulited ist immer wieder gescheitert: {n} Fehlschläge in Folge zwischen {first} und {last}. Er läuft wieder; das Protokoll dieser Zeit sagt, warum.',
+    },
     'outside its unit': {de: 'außerhalb seiner Unit'},
     // the Services page and Installed addons: an addon outside its unit, which Restart puts back
     'Runs outside its unit (started by an installer or by hand). Restart puts it back into the unit.': {de: 'Läuft außerhalb seiner Unit (von einem Installer oder von Hand gestartet). Neu starten holt ihn zurück in die Unit.'},

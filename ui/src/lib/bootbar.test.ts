@@ -24,6 +24,8 @@ import {
     STALE_MS,
     startingInterfaces,
     timingBody,
+    unitStateOf,
+    unitStateView,
     type BootEntry,
 } from './bootbar';
 
@@ -352,5 +354,43 @@ describe('the interfaces and the timing report', () => {
         const e = markSeen(markSeen(reboot(), 'down', at(9)), 'ui', at(40));
         expect(timingBody(e, at(80))).toEqual({kind: 'reboot', started: T0, down: at(9), ui: at(40), ready: at(80)});
         expect(timingBody(e)).toEqual({kind: 'reboot', started: T0, down: at(9), ui: at(40)});
+    });
+});
+
+describe("occulited's unit state on the waiting page (openccu-lite task 283)", () => {
+    const now = 1_790_000_000_000;
+    const s = now / 1000;
+    it('reads the state out of lighttpd 503 body', () => {
+        expect(unitStateOf({error: 'starting', unit: {state: 'crash-loop', fails: 3}})).toEqual({state: 'crash-loop', fails: 3});
+        expect(unitStateOf({error: 'starting', unit: null})).toBeNull();
+        expect(unitStateOf({error: 'starting'})).toBeNull();
+        expect(unitStateOf(null)).toBeNull();
+        expect(unitStateOf({unit: {state: 3}})).toBeNull();
+    });
+    it('says nothing of its own for a start', () => {
+        expect(unitStateView(null, now, 'en')).toBeNull();
+        expect(unitStateView({state: 'starting'}, now, 'en')).toBeNull();
+        expect(unitStateView({state: 'running'}, now, 'de')).toBeNull();
+    });
+    it('a restart after a crash: when, how often, the next attempt', () => {
+        const v = unitStateView({state: 'restarting', restarts: 2, last_fail: s - 10, next_retry: s + 64}, now, 'en');
+        expect(v?.title).toBe('openccu-lite is restarting …');
+        expect(v?.line).toMatch(/^The system service stopped unexpectedly at \d\d:\d\d:\d\d\. It starts again in about 64 s \(2 restarts so far\)\.$/);
+        expect(v?.hint).toBe(false);
+        expect(unitStateView({state: 'restarting', restarts: 2, last_fail: s - 10, next_retry: s + 250}, now, 'de')?.line).toContain('in etwa 4 min neu');
+        expect(unitStateView({state: 'restarting', restarts: 1, last_fail: s - 10, next_retry: 0}, now, 'en')?.line).toContain('and is starting again (1 restarts so far)');
+    });
+    it('a crash loop: since when, the journal, the recovery hint', () => {
+        const v = unitStateView({state: 'crash-loop', fails: 4, first_fail: s - 600, next_retry: s + 300}, now, 'de');
+        expect(v?.title).toBe('Der Systemdienst scheitert immer wieder');
+        expect(v?.line).toContain('4-mal in Folge gescheitert');
+        expect(v?.line).toContain('(nächster Versuch in etwa 5 min)');
+        expect(v?.line).toContain('journalctl -u occulited');
+        expect(v?.hint).toBe(true);
+        expect(unitStateView({state: 'crash-loop', fails: 3}, now, 'en')?.line).toContain('longer intervals. Wait');
+    });
+    it('stopped on purpose, or the system going down', () => {
+        expect(unitStateView({state: 'stopped', reason: 'stop'}, now, 'en')).toEqual({title: 'The system service is stopped', line: 'It was stopped on purpose – for an update, a restore or by an administrator – and starts again when that is done.', hint: false});
+        expect(unitStateView({state: 'stopped', reason: 'shutdown'}, now, 'de')?.line).toBe('Das System wird heruntergefahren oder neu gestartet.');
     });
 });

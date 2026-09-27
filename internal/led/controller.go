@@ -614,10 +614,20 @@ func (c *Controller) evaluate(now time.Time, rows []system.UnitRow, unitsOK bool
 	}
 	if c.Src.Warnings != nil {
 		known[StateStatusWarning], known[StateStorageReplace] = true, true
-		var ids []string
+		var ids, loops []string
 		for _, w := range warns {
 			if w.ID == "storage" && w.Variant == system.StorageReplace {
 				cond[StateStorageReplace] = ""
+				continue
+			}
+			if w.ID == "crash-loop" {
+				// openccu-lite task 283: a unit in a crash loop is an error, as a failed one is -
+				// systemd's backoff never lets it reach the failed state
+				for _, u := range strings.Split(w.Variant, ",") {
+					if u != "" && !slices.Contains(loops, u) {
+						loops = append(loops, u)
+					}
+				}
 				continue
 			}
 			if !slices.Contains(c.cfg.WarningsOff, w.ID) && !slices.Contains(ids, w.ID) {
@@ -626,6 +636,15 @@ func (c *Controller) evaluate(now time.Time, rows []system.UnitRow, unitsOK bool
 		}
 		if len(ids) > 0 {
 			cond[StateStatusWarning] = strings.Join(ids, ", ")
+		}
+		if len(loops) > 0 {
+			known[StateServiceFailed] = true
+			all := loops
+			if prev, ok := cond[StateServiceFailed]; ok && prev != "" {
+				all = append(strings.Split(prev, ", "), loops...)
+			}
+			slices.Sort(all)
+			cond[StateServiceFailed] = strings.Join(slices.Compact(all), ", ")
 		}
 	}
 	if c.Src.SystemUpdate != nil {

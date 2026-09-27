@@ -212,6 +212,8 @@ func (a *SystemAPI) bootSettled() bool {
 func (a *SystemAPI) warningSources() []warnings.Source {
 	return []warnings.Source{
 		{IDs: []string{"addon-payload", "addon-ended", "addon-failed", "rega", "arch"}, Lists: true, Eval: a.addonWarnings},
+		{IDs: []string{"crash-loop"}, Lists: true, Eval: a.crashLoopWarning},
+		{IDs: []string{"occulited-crash-loop"}, Eval: a.occulitedCrashLoopWarning},
 		{IDs: []string{"meta"}, Eval: a.metaWarning},
 		{IDs: []string{"unclean"}, Eval: a.uncleanWarning},
 		{IDs: []string{"backup-target", "backup-userfs"}, Eval: a.backupWarnings},
@@ -1085,4 +1087,45 @@ func (a *SystemAPI) radioFirmwareWarnings(context.Context) ([]warnings.Warning, 
 		}
 	}
 	return out, true
+}
+
+// crash-loop (openccu-lite task 283): units that restarted CrashLoopClass.Restarts times within
+// the window and have not stayed up since - hidden otherwise by the restart backoff, which never
+// gives up and never marks the unit failed. The variant is the set of units, so a unit joining
+// the loop is a new warning; it clears once each has stayed up (the sampler's Stable).
+func (a *SystemAPI) crashLoopWarning(context.Context) ([]warnings.Warning, bool) {
+	if a.CrashLoops == nil {
+		return nil, true
+	}
+	loops := a.CrashLoops.Loops()
+	if len(loops) == 0 {
+		return nil, true
+	}
+	ids := make([]string, len(loops))
+	for i, l := range loops {
+		ids[i] = l.Unit
+	}
+	return []warnings.Warning{{ID: "crash-loop", Variant: strings.Join(ids, ","), Severity: warnings.SeverityError, Href: "/system/services", Params: map[string]any{"units": loops}}}, true
+}
+
+// occulitedCrashLoopTTL is how long after its last failure occulited's own crash loop stays a
+// warning: it could not warn while it looped, and the loop may be over by the time anybody looks.
+const occulitedCrashLoopTTL = 24 * time.Hour
+
+// occulited-crash-loop (task 283): occulited itself was in a crash loop - the unit's state file
+// (written by systemd's hooks outside occulited) says so after it came back. The variant is the
+// loop's first failure, so the next loop is a new warning.
+func (a *SystemAPI) occulitedCrashLoopWarning(context.Context) ([]warnings.Warning, bool) {
+	s := a.Root.ReadOcculitedUnitState()
+	if s == nil || s.Fails < system.OcculitedCrashLoopFails || s.LastFail <= 0 {
+		return nil, true
+	}
+	last := time.Unix(s.LastFail, 0)
+	if time.Since(last) > occulitedCrashLoopTTL {
+		return nil, true
+	}
+	return []warnings.Warning{{ID: "occulited-crash-loop", Variant: strconv.FormatInt(s.FirstFail, 10), Severity: warnings.SeverityWarning, Href: "/system/log?unit=occulited", Params: map[string]any{
+		"fails": s.Fails, "restarts": s.Restarts, "result": s.Result,
+		"first": time.Unix(s.FirstFail, 0).UTC().Format(time.RFC3339), "last": last.UTC().Format(time.RFC3339),
+	}}}, true
 }

@@ -222,3 +222,21 @@ func (a *SystemdAddons) readLastLines(ctx context.Context, unit string) (string,
 	}
 	return at, lines
 }
+
+// SupervisedDaemons answers the installed addons whose manifest declares a daemon
+// (runtime.daemon, the stored policy's or the declared one): the ones occulited restarts when
+// their daemon ended (openccu-lite task 283, CrashLoops). What was only learned is not
+// supervised - an addon that never said it keeps a daemon may end on purpose.
+func (a *SystemdAddons) SupervisedDaemons() []string {
+	var out []string
+	for _, id := range rcdAddonIDs(a.Scripts.Root) {
+		var stored *AddonRuntime
+		if p := a.Scripts.Root.ReadAddonPolicy(id); p != nil {
+			stored = p.Runtime
+		}
+		if rt := MergeRuntime(stored, a.declared(id)); rt != nil && rt.Daemon {
+			out = append(out, id)
+		}
+	}
+	return out
+}

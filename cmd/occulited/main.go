@@ -385,6 +385,7 @@ func run(opts daemonOptions) error {
 	var timers httpapi.TimerLister
 	var manager httpapi.AddonManager        // nil = the addon routes answer 501
 	var sa *system.SystemdAddons            // set on a systemd box; its start-time refreshes run once the catalogue exists
+	var crashLoops *system.CrashLoops       // task 283: the crash-loop sampler and addon supervisor, on a systemd box
 	early := &earlySwitches{path: *cfgPath} // task 119: the early start's switches in occulited.json
 	// system commands run for real on a box; with --root pointing anywhere else (development)
 	// they are logged, so a network form can never reconfigure the workstation
@@ -421,6 +422,10 @@ func run(opts daemonOptions) error {
 		}
 		// D-36's default is confined now; what is already installed keeps what it runs as
 		firstBootAddonPolicies(sa, cfg.StateDir, area("addons"))
+		// openccu-lite task 283: the units' restart counters for the crash-loop warning, and the
+		// addons that declare a daemon restarted when it ended (the rc.d stop and start)
+		crashLoops = &system.CrashLoops{Systemd: sd, Supervised: sa.SupervisedDaemons, Log: area("services"),
+			Restart: func(ctx context.Context, unit string) error { _, err := sd.Control(ctx, unit, "restart"); return err }}
 		manager = sa
 		// the addon list comes from the same object on a systemd box: its running state is the
 		// unit's, not a pid file most addons never write (B-29)
@@ -866,7 +871,13 @@ func run(opts daemonOptions) error {
 	sysAPI.Early = early                            // task 119: the early start's switches, beside them
 	// task 81: the Status page's warnings, evaluated here (every five minutes, below, and on every
 	// read) so a silence ends when its warning clears; the silences in <state>/warnings.json
+	sysAPI.CrashLoops = crashLoops
 	warnTracker := sysAPI.WarningTracker(filepath.Join(cfg.StateDir, "warnings.json"), log)
+	if crashLoops != nil {
+		// a loop that begins or ends is on the Status page and the LED at once, not after the
+		// tracker's five minutes
+		crashLoops.OnChange = func() { warnTracker.Evaluate(context.Background()) }
+	}
 	// task 95: the status LED - the controller owns the RGB LED once the box is up; led.json in the
 	// state directory, the frames through the helper
 	ledCtl := &led.Controller{Root: root, File: filepath.Join(cfg.StateDir, "led.json"), Log: area("led"), Src: ledSources(services, warnTracker, feed, updates, ledInternetTargets(cfg.Catalog, certSvc))}
@@ -969,6 +980,9 @@ func run(opts daemonOptions) error {
 		// task 194: the state store's sweep of what is not confirmed, paced, when an interface is up
 		go devState.RunSweeps(samplerCtx, stateSource{ifs: radioIfs}, rpcSub.Publish, 0)
 		go hbWatch.Run(samplerCtx) // task 218
+		if crashLoops != nil {
+			go crashLoops.Run(samplerCtx) // task 283
+		}
 	}
 	if *rootDir == "/" {
 		// task 163: the eQ-3 discovery on UDP 43439, in place of eq3configd. Only "who are you";
