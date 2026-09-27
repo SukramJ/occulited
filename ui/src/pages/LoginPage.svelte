@@ -98,7 +98,7 @@
     <form class="ol-card" onsubmit={submit}>
         <h1>{setup ? t('Welcome — set the administrator password') : t('Login')}</h1>
         {#if setup}
-            <p class="ol-muted">{t('This system has no users yet. Choose the name and password of the first administrator; you will need them for everything, including the addon pages.')}</p>
+            <p class="ol-muted">{t('This system has no users yet. Choose the name and password of the first administrator.')}</p>
         {/if}
         {#if passwordLogin || setup}
             <!-- B-112: the text above its field with the shared gap (app.css .ol-labelled), not a line break -->

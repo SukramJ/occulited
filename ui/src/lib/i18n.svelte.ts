@@ -271,9 +271,7 @@ const CATALOGUE: Record<string, {de: string; en?: string}> = {
     'Repeat password': {de: 'Passwort wiederholen'},
     'Passwords do not match': {de: 'Die Passwörter stimmen nicht überein'},
     'Welcome — set the administrator password': {de: 'Willkommen — Administrator-Passwort festlegen'},
-    'This system has no users yet. Choose the name and password of the first administrator; you will need them for everything, including the addon pages.': {
-        de: 'Dieses System hat noch keine Benutzer. Wählen Sie Namen und Passwort des ersten Administrators; Sie brauchen sie für alles, auch für die Seiten der Zusatzsoftware.',
-    },
+    'This system has no users yet. Choose the name and password of the first administrator.': {de: 'Dieses System hat noch keine Benutzer. Wählen Sie Namen und Passwort des ersten Administrators.'},
     'Create administrator': {de: 'Administrator anlegen'},
     // a signed-in /login whose return page sent the browser straight back to the login
     '{path} asked for a login again although this browser is signed in: the page did not accept the session.': {
