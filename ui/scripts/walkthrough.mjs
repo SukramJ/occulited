@@ -16,6 +16,18 @@
 // no API patching and without the author rule - his name as the author is the one thing allowed on
 // that image. Without it the page comes from the stub, author rule included.
 //
+// WALK_BOOT_URL and WALK_BOOT_TOKEN (a read-only API token of that system, deleted afterwards) take the
+// Services page's boot timeline of a real boot with the early addon start; without them those shots
+// are skipped.
+//
+// WALK_HMM_ICON and WALK_REDMATIC_ICON: the two addons' own favicon files (from their repositories), served as
+// their frontends' icons, so the pinned tabs show them. Homematic Manager and RedMatic are pinned on every
+// page with the top bar; the pinning shots start with RedMatic alone.
+//
+// WALK_RADIO_URL, WALK_RADIO_TOKEN and WALK_RADIO_NAMES ("<nn-name>,<nn-name>") take the Interfaces and
+// the LAN devices page of a real system - one radio setup per run. Real pages get REAL_RULES on top:
+// every MAC, module serial, radio address and IPv4 address that is not a documentation one is masked.
+//
 // Two layers of demo data: the stub's JSON answers are patched per endpoint (a system with a plain
 // name, no warnings, local logins, no ULA), and before every shot the page's text is swept with
 // RULES, which mask what must never be on a published image - device serials, SGTINs, host names
@@ -67,12 +79,15 @@ const DEMO_LOG = [
     ['err', 'addon-redmatic', 'ccu-connection: HmIP-RF ping timeout, reconnecting'],
     ['info', 'addon-redmatic', 'ccu-connection: HmIP-RF connected'],
 ];
+const PINS = [{id: 'mh', pinned: true}, {id: 'redmatic', pinned: true}];
+const PINS_BEFORE = [{id: 'mh', pinned: false}, {id: 'redmatic', pinned: true}];
 /** endpoint path (no query) -> function(json, shot) returning the patched json */
 const PATCH = {
     '/api/system/v1/health': (j) => ({...j, version: head, release: '1.0.0'}),
     '/api/system/v1/status': (j) => ({...j, occulited_version: head, version: {...j.version, lite: '1.0.0', version: '3.89.9.20260914'}}),
     '/api/system/v1/system-update': (j) => ({...j, running: {...j.running, lite: '1.0.0', version: '3.89.9.20260914'}}),
     '/api/system/v1/warnings': (j) => ({...j, warnings: []}),
+    '/api/auth/v1/me/preferences': (j) => ({...j, addons: PINS}),
     '/api/auth/v1/config': (j) => ({...j, mode: 'local', running: 'local', restart_required: false, name: '', issuer: '', client_id: '', client_secret_set: false}),
     '/api/system/v1/network': (j) => {
         for (const i of j.network?.interfaces ?? []) {
@@ -142,22 +157,14 @@ const RULES = [
     ['1709ADFA5E', '0A1B2C3D4E'],
     ['4118f6a32', '0a1b2c3d4'],
 ];
+// only on pages of a real system: whatever identifies its hardware
+const REAL_RULES = [
+    ['\\b([0-9A-Fa-f]{2})[:-]([0-9A-Fa-f]{2})[:-]([0-9A-Fa-f]{2})[:-][0-9A-Fa-f]{2}[:-][0-9A-Fa-f]{2}[:-][0-9A-Fa-f]{2}\\b', '$1:$2:$3:XX:XX:XX'],
+    ['\\b0x[0-9A-Fa-f]{6}\\b', '0xXXXXXX'],
+    ['\\b(?=[0-9A-F]*[0-9])(?=[0-9A-F]*[A-F])[0-9A-F]{6,12}\\b', 'XXXXXXXXXX'],
+    ['\\b(?!127\\.0\\.0\\.1\\b)(?!192\\.0\\.2\\.)(?:\\d{1,3}\\.){3}(\\d{1,3})\\b', '192.0.2.$1'],
+];
 function sweep(rules) {
-    // a stable fake per original, so one device keeps one serial across the pages
-    const hash = (s) => {
-        let h = 2166136261;
-        for (const c of s) h = Math.imul(h ^ c.charCodeAt(0), 16777619) >>> 0;
-        return h;
-    };
-    const hex = (s, n) => {
-        let r = '';
-        let h = hash(s);
-        while (r.length < n) {
-            r += h.toString(16).toUpperCase().padStart(8, '0');
-            h = Math.imul(h ^ 0x9e3779b9, 16777619) >>> 0;
-        }
-        return r.slice(0, n);
-    };
     const fixed = rules.map(([re, to]) => [new RegExp(re, 'g'), to]);
     const fn = [
         // SGTINs, plain and in groups of four: masked
@@ -165,10 +172,10 @@ function sweep(rules) {
         [/\b30[0-9A-F]{22}\b/gi, () => 'XXXXXXXXXXXXXXXXXXXXXXXX'],
         // anything else that starts like an eQ-3 SGTIN (a fixture's address in that shape)
         [/\b3014F7[0-9A-F]*/gi, (m) => 'X'.repeat(m.length)],
-        // HmIP device addresses (14 hex digits, 00…): a fake of the same shape
-        [/\b00[0-9A-F]{12}\b/g, (m) => `00${hex(m, 12)}`],
-        // BidCos serials (three letters, seven digits)
-        [/\b([A-Z]EQ)(\d{7})\b/g, (m, p) => p + String(hash(m) % 10000000).padStart(7, '0')],
+        // HmIP device addresses (14 hex digits, 00…) and BidCos serials (three letters, seven digits): masked, so
+        // nobody takes them for a real device's
+        [/\b00[0-9A-F]{12}\b/g, () => '00XXXXXXXXXXXX'],
+        [/\b([A-Z]EQ)(\d{7})\b/g, (m, p) => `${p}XXXXXXX`],
     ];
     const apply = (s) => {
         let r = s;
@@ -202,6 +209,13 @@ const fresh = {
     '/api/system/v1/catalog': (j) => ({...j, daily: false}),
 };
 const HMM = process.env.WALK_HMM_URL ?? '';
+// the boot timeline opened, services only, and scrolled into view: the page is shot from there down
+const bootTimeline = async (p) => {
+    await p.locator('.bt-toggle').click();
+    await p.waitForTimeout(1500);
+    await p.getByLabel(/Nur Dienste/).check().catch(() => {});
+    await p.waitForTimeout(500);
+};
 const hmmFrame = (p) => p.frameLocator('iframe[src*="/addons/mh/"]');
 const longPress = async (p, sel) => {
     const box = await p.locator(sel).first().boundingBox();
@@ -263,8 +277,8 @@ const SHOTS = [
     {name: '28-lizenzen', path: '/licenses', real: process.env.WALK_LICENSES_URL ?? '', height: process.env.WALK_LICENSES_URL ? 1400 : undefined},
     {name: '29-ausschalten', path: '/', act: (p) => p.locator('.ol-powerbtn').click(), height: 900},
     {name: '30-zusatzsoftware', path: '/addons'},
-    {name: '31-zusatzsoftware-menue', path: '/', prefs: true, act: (p) => p.locator('.ol-addonsbtn').click(), height: 900},
-    {name: '32-zusatzsoftware-angeheftet', path: '/', prefs: true, act: async (p) => {
+    {name: '31-zusatzsoftware-menue', path: '/', prefs: true, patch: {'/api/auth/v1/me/preferences': (j) => ({...j, addons: PINS_BEFORE})}, act: (p) => p.locator('.ol-addonsbtn').click(), height: 900},
+    {name: '32-zusatzsoftware-angeheftet', path: '/', prefs: true, patch: {'/api/auth/v1/me/preferences': (j) => ({...j, addons: PINS_BEFORE})}, act: async (p) => {
         await p.locator('.ol-addonsbtn').click();
         await p.locator('.ol-addonpop [data-addon="mh"] .ol-pin').click();
         await p.waitForTimeout(600);
@@ -309,18 +323,52 @@ const SHOTS = [
     {name: '41-dunkel-bedienung', path: '/app/e/rooms/og', app: true, ...DARK},
     {name: '42-dunkel-netzwerk', path: '/system/network', ...DARK},
     {name: '43-dunkel-zusatzsoftware', path: '/addons', ...DARK},
+    {name: '46-protokoll-stufen', path: '/system/log', height: 900, patch: {'/api/system/v1/loglevels': (j) => ({...j, loghost: 'syslog.example.org:514'})}, act: (p) => p.locator('.lg-settings').click()},
+    {name: '47-protokoll-journal', path: '/system/log', height: 900, act: async (p) => {
+        await p.locator('.lg-settings').click();
+        await p.getByRole('tab', {name: 'Journal'}).click();
+    }},
+    {name: '48-protokoll-ziel', path: '/system/log', height: 900, act: async (p) => {
+        await p.locator('.lg-settings').click();
+        await p.getByRole('tab', {name: 'Journal'}).click();
+        await p.getByText('Systemspeicher (userfs)').first().click();
+    }},
+    // the phone: Status, the App and a channel's sheet, the App as the whole window (Settings → "Bedienung als ganzes
+    // Fenster", which the installed web app opens on), and the App in the dark
+    {name: '53-handy-status', path: '/', phone: true},
+    {name: '54-handy-bedienung', path: '/app/e/rooms/og', app: true, phone: true},
+    {name: '55-handy-bedienung-kanal', path: '/app/e/rooms/og', app: true, phone: true, act: (p) => p.locator('[data-app-tile]', {hasText: 'Bad Thermostat'}).click()},
+    {name: '56-handy-app-vollbild', path: '/app/e/rooms/og', app: true, phone: true, patch: {'/api/auth/v1/me/preferences': (j) => ({...j, addons: PINS, app_fullscreen: true})}},
+    {name: '57-handy-app-menue', path: '/app/e/rooms/og', app: true, phone: true, patch: {'/api/auth/v1/me/preferences': (j) => ({...j, addons: PINS, app_fullscreen: true})}, act: (p) => p.locator('[data-app-fab]').click()},
+    {name: '58-handy-dunkel-bedienung', path: '/app/e/rooms/og', app: true, phone: true, ...DARK},
+    {name: '44-startablauf', path: '/system/services', real: process.env.WALK_BOOT_URL ?? '', bearer: process.env.WALK_BOOT_TOKEN ?? '', needsReal: true, act: bootTimeline, from: '.bt-head'},
+    {name: '45-dunkel-startablauf', path: '/system/services', real: process.env.WALK_BOOT_URL ?? '', bearer: process.env.WALK_BOOT_TOKEN ?? '', needsReal: true, act: bootTimeline, from: '.bt-head', ...DARK},
 ];
 
+// one real system's radio setup per run (see the header)
+if (process.env.WALK_RADIO_URL && process.env.WALK_RADIO_TOKEN && process.env.WALK_RADIO_NAMES) {
+    const [a, b] = process.env.WALK_RADIO_NAMES.split(',');
+    const real = {real: process.env.WALK_RADIO_URL, bearer: process.env.WALK_RADIO_TOKEN, radio: true};
+    if (a) SHOTS.push({name: a, path: '/system/interfaces', ...real});
+    if (b) SHOTS.push({name: b, path: '/system/lan-devices', ...real});
+}
 const browser = await chromium.launch({args: ['--lang=de-DE']});
 for (const shot of SHOTS) {
     if (only.length && !only.includes(shot.name)) continue;
+    if (shot.needsReal && !(shot.real && shot.bearer)) {
+        console.error(`${shot.name}: skipped, WALK_BOOT_URL / WALK_BOOT_TOKEN are not set`);
+        continue;
+    }
     if (shot.hmm && !HMM) {
         console.error(`${shot.name}: skipped, WALK_HMM_URL is not set`);
         continue;
     }
     const theme = shot.dark ? 'dark' : 'light';
     const origin = shot.real || base;
-    const ctx = await browser.newContext({ignoreHTTPSErrors: !!shot.real, viewport: {width: 1280, height: 900}, colorScheme: theme, locale: 'de-DE', timezoneId: 'Europe/Berlin', serviceWorkers: 'block'});
+    const vw = shot.phone ? 390 : 1280;
+    const vh = shot.phone ? 844 : 900;
+    if (shot.phone && !shot.height) shot.height = vh;
+    const ctx = await browser.newContext({...(shot.phone ? {deviceScaleFactor: 2, isMobile: true, hasTouch: true} : {}), ...(shot.bearer ? {extraHTTPHeaders: {Authorization: `Bearer ${shot.bearer}`}} : {}), ignoreHTTPSErrors: !!shot.real, viewport: {width: vw, height: vh}, colorScheme: theme, locale: 'de-DE', timezoneId: 'Europe/Berlin', serviceWorkers: 'block'});
     await ctx.addInitScript((th) => {
         try {
             localStorage.setItem('ol.language', 'de');
@@ -334,6 +382,8 @@ for (const shot of SHOTS) {
     if (shot.real) console.error(`${shot.name}: from ${new URL(shot.real).protocol}//<real system>, signed out, no patching`);
     // the addon pins are per browser in the stub (stub-prefs): a fresh set per shot
     if (shot.prefs) await ctx.addCookies([{name: 'stub-prefs', value: `walk-${shot.name}-${Date.now()}`, url: base}]);
+    // a real system's page: only the viewer's own pins are set, as on every other image (nothing on the system)
+    if (shot.real && shot.bearer) await ctx.route('**/api/auth/v1/me/preferences', (route) => (route.request().method() === 'GET' ? route.fulfill({json: {addons: [{id: 'hmm', pinned: true}, ...PINS]}}) : route.abort()));
     if (!shot.real) await ctx.route('**/api/**', async (route) => {
         const req = route.request();
         const u = new URL(req.url());
@@ -362,6 +412,20 @@ for (const shot of SHOTS) {
         if (shot.hmm && u.pathname === '/api/system/v1/nav') json = {...json, entries: (json.entries ?? []).map((e) => (e.addon === 'mh' ? {...e, href: '/addons/mh/'} : e))};
         return route.fulfill({response, json});
     });
+    // the pinned addons' icons: their frontends' pages name their own favicon files
+    const icon = (file) => (file && fs.existsSync(file) ? fs.readFileSync(file) : null);
+    const hmmIcon = icon(process.env.WALK_HMM_ICON);
+    const redIcon = icon(process.env.WALK_REDMATIC_ICON);
+    // (on a real system too: its frontends answer a token session with a login page, so their pages are stood in for)
+    const iconsHere = !shot.real || !!shot.bearer;
+    if (iconsHere && hmmIcon) {
+        // inline: the probe of a separate favicon.ico never reached the route in headless Chromium
+        await ctx.route(/\/addons\/(mh|hmm)\/(\?.*)?$/, (route) => route.fulfill({contentType: 'text/html', body: `<!doctype html><html><head><link rel="icon" href="data:image/x-icon;base64,${hmmIcon.toString('base64')}"></head><body></body></html>`}));
+    }
+    if (iconsHere && redIcon) {
+        await ctx.route(/\/addons\/red\/(\?.*)?$/, (route) => route.fulfill({contentType: 'text/html', body: '<!doctype html><html><head><link rel="icon" type="image/png" href="/addons/redmatic/favicon-96x96.png"></head><body></body></html>'}));
+        await ctx.route('**/addons/redmatic/favicon-96x96.png', (route) => route.fulfill({contentType: 'image/png', body: redIcon}));
+    }
     if (shot.hmm) {
         // registered last, so it wins over the /api/ route for the manager's own paths
         await ctx.route('**/addons/mh/**', async (route) => {
@@ -370,7 +434,9 @@ for (const shot of SHOTS) {
             if (rest === '' || rest === 'index.html') {
                 // the frame's document: demo mode, then straight to the shot's page
                 const r = await route.fetch({url: new URL(`?demo`, HMM).href});
-                const html = (await r.text()).replace('<head>', `<head><script>if (!location.search.includes('demo')) history.replaceState(null, '', '?demo${shot.hmm}'); else if (location.hash !== '${shot.hmm}') location.hash = '${shot.hmm}';</script>`);
+                let page = await r.text();
+                if (hmmIcon) page = page.replace(/<link rel="icon"[^>]*>/, `<link rel="icon" href="data:image/x-icon;base64,${hmmIcon.toString('base64')}">`);
+                const html = page.replace('<head>', `<head><script>if (!location.search.includes('demo')) history.replaceState(null, '', '?demo${shot.hmm}'); else if (location.hash !== '${shot.hmm}') location.hash = '${shot.hmm}';</script>`);
                 return route.fulfill({status: 200, contentType: 'text/html; charset=utf-8', body: html});
             }
             return route.fulfill({response: await route.fetch({url: new URL(rest + u.search, HMM).href})});
@@ -388,8 +454,8 @@ for (const shot of SHOTS) {
         await page.waitForTimeout(900);
     }
     let h = shot.height;
-    if (h && h !== 900) {
-        await page.setViewportSize({width: 1280, height: h});
+    if (h && h !== vh) {
+        await page.setViewportSize({width: vw, height: h});
         await page.waitForTimeout(500);
     }
     if (!h) {
@@ -399,14 +465,22 @@ for (const shot of SHOTS) {
             return (s ? s.scrollHeight : document.body.scrollHeight) + (hd ? hd.offsetHeight : 0);
         });
         h = Math.min(Math.max(h, 600), 4000);
-        await page.setViewportSize({width: 1280, height: h});
+        await page.setViewportSize({width: vw, height: h});
         await page.waitForTimeout(500);
     }
-    const rules = shot.real ? RULES.filter((x) => x[2] !== 'author') : RULES;
+    // a token's browser session says so above every page; the picture is of the page, not of how it was taken
+    if (shot.bearer) await page.evaluate(() => document.querySelectorAll('[data-testid="token-readonly"]').forEach((e) => e.remove()));
+    const rules = shot.real ? [...RULES.filter((x) => x[2] !== 'author'), ...(shot.radio ? REAL_RULES : [])] : RULES;
     await page.evaluate(sweep, rules);
     // the addon frames (the manager) are swept the same way
     for (const fr of page.frames()) if (fr !== page.mainFrame()) await fr.evaluate(sweep, rules).catch(() => {});
-    await page.screenshot({path: path.join(out, `${shot.name}.png`)});
+    // `from`: only the part of the page from that element down (the boot timeline, not the table above it)
+    let clip;
+    if (shot.from) {
+        const box = await page.locator(shot.from).first().boundingBox();
+        if (box) clip = {x: 0, y: Math.max(0, box.y - 12), width: vw, height: h - Math.max(0, box.y - 12)};
+    }
+    await page.screenshot({path: path.join(out, `${shot.name}.png`), ...(clip ? {clip} : {})});
     // WALK_TEXT_DIR: the page's text as shot (inputs included), for the check that nothing slipped through
     if (process.env.WALK_TEXT_DIR) {
         const grab = () => [document.body.innerText, ...[...document.querySelectorAll('input, textarea')].map((e) => `${e.value} ${e.placeholder ?? ''}`), ...[...document.querySelectorAll('[title]')].map((e) => e.title)].join('\n');
