@@ -6,6 +6,11 @@
 //   PORT=8841 node test/stub/server.mjs &
 //   env -u WAYLAND_DISPLAY node scripts/walkthrough.mjs http://127.0.0.1:8841 <out-dir> [name ...]
 //
+// The Homematic Manager shots (hmm-*) need its web host in demo mode - its own MockTransport
+// fixture, no CCU - at WALK_HMM_URL (e.g. http://127.0.0.1:8851/): the shell's /addons/mh/ is
+// routed there, so the manager is shown in the shell's frame as it is on a system. Without the
+// variable those shots are skipped.
+//
 // Two layers of demo data: the stub's JSON answers are patched per endpoint (a system with a plain
 // name, no warnings, local logins, no ULA), and before every shot the page's text is swept with
 // RULES, which mask what must never be on a published image - device serials, SGTINs, host names
@@ -150,6 +155,8 @@ function sweep(rules) {
         // SGTINs, plain and in groups of four: masked
         [/\b30[0-9A-F]{2}(-[0-9A-F]{4}){5}\b/gi, () => 'XXXX-XXXX-XXXX-XXXX-XXXX-XXXX'],
         [/\b30[0-9A-F]{22}\b/gi, () => 'XXXXXXXXXXXXXXXXXXXXXXXX'],
+        // anything else that starts like an eQ-3 SGTIN (a fixture's address in that shape)
+        [/\b3014F7[0-9A-F]*/gi, (m) => 'X'.repeat(m.length)],
         // HmIP device addresses (14 hex digits, 00…): a fake of the same shape
         [/\b00[0-9A-F]{12}\b/g, (m) => `00${hex(m, 12)}`],
         // BidCos serials (three letters, seven digits)
@@ -186,12 +193,35 @@ const fresh = {
     '/api/system/v1/system-update': (j) => ({...PATCH['/api/system/v1/system-update'](j), feed: {...j.feed, enabled: false}}),
     '/api/system/v1/catalog': (j) => ({...j, daily: false}),
 };
+const HMM = process.env.WALK_HMM_URL ?? '';
+const hmmFrame = (p) => p.frameLocator('iframe[src*="/addons/mh/"]');
 const longPress = async (p, sel) => {
     const box = await p.locator(sel).first().boundingBox();
     await p.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await p.mouse.down();
     await p.waitForTimeout(1500);
     await p.mouse.up();
+};
+const DARK = {dark: true};
+// the ACME and OIDC shots: example names, a demo CA, an invented client - nothing real
+const ACME_DOMAIN = `${HOST}.example.org`;
+const acme = {
+    '/api/system/v1/certificate': (j) => {
+        const c = PATCH['/api/system/v1/certificate'](j);
+        const now = Date.now();
+        return {
+            ...c,
+            settings: {...c.settings, mode: 'acme', directory: 'custom', directory_url: 'https://ca.example.org/acme/acme/directory', ca_root: '', email: 'admin@example.org', names: [ACME_DOMAIN], challenge: 'dns-01', dns_provider: 'cloudflare', dns_credentials: {}, dns_secrets_set: {api_token: true}},
+            managed: true,
+            current: {...c.current, subject: `CN=${ACME_DOMAIN}`, issuer: 'CN=Beispiel-CA Intermediate', issuer_cn: 'Beispiel-CA Intermediate', issuer_org: 'Beispiel', names: [ACME_DOMAIN], ips: [], self_signed: false, not_before: new Date(now - 30 * 86400e3).toISOString(), not_after: new Date(now + 60 * 86400e3).toISOString(), days_left: 60},
+        };
+    },
+    '/api/system/v1/https': (j) => ({...PATCH['/api/system/v1/https'](j), certificate: {self_signed: false, managed: true, mode: 'acme'}, redirect_https: true, hsts: true, redirect_fqdn_target: ACME_DOMAIN, redirect_fqdn_state: 'available', redirect_fqdn_reason: ''}),
+};
+const OIDC_CONFIG = {mode: 'oidc', running: 'oidc', restart_required: false, name: 'Keycloak', issuer: 'https://auth.example.org/realms/home', client_id: 'openccu-lite', client_secret_set: true, username_claim: 'preferred_username', scopes: 'openid profile email', password_login: true};
+const oidc = {
+    '/api/auth/v1/config': (j) => ({...j, ...OIDC_CONFIG}),
+    '/api/auth/v1/oidc': () => ({enabled: true, name: 'Keycloak', password_login: true}),
 };
 const SHOTS = [
     {name: '01-einrichtung', path: '/', state: SETUP},
@@ -209,35 +239,90 @@ const SHOTS = [
     {name: '13-fernzugriff', path: '/system/remote-access'},
     {name: '14-vertrauensspeicher', path: '/system/trust'},
     {name: '15-zertifikat', path: '/system/certificates'},
-    {name: '16-benutzer', path: '/system/users'},
-    {name: '17-dienste', path: '/system/services'},
-    {name: '18-protokoll', path: '/system/log', height: 900},
-    {name: '19-speicher', path: '/system/storage'},
-    {name: '20-sicherung', path: '/system/backup'},
-    {name: '21-updates', path: '/system/updates'},
-    {name: '22-statusleuchte', path: '/system/led'},
-    {name: '23-einstellungen', path: '/settings'},
-    {name: '24-konto', path: '/account'},
-    {name: '25-lizenzen', path: '/licenses'},
-    {name: '26-ausschalten', path: '/', act: (p) => p.locator('.ol-powerbtn').click(), height: 900},
-    {name: '27-zusatzsoftware', path: '/addons'},
-    {name: '28-namen-raeume', path: '/app/e/rooms/og', app: true, act: (p) => p.locator('[data-app-entry="taxonomy"]').click(), height: 900},
-    {name: '29-namen-kanal', path: '/app/e/rooms/og', app: true, act: (p) => longPress(p, '[data-app-tile]'), height: 900},
+    {name: '16-zertifikat-acme', path: '/system/certificates', patch: acme},
+    {name: '17-benutzer', path: '/system/users'},
+    {name: '18-benutzer-oidc', path: '/system/users', patch: oidc},
+    {name: '19-anmeldung-oidc', path: '/login', state: SIGNED_OUT, patch: oidc},
+    {name: '20-dienste', path: '/system/services'},
+    {name: '21-protokoll', path: '/system/log', height: 900},
+    {name: '22-speicher', path: '/system/storage'},
+    {name: '23-sicherung', path: '/system/backup'},
+    {name: '24-updates', path: '/system/updates'},
+    {name: '25-statusleuchte', path: '/system/led'},
+    {name: '26-einstellungen', path: '/settings'},
+    {name: '27-konto', path: '/account'},
+    {name: '28-lizenzen', path: '/licenses'},
+    {name: '29-ausschalten', path: '/', act: (p) => p.locator('.ol-powerbtn').click(), height: 900},
+    {name: '30-zusatzsoftware', path: '/addons'},
+    {name: '31-zusatzsoftware-menue', path: '/', prefs: true, act: (p) => p.locator('.ol-addonsbtn').click(), height: 900},
+    {name: '32-zusatzsoftware-angeheftet', path: '/', prefs: true, act: async (p) => {
+        await p.locator('.ol-addonsbtn').click();
+        await p.locator('.ol-addonpop [data-addon="mh"] .ol-pin').click();
+        await p.waitForTimeout(600);
+        await p.keyboard.press('Escape');
+    }, height: 900},
+    {name: '33-hmm-geraete', path: '/nav/mh', hmm: '#/BidCos-RF/devices', height: 900, act: async (p) => {
+        const f = hmmFrame(p);
+        const row = f.locator('[data-row-id="MEQ0123456"]');
+        await row.waitFor({state: 'visible'});
+        await row.getByRole('button', {name: 'Expand row'}).click();
+    }},
+    {name: '34-hmm-anlernen', path: '/nav/mh', hmm: '#/HmIP-RF/devices', height: 900, act: async (p) => {
+        const f = hmmFrame(p);
+        await f.getByTestId('devices-table').waitFor({state: 'visible'});
+        await f.getByTestId('devices-add').click();
+    }},
+    {name: '35-hmm-parameter', path: '/nav/mh', hmm: '#/BidCos-RF/devices', height: 900, act: async (p) => {
+        const f = hmmFrame(p);
+        const row = f.locator('[data-row-id="MEQ0123456"]');
+        await row.waitFor({state: 'visible'});
+        await row.getByRole('button', {name: 'Expand row'}).click();
+        await f.getByTestId('paramset-MEQ0123456:1-MASTER').click();
+        await f.getByTestId('paramset-dialog').waitFor({state: 'visible'});
+    }},
+    {name: '36-hmm-verknuepfungen', path: '/nav/mh', hmm: '#/HmIP-RF/links', height: 900, act: async (p) => {
+        const f = hmmFrame(p);
+        const row = f.locator('[data-row-id="0001D8A9B7C6D5:1->000A1B2C3D4E5F:4"]');
+        await row.waitFor({state: 'visible'});
+        await row.click();
+        await f.getByTestId('links-edit').click();
+        await f.getByTestId('link-paramset-dialog').waitFor({state: 'visible'});
+        await f.getByTestId('link-expert').uncheck();
+        await f.getByTestId('link-profile').selectOption('2');
+        // a notice of the demo fixture's firmware, not of the link: closed
+        await p.waitForTimeout(400);
+        for (const b of await f.locator('.hmm-notice-close').all()) await b.click();
+    }},
+    {name: '37-hmm-servicemeldungen', path: '/nav/mh', hmm: '#/BidCos-RF/messages', height: 900},
+    {name: '38-namen-raeume', path: '/app/e/rooms/og', app: true, act: (p) => p.locator('[data-app-entry="taxonomy"]').click(), height: 900},
+    {name: '39-namen-kanal', path: '/app/e/rooms/og', app: true, act: (p) => longPress(p, '[data-app-tile]'), height: 900},
+    {name: '40-dunkel-status', path: '/', ...DARK},
+    {name: '41-dunkel-bedienung', path: '/app/e/rooms/og', app: true, ...DARK},
+    {name: '42-dunkel-netzwerk', path: '/system/network', ...DARK},
+    {name: '43-dunkel-zusatzsoftware', path: '/addons', ...DARK},
 ];
 
 const browser = await chromium.launch({args: ['--lang=de-DE']});
 for (const shot of SHOTS) {
     if (only.length && !only.includes(shot.name)) continue;
-    const ctx = await browser.newContext({viewport: {width: 1280, height: 900}, colorScheme: 'light', locale: 'de-DE', timezoneId: 'Europe/Berlin', serviceWorkers: 'block'});
-    await ctx.addInitScript(() => {
+    if (shot.hmm && !HMM) {
+        console.error(`${shot.name}: skipped, WALK_HMM_URL is not set`);
+        continue;
+    }
+    const theme = shot.dark ? 'dark' : 'light';
+    const ctx = await browser.newContext({viewport: {width: 1280, height: 900}, colorScheme: theme, locale: 'de-DE', timezoneId: 'Europe/Berlin', serviceWorkers: 'block'});
+    await ctx.addInitScript((th) => {
         try {
             localStorage.setItem('ol.language', 'de');
-            localStorage.setItem('ol.theme', 'light');
+            localStorage.setItem('ol.theme', th);
+            localStorage.setItem('hmm.theme', th);
         } catch {
             /* no storage: the defaults */
         }
-    });
+    }, theme);
     if (shot.app) await ctx.addCookies([{name: 'stub-app', value: `walk-${shot.name}`, url: base}]);
+    // the addon pins are per browser in the stub (stub-prefs): a fresh set per shot
+    if (shot.prefs) await ctx.addCookies([{name: 'stub-prefs', value: `walk-${shot.name}-${Date.now()}`, url: base}]);
     await ctx.route('**/api/**', async (route) => {
         const req = route.request();
         const u = new URL(req.url());
@@ -262,8 +347,24 @@ for (const shot of SHOTS) {
         const own = shot.patch?.[u.pathname];
         const p = own ?? PATCH[u.pathname];
         if (p) json = p(json, shot);
+        // the manager's frame opens on the page the shot wants, in demo mode
+        if (shot.hmm && u.pathname === '/api/system/v1/nav') json = {...json, entries: (json.entries ?? []).map((e) => (e.addon === 'mh' ? {...e, href: '/addons/mh/'} : e))};
         return route.fulfill({response, json});
     });
+    if (shot.hmm) {
+        // registered last, so it wins over the /api/ route for the manager's own paths
+        await ctx.route('**/addons/mh/**', async (route) => {
+            const u = new URL(route.request().url());
+            const rest = u.pathname.replace(/^\/addons\/mh\//, '');
+            if (rest === '' || rest === 'index.html') {
+                // the frame's document: demo mode, then straight to the shot's page
+                const r = await route.fetch({url: new URL(`?demo`, HMM).href});
+                const html = (await r.text()).replace('<head>', `<head><script>if (!location.search.includes('demo')) history.replaceState(null, '', '?demo${shot.hmm}'); else if (location.hash !== '${shot.hmm}') location.hash = '${shot.hmm}';</script>`);
+                return route.fulfill({status: 200, contentType: 'text/html; charset=utf-8', body: html});
+            }
+            return route.fulfill({response: await route.fetch({url: new URL(rest + u.search, HMM).href})});
+        });
+    }
     const page = await ctx.newPage();
     await page.goto(base + shot.path);
     await page.waitForTimeout(1800);
@@ -287,10 +388,15 @@ for (const shot of SHOTS) {
         await page.waitForTimeout(500);
     }
     await page.evaluate(sweep, RULES);
+    // the addon frames (the manager) are swept the same way
+    for (const fr of page.frames()) if (fr !== page.mainFrame()) await fr.evaluate(sweep, RULES).catch(() => {});
     await page.screenshot({path: path.join(out, `${shot.name}.png`)});
     // WALK_TEXT_DIR: the page's text as shot (inputs included), for the check that nothing slipped through
     if (process.env.WALK_TEXT_DIR) {
-        const text = await page.evaluate(() => [document.body.innerText, ...[...document.querySelectorAll('input, textarea')].map((e) => `${e.value} ${e.placeholder ?? ''}`), ...[...document.querySelectorAll('[title]')].map((e) => e.title)].join('\n'));
+        const grab = () => [document.body.innerText, ...[...document.querySelectorAll('input, textarea')].map((e) => `${e.value} ${e.placeholder ?? ''}`), ...[...document.querySelectorAll('[title]')].map((e) => e.title)].join('\n');
+        const frames = [];
+        for (const fr of page.frames()) if (fr !== page.mainFrame()) frames.push(await fr.evaluate(grab).catch(() => ''));
+        const text = frames.join('\n') + '\n' + await page.evaluate(() => [document.body.innerText, ...[...document.querySelectorAll('input, textarea')].map((e) => `${e.value} ${e.placeholder ?? ''}`), ...[...document.querySelectorAll('[title]')].map((e) => e.title)].join('\n'));
         fs.mkdirSync(process.env.WALK_TEXT_DIR, {recursive: true});
         fs.writeFileSync(path.join(process.env.WALK_TEXT_DIR, `${shot.name}.txt`), text);
     }
