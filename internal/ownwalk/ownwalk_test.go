@@ -546,7 +546,9 @@ func inNamespace(t *testing.T, name string) {
 }
 
 // Root only: the real fchownat. A root-owned file, a planted link to root's file outside, a device
-// node and an entry that is right already; afterwards only the wrong entries are the addon's.
+// node and an entry that is right already; afterwards only the wrong entries are the addon's. A root
+// that may not make a device node (a container without CAP_MKNOD, as the CI runner is: B-22) runs
+// the rest without it.
 func TestOwnAsRoot(t *testing.T) {
 	if os.Geteuid() != 0 || os.Getenv("OWNWALK_NAMESPACE") != "" {
 		t.Skip("root only: gives files to uid 30007")
@@ -562,7 +564,13 @@ func TestOwnAsRoot(t *testing.T) {
 	must(os.Chown(filepath.Join(root, "outside/shadow"), 0, 0))
 	must(os.Chown(filepath.Join(top, "var/right"), addonUID, addonGID))
 	must(os.Symlink(filepath.Join(root, "outside/shadow"), filepath.Join(top, "var/shadow")))
-	must(unix.Mknod(filepath.Join(top, "var/null"), unix.S_IFCHR|0o666, int(unix.Mkdev(1, 3))))
+	devices := 1
+	if err := unix.Mknod(filepath.Join(top, "var/null"), unix.S_IFCHR|0o666, int(unix.Mkdev(1, 3))); errors.Is(err, unix.EPERM) {
+		t.Log("this root may not make a device node (EPERM): the device-node case is left out")
+		devices = 0
+	} else {
+		must(err)
+	}
 	var before unix.Stat_t
 	must(unix.Lstat(filepath.Join(top, "var/right"), &before))
 	res := Own([]string{top}, Options{UID: addonUID, GID: addonGID})
@@ -572,10 +580,14 @@ func TestOwnAsRoot(t *testing.T) {
 		return [2]uint32{st.Uid, st.Gid}
 	}
 	addon, rootOwner := [2]uint32{addonUID, addonGID}, [2]uint32{0, 0}
-	for p, want := range map[string][2]uint32{
+	wantOwners := map[string][2]uint32{
 		"addon": addon, "addon/var": addon, "addon/var/x": addon, "addon/var/right": addon,
-		"outside/shadow": rootOwner, "addon/var/shadow": rootOwner, "addon/var/null": rootOwner,
-	} {
+		"outside/shadow": rootOwner, "addon/var/shadow": rootOwner,
+	}
+	if devices > 0 {
+		wantOwners["addon/var/null"] = rootOwner
+	}
+	for p, want := range wantOwners {
 		if got := owner(p); got != want {
 			t.Errorf("%s is %v, want %v", p, got, want)
 		}
@@ -585,7 +597,7 @@ func TestOwnAsRoot(t *testing.T) {
 	if after.Ctim != before.Ctim {
 		t.Error("an entry that had its owner was touched")
 	}
-	if res.Devices != 1 || res.Symlinks != 1 || res.Fixed != 3 || res.Problem() != "" || res.Left() != 1 {
+	if res.Devices != devices || res.Symlinks != 1 || res.Fixed != 3 || res.Problem() != "" || res.Left() != devices {
 		t.Errorf("result %+v", res)
 	}
 }
