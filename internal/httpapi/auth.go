@@ -28,6 +28,19 @@ import (
 // session. With two names neither login blocks the other; both are read everywhere. The same id
 // also works as a Bearer credential and as `?sid=`, with or without the CCU's `@` wrapping.
 //
+// Two cookies per scheme since openccu-lite task 259 (D-78's measure "the API cookie kept away
+// from /addons/"): the session cookie is scoped to Path=/api, so no request to an addon's page,
+// CGI or proxy carries it, and a second cookie of the same id, the gate cookie, is scoped to
+// Path=/addons/ and opens the addon pages alone - lighttpd's gate and RequireSession read it, the
+// API never does. An addon's server side still learns the session id from X-Occulite-Session,
+// which the gate sets for it (D-65): the measure keeps the credential out of what an addon
+// forwards or logs as a cookie, not out of the addon's hands - the threat model's R1 says so.
+//
+// The header credential (the second measure): a state-changing API call whose only credential is
+// a cookie must also carry X-Occulite-Request (any value). A custom header cannot ride on a
+// cross-site form post or a link, so it closes the top-level POST that SameSite=Lax lets through;
+// the shell sends it on every call. A Bearer, a token or ?sid= is not ambient and needs no header.
+//
 // The session's legacy alias - the CCU's ten-character `?sid=@xxxxxxxxxx@` that the addon CGIs
 // parse (task 125, D-77) - is not a credential here: the API refuses it as a cookie, as Bearer and
 // as `?sid=`, from anywhere. It is accepted by lighttpd's gate and the tclrega shim for /addons/,
@@ -37,7 +50,25 @@ const (
 	CookieName = "occulite_session"
 	// SecureCookieName is the session cookie set (Secure) by a login over HTTPS.
 	SecureCookieName = "__Secure-occulite_session"
+	// GateCookieName is the addon-page cookie set by a login over HTTP (task 259).
+	GateCookieName = "occulite_gate"
+	// SecureGateCookieName is the addon-page cookie set (Secure) by a login over HTTPS.
+	SecureGateCookieName = "__Secure-occulite_gate"
+	// CookiePath is the session cookie's path: the API and nothing else.
+	CookiePath = "/api"
+	// GateCookiePath is the gate cookie's path: the addon pages and nothing else.
+	GateCookiePath = "/addons/"
+	// RequestHeader is the header a state-changing API call on the cookie alone must carry.
+	RequestHeader = "X-Occulite-Request"
 )
+
+// gateCookieName is the gate cookie of the session cookie called name.
+func gateCookieName(name string) string {
+	if name == SecureCookieName {
+		return SecureGateCookieName
+	}
+	return GateCookieName
+}
 
 // bareSID returns the session id a credential value carries - the value, with the CCU's
 // `@` wrapping removed - when it has a session id's shape.
@@ -90,6 +121,9 @@ type AuthAPI struct {
 	// started with; passwordLoginOn keeps it in step with ConfigFile. Without a provider it means
 	// nothing: the password is the only login then.
 	PasswordLoginOff bool
+	// FQDN answers the system's full name, <host>.<domain> (task 262: the name security keys are
+	// made on); nil or "" when it is not known.
+	FQDN func() string
 
 	swMu   sync.Mutex
 	swInfo os.FileInfo // ConfigFile as the switch was last read from it
@@ -254,6 +288,7 @@ func (a *AuthAPI) Register(mux *http.ServeMux) {
 	route(mux, scopeOpen, "POST "+p+"/ticket/redeem", a.ticketRedeem)
 	a.registerOIDCTrust(mux, p) // oidctrust.go
 	a.registerPairing(mux, p)   // task 219
+	a.registerWebAuthn(mux, p)  // task 262: security keys and passkeys (webauthn.go)
 }
 
 // cookieSIDs returns the well-formed session ids of the cookies called name, in header order (a
@@ -268,10 +303,17 @@ func cookieSIDs(r *http.Request, name string) []string {
 	return out
 }
 
+// gateCookieSIDs returns the well-formed session ids of the gate cookies (task 259), the HTTPS
+// one first. Read by RequireSession for the addon pages alone; the API never takes them.
+func gateCookieSIDs(r *http.Request) []string {
+	return append(cookieSIDs(r, SecureGateCookieName), cookieSIDs(r, GateCookieName)...)
+}
+
 // sessionIDs lists every credential a request carries, most specific first: the HTTPS cookie,
 // the HTTP cookie (a browser sends that one over HTTPS too), the Authorization header, ?sid=.
 // Each is a whole credential on its own, so a stale one must not hide a live one behind it. A
-// value of the legacy alias's shape is not a credential and is left out (D-77).
+// value of the legacy alias's shape is not a credential and is left out (D-77), and so is a gate
+// cookie (task 259): it opens addon pages, never the API.
 func sessionIDs(r *http.Request) []string {
 	ids := append(cookieSIDs(r, SecureCookieName), cookieSIDs(r, CookieName)...)
 	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
@@ -307,6 +349,9 @@ func open(path string) bool {
 		return true
 	}
 	if id, ok := strings.CutPrefix(path, "/api/auth/v1/pairing/request/"); ok && id != "" && !strings.Contains(id, "/") {
+		return true
+	}
+	if webauthnOpen[path] { // task 262: the key step of a login, the passkey login, the feature
 		return true
 	}
 	switch path {
@@ -358,6 +403,14 @@ func (a *AuthAPI) Middleware(mux *http.ServeMux) http.Handler {
 				refuseCrossSite(w)
 				return
 			}
+			// task 259 (D-78): and it must carry the header credential - a custom header no
+			// form post or link from elsewhere can send. A request with an Authorization header
+			// has shown as much already.
+			if a.cookieAmbient(r, sess) && r.Header.Get("Authorization") == "" && r.Header.Get(RequestHeader) == "" {
+				a.logger().Warn("auth: a state-changing request on the cookie alone refused: no "+RequestHeader+" header", "method", r.Method, "path", r.URL.Path, "user", sess.User)
+				writeJSON(w, http.StatusForbidden, apiError{Error: "request-header", Message: "a state-changing call with the session cookie alone must carry the header " + RequestHeader})
+				return
+			}
 		}
 		// task 269: who and from where, for the Info lines of a change (auditlog.go)
 		c := &reqCaller{user: sess.User, remote: remote(r)}
@@ -378,6 +431,15 @@ func (a *AuthAPI) Middleware(mux *http.ServeMux) http.Handler {
 func (a *AuthAPI) RequireSession(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sess := a.session(r)
+		if sess == nil && !a.Off {
+			// task 259: the gate cookie is what a browser carries here - the session cookie
+			// stays at /api
+			for _, id := range gateCookieSIDs(r) {
+				if sess = a.Store.ValidateFrom(id, remote(r)); sess != nil {
+					break
+				}
+			}
+		}
 		if sess == nil && !a.Off {
 			if alias, ok := bareAlias(r.URL.Query().Get("sid")); ok {
 				sess = a.Store.ValidateLegacy(alias)
@@ -433,17 +495,43 @@ func (a *AuthAPI) cookieName(r *http.Request) string {
 	return CookieName
 }
 
-// setCookie sets the session cookie of the request's scheme only; the other one is left alone,
-// so a login over one scheme never ends the other's.
-func (a *AuthAPI) setCookie(w http.ResponseWriter, r *http.Request, sid string) {
-	secure := a.secure(r)
-	http.SetCookie(w, &http.Cookie{Name: a.cookieName(r), Value: sid, Path: "/", HttpOnly: true, Secure: secure, SameSite: http.SameSiteLaxMode, MaxAge: 30 * 24 * 3600})
+// cookieMaxAge is the cookies' lifetime: the sessions' absolute lifetime (task 262), so that a
+// browser drops the cookie when the session cannot be alive any more; the session's own limits
+// end it earlier.
+func (a *AuthAPI) cookieMaxAge() int {
+	_, maxAge := a.Store.SessionLimits()
+	return int(maxAge.Seconds())
 }
 
-// clearCookie deletes one session cookie. The HTTPS one is only accepted with Secure; over plain
-// HTTP a browser ignores its deletion, which cannot be helped - that page cannot see it either.
+// setCookie sets the cookies of the request's scheme only; the other scheme's are left alone, so
+// a login over one scheme never ends the other's. Two go out (task 259): the session cookie for
+// /api and the gate cookie for /addons/, the same id. A cookie of the shape before task 259 -
+// the session's name at Path=/ - is deleted in the same answer: a browser keeps cookies by name
+// and path, so the old one would otherwise ride along to the addon pages until it ran out. The
+// deletion costs nothing when there is none, which lets GET /state call this on every load.
+func (a *AuthAPI) setCookie(w http.ResponseWriter, r *http.Request, sid string) {
+	secure := a.secure(r)
+	name := a.cookieName(r)
+	deleteCookie(w, name, "/") // first, so that the last header of this name is the one that sets it
+	maxAge := a.cookieMaxAge()
+	http.SetCookie(w, &http.Cookie{Name: name, Value: sid, Path: CookiePath, HttpOnly: true, Secure: secure, SameSite: http.SameSiteLaxMode, MaxAge: maxAge})
+	http.SetCookie(w, &http.Cookie{Name: gateCookieName(name), Value: sid, Path: GateCookiePath, HttpOnly: true, Secure: secure, SameSite: http.SameSiteLaxMode, MaxAge: maxAge})
+}
+
+// deleteCookie sends the deletion of one cookie at one path. The HTTPS ones are only accepted
+// with Secure; over plain HTTP a browser ignores their deletion, which cannot be helped - that
+// page cannot see them either.
+func deleteCookie(w http.ResponseWriter, name, path string) {
+	secure := name == SecureCookieName || name == SecureGateCookieName
+	http.SetCookie(w, &http.Cookie{Name: name, Value: "", Path: path, HttpOnly: true, Secure: secure, SameSite: http.SameSiteLaxMode, MaxAge: -1})
+}
+
+// clearCookie deletes the session cookie called name wherever a browser may hold it - at /api,
+// at the pre-259 Path=/ - and its gate cookie at /addons/.
 func clearCookie(w http.ResponseWriter, name string) {
-	http.SetCookie(w, &http.Cookie{Name: name, Value: "", Path: "/", HttpOnly: true, Secure: name == SecureCookieName, SameSite: http.SameSiteLaxMode, MaxAge: -1})
+	deleteCookie(w, name, CookiePath)
+	deleteCookie(w, name, "/")
+	deleteCookie(w, gateCookieName(name), GateCookiePath)
 }
 
 // clearStale deletes session cookies the request carries that name no live session, except the
@@ -484,8 +572,17 @@ func authErr(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusNotFound, apiError{Error: "unknown-user", Message: err.Error()})
 	case errors.Is(err, auth.ErrNoPassword):
 		writeJSON(w, http.StatusConflict, apiError{Error: "no-password", Message: err.Error()})
-	case errors.Is(err, auth.ErrWeakPassword), errors.Is(err, auth.ErrBadUsername), errors.Is(err, auth.ErrBadRole):
+	case errors.Is(err, auth.ErrWeakPassword), errors.Is(err, auth.ErrBadUsername), errors.Is(err, auth.ErrBadRole), errors.Is(err, auth.ErrWebAuthnName), errors.Is(err, auth.ErrSessionLimits):
 		writeJSON(w, http.StatusUnprocessableEntity, apiError{Error: "invalid-body", Message: err.Error()})
+	// task 262: the security keys
+	case errors.Is(err, auth.ErrSecondFactor):
+		writeJSON(w, http.StatusUnauthorized, apiError{Error: "second-factor", Message: err.Error()})
+	case errors.Is(err, auth.ErrWebAuthnClone), errors.Is(err, auth.ErrPendingLogin):
+		writeJSON(w, http.StatusUnauthorized, apiError{Error: "invalid-credentials", Message: err.Error()})
+	case errors.Is(err, auth.ErrWebAuthnDuplicate), errors.Is(err, auth.ErrWebAuthnLimit):
+		writeJSON(w, http.StatusConflict, apiError{Error: "conflict", Message: err.Error()})
+	case errors.Is(err, auth.ErrWebAuthnUnknown):
+		writeJSON(w, http.StatusNotFound, apiError{Error: "not-found", Message: err.Error()})
 	default:
 		writeJSON(w, http.StatusInternalServerError, apiError{Error: "internal", Message: err.Error()})
 	}
@@ -520,20 +617,27 @@ func (a *AuthAPI) state(w http.ResponseWriter, r *http.Request) {
 		// task 29: no login, everyone is the anonymous administrator; the cookie carries the
 		// session id so lighttpd's gate (session files) works, and the fixed alias serves the
 		// ?sid=@..@ convention
+		// (task 259: set on every call - the gate cookie lives at /addons/, so this route cannot
+		// see whether the browser has it; the id is fixed, so the answer is the same each time)
 		sess := a.Store.EnsureAnonymous()
-		has := false
-		for _, id := range cookieSIDs(r, a.cookieName(r)) {
-			has = has || id == sess.ID
-		}
-		if !has {
-			a.setCookie(w, r, sess.ID)
-		}
+		a.setCookie(w, r, sess.ID)
 		writeJSON(w, 200, map[string]any{"setup_required": false, "authenticated": true, "user": sess.User, "role": sess.Role, "level": sess.Level, "account_id": sess.AccountID, "must_change_password": false, "sid": sess.ID, "legacy_sid": sess.Legacy, "auth_off": true})
 		return
 	}
-	a.clearStale(w, r, "")
 	out := map[string]any{"setup_required": a.Store.SetupRequired(), "authenticated": false}
 	sess := a.session(r)
+	// task 259: a session the cookie carried gets its cookies set again - the shell calls this
+	// route on every load, so a browser from before the two cookies existed (one cookie at Path=/)
+	// is moved to the new shape before it opens an addon frame, and the gate cookie, which no
+	// request here can show, is there when the frame needs it
+	keep := ""
+	if sess != nil && a.cookieAmbient(r, sess) {
+		keep = a.cookieName(r)
+	}
+	a.clearStale(w, r, keep)
+	if keep != "" {
+		a.setCookie(w, r, sess.ID)
+	}
 	if sess == nil {
 		// task 193: the public mode's principal, so the shell shows the Control app without a login
 		a.pubMu.Lock()
@@ -846,7 +950,12 @@ func (a *AuthAPI) login(w http.ResponseWriter, r *http.Request) {
 func (a *AuthAPI) loginWith(w http.ResponseWriter, r *http.Request, c credentials) {
 	// a failed login costs the client a little time: argon2 already does, this keeps it uniform
 	start := time.Now()
-	sess, why, err := a.Store.LoginDetail(c.Username, c.Password, remote(r), r.UserAgent())
+	// task 262: an account with a security key gets no session here but the key step
+	sess, keyUser, why, err := a.Store.BeginPasswordLogin(c.Username, c.Password, remote(r), r.UserAgent())
+	if err == nil && keyUser != nil {
+		a.secondFactor(w, r, keyUser)
+		return
+	}
 	if err != nil {
 		reason := why.Reason
 		if reason == "" {
@@ -1227,6 +1336,10 @@ type authConfigView struct {
 	// RestartRequired: the running daemon still uses the mode it started with.
 	RestartRequired bool   `json:"restart_required"`
 	Running         string `json:"running"` // the mode in force now
+	// SessionIdle and SessionMax are the sessions' idle timeout and lifetime in force (task 262),
+	// Go durations; PUT takes them as such, within auth.ValidSessionLimits' bounds.
+	SessionIdle string `json:"session_idle"`
+	SessionMax  string `json:"session_max"`
 }
 
 func (a *AuthAPI) runningMode() string {
@@ -1240,9 +1353,10 @@ func (a *AuthAPI) runningMode() string {
 }
 
 func (a *AuthAPI) view(c config.AuthConfig, restart bool) authConfigView {
+	idle, maxAge := a.Store.SessionLimits()
 	return authConfigView{Mode: c.EffectiveMode(), Modes: config.AuthModes, Name: c.OIDC.Name, Issuer: c.OIDC.Issuer, ClientID: c.OIDC.ClientID,
 		ClientSecretSet: c.OIDC.ClientSecret != "", UsernameClaim: c.OIDC.UsernameClaim, Scopes: c.OIDC.Scopes, PasswordLogin: c.PasswordLoginOn(),
-		RestartRequired: restart, Running: a.runningMode()}
+		RestartRequired: restart, Running: a.runningMode(), SessionIdle: idle.String(), SessionMax: maxAge.String()}
 }
 
 func (a *AuthAPI) authConfig(w http.ResponseWriter, r *http.Request) {
@@ -1259,7 +1373,7 @@ func (a *AuthAPI) authConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 // authConfigWritable are the fields PUT /config takes; the rest of GET's answer is read-only.
-var authConfigWritable = []string{"mode", "name", "issuer", "client_id", "client_secret", "username_claim", "scopes", "password_login"}
+var authConfigWritable = []string{"mode", "name", "issuer", "client_id", "client_secret", "username_claim", "scopes", "password_login", "session_idle", "session_max"}
 
 // unknownField is the field name of encoding/json's DisallowUnknownFields error.
 func unknownField(err error) (string, bool) {
@@ -1291,6 +1405,9 @@ func (a *AuthAPI) authConfigPut(w http.ResponseWriter, r *http.Request) {
 		UsernameClaim string `json:"username_claim"`
 		Scopes        string `json:"scopes"`
 		PasswordLogin *bool  `json:"password_login"` // absent: as stored
+		// task 262: the session lengths, Go durations; absent: as stored
+		SessionIdle *string `json:"session_idle"`
+		SessionMax  *string `json:"session_max"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		// openccu-lite B-206: a client that sends GET's answer back (modes, client_secret_set,
@@ -1334,6 +1451,28 @@ func (a *AuthAPI) authConfigPut(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, apiError{Error: "provider_session_required", Message: "password login can only be switched off from a session that came through the identity provider: sign in that way first"})
 		return
 	}
+	// task 262: the session lengths - parsed, within the bounds, in force at once
+	if body.SessionIdle != nil {
+		cfg.Auth.SessionIdle = strings.TrimSpace(*body.SessionIdle)
+	}
+	if body.SessionMax != nil {
+		cfg.Auth.SessionMax = strings.TrimSpace(*body.SessionMax)
+	}
+	idle, maxAge, lerr := cfg.Auth.SessionLimits()
+	if lerr != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, apiError{Error: "invalid", Message: "the session lengths are durations such as 30m or 12h: " + lerr.Error()})
+		return
+	}
+	if idle == 0 {
+		idle = auth.DefaultIdleTimeout
+	}
+	if maxAge == 0 {
+		maxAge = auth.DefaultMaxAge
+	}
+	if !auth.ValidSessionLimits(idle, maxAge) {
+		writeJSON(w, http.StatusUnprocessableEntity, apiError{Error: "invalid", Message: auth.ErrSessionLimits.Error()})
+		return
+	}
 	cfg.Auth.Mode = body.Mode
 	o.Enabled = body.Mode == "oidc"
 	o.Name, o.Issuer, o.ClientID = strings.TrimSpace(body.Name), body.Issuer, body.ClientID
@@ -1347,6 +1486,10 @@ func (a *AuthAPI) authConfigPut(w http.ResponseWriter, r *http.Request) {
 	}
 	if on := cfg.Auth.PasswordLoginOn(); on != wasOn {
 		withCaller(r, a.logger()).Info("auth: password login switched", "password_login", on)
+	}
+	if oldIdle, oldMax := a.Store.SessionLimits(); oldIdle != idle || oldMax != maxAge {
+		_ = a.Store.SetSessionLimits(idle, maxAge) // validated above
+		withCaller(r, a.logger()).Info("auth: session limits changed", "idle", idle.String(), "max", maxAge.String())
 	}
 	writeJSON(w, 200, a.view(cfg.Auth, cfg.Auth.EffectiveMode() != a.runningMode()))
 }

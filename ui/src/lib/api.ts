@@ -11,6 +11,14 @@ export class ApiError extends Error {
     }
 }
 
+/**
+ * The header credential (openccu-lite task 259, D-78): a state-changing API call that rides on the
+ * session cookie alone must carry X-Occulite-Request - any value - or the daemon answers 403
+ * `request-header`. A form post or a link from another site cannot set a custom header, which is
+ * the point; the shell sets it on every call, the raw fetch() sites below spread it in.
+ */
+export const REQUEST_HEADER: Readonly<Record<string, string>> = {'X-Occulite-Request': '1'};
+
 /** The session id the shell holds doubles as a bearer token: on a host without the cookie
  *  (confirming a network change from the new address, handed over by a ticket in main.ts) it is
  *  all we have. It never goes into a URL (task 125). */
@@ -23,7 +31,7 @@ function storedSid(): string {
 }
 
 async function request<T>(method: string, path: string, body?: unknown, extra?: Record<string, string>, cache?: RequestCache): Promise<T> {
-    const headers: Record<string, string> = {...extra};
+    const headers: Record<string, string> = {...REQUEST_HEADER, ...extra};
     // lighttpd's mod_proxy answers 411 to a body-less POST/PUT without Content-Length: always send
     // a JSON body for anything but GET
     if (body === undefined && method !== 'GET') body = {};
@@ -55,7 +63,7 @@ async function request<T>(method: string, path: string, body?: unknown, extra?: 
 
 // task 38: a multipart body (files chosen on the page) - the browser sets the boundary
 async function requestForm<T>(method: string, path: string, form: FormData): Promise<T> {
-    const headers: Record<string, string> = {};
+    const headers: Record<string, string> = {...REQUEST_HEADER};
     const sid = storedSid();
     if (sid) headers['Authorization'] = `Bearer ${sid}`;
     const res = await fetch(path, {method, headers, body: form});
@@ -76,7 +84,7 @@ async function requestForm<T>(method: string, path: string, form: FormData): Pro
 
 // a text answer (a firmware bundle's changelog): the body as it is, or the refusal's {error, message}
 async function requestText(path: string): Promise<string> {
-    const headers: Record<string, string> = {};
+    const headers: Record<string, string> = {...REQUEST_HEADER};
     const sid = storedSid();
     if (sid) headers['Authorization'] = `Bearer ${sid}`;
     const res = await fetch(path, {headers, cache: 'no-store'});
@@ -106,6 +114,7 @@ export const api = {
     put: <T>(path: string, body?: unknown) => request<T>('PUT', path, body),
     patch: <T>(path: string, body?: unknown) => request<T>('PATCH', path, body),
     del: <T>(path: string, body?: unknown) => request<T>('DELETE', path, body),
+    delWith: <T>(path: string, headers: Record<string, string>) => request<T>('DELETE', path, undefined, headers),
     putForm: <T>(path: string, form: FormData) => requestForm<T>('PUT', path, form),
     postForm: <T>(path: string, form: FormData) => requestForm<T>('POST', path, form),
 };

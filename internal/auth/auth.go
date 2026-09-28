@@ -125,6 +125,9 @@ type User struct {
 	Preferences *Preferences `json:"preferences,omitempty"`
 	// LastProviderLogin is when the identity provider last signed this account in.
 	LastProviderLogin *time.Time `json:"last_provider_login,omitempty"`
+	// WebAuthn are the account's security keys and passkeys (openccu-lite task 262, webauthn.go);
+	// nil when it has none. With one or more, the password alone does not sign in.
+	WebAuthn []*WebAuthnCredential `json:"webauthn,omitempty"`
 }
 
 // assignIDs gives every account without a stable id one, unique among the accounts. The id is
@@ -184,10 +187,12 @@ func (u *User) normalize() {
 	u.Role = RoleOf(u.Level)
 }
 
-// Account is a User as the list hands it out: without the hash, with whether one is set.
+// Account is a User as the list hands it out: without the hash, with whether one is set, and
+// how many security keys it has (task 262) - never the keys themselves.
 type Account struct {
 	User
-	PasswordSet bool `json:"password_set"`
+	PasswordSet  bool `json:"password_set"`
+	WebAuthnKeys int  `json:"webauthn_keys"`
 }
 
 // Session is one live login as the store hands it out. ID is the session id for the caller that
@@ -299,9 +304,11 @@ func ValidName(name string) bool { return usernameRe.MatchString(name) }
 
 // Options tune the store; zero values are the defaults.
 type Options struct {
-	// IdleTimeout ends a session after this much inactivity (default 24 h).
+	// IdleTimeout ends a session after this much inactivity (default 30 min since openccu-lite
+	// task 262 - ASVS Level 2; 24 h before; auth.session_idle in occulited.json).
 	IdleTimeout time.Duration
-	// MaxAge ends a session regardless of activity (default 30 days).
+	// MaxAge ends a session regardless of activity, measured from the login (default 12 h since
+	// task 262; 30 days before; auth.session_max).
 	MaxAge time.Duration
 	// LockAfter failed attempts per user or remote within LockWindow lock for LockFor.
 	LockAfter  int
@@ -332,10 +339,10 @@ type Options struct {
 
 func (o *Options) defaults() {
 	if o.IdleTimeout == 0 {
-		o.IdleTimeout = 24 * time.Hour
+		o.IdleTimeout = DefaultIdleTimeout
 	}
 	if o.MaxAge == 0 {
-		o.MaxAge = 30 * 24 * time.Hour
+		o.MaxAge = DefaultMaxAge
 	}
 	if o.LockAfter == 0 {
 		o.LockAfter = 8
@@ -375,6 +382,9 @@ type Store struct {
 	tickets  map[string]ticket      // by the ticket's hash
 	failures map[string][]time.Time // key: "u:<name>" or "r:<remote>"
 	locked   map[string]time.Time
+	// pending are the logins and ceremonies between their two halves (webauthn.go), by id;
+	// memory only, PendingTTL each
+	pending map[string]pendingLogin
 }
 
 // ticket is a one-time credential a session issued for one URL path: a download link that must
@@ -961,9 +971,10 @@ func (s *Store) Users() []Account {
 	_ = s.reload()
 	out := make([]Account, 0, len(s.users))
 	for _, u := range s.users {
-		c := Account{User: *u, PasswordSet: u.Hash != ""}
+		c := Account{User: *u, PasswordSet: u.Hash != "", WebAuthnKeys: len(u.WebAuthn)}
 		c.Hash = ""
 		c.Preferences = nil // the list is about accounts, not what their shells remember
+		c.WebAuthn = nil    // the count says enough; the records hold public keys and counters
 		out = append(out, c)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
@@ -1113,6 +1124,12 @@ func (s *Store) LoginDetail(name, pw, remote, agent string) (*Session, Refusal, 
 		return nil, why, ErrInvalidCredentials
 	}
 	delete(s.failures, "u:"+name)
+	// task 262: an account with a security key signs in with the key as well - the password
+	// alone opens nothing (BeginPasswordLogin is the two-step login's first half)
+	if len(u.WebAuthn) > 0 {
+		why.Reason = "second factor required"
+		return nil, why, ErrSecondFactor
+	}
 	sess, err := s.openSession(name, u.Level, MethodPassword, remote, agent)
 	return sess, why, err
 }
@@ -1174,9 +1191,11 @@ func (s *Store) Validate(id string) *Session {
 	return &sess
 }
 
-// expired reports whether a session has idled out or passed its maximum age.
+// expired reports whether a session has idled out or passed its maximum age - the one fixed at
+// the login (expires) or, when an administrator shortened the lifetime since (task 262,
+// SetSessionLimits), the new one measured from the login.
 func (s *Store) expired(x *live, now time.Time) bool {
-	return now.Sub(x.lastSeen) > s.opt.IdleTimeout || now.After(x.expires)
+	return now.Sub(x.lastSeen) > s.opt.IdleTimeout || now.After(x.expires) || now.Sub(x.created) > s.opt.MaxAge
 }
 
 // AnonymousSID is the id of the one session that exists when authentication is off (task 29), in

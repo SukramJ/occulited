@@ -13,6 +13,28 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 // the built UI (npm run build); the stub is the test rig of task 14 - every page, no box
 const DIST = path.resolve(HERE, '../../../internal/ui/dist');
 const WWW = path.join(HERE, 'www');
+
+// openccu-lite task 259: the shell's Content-Security-Policy and Permissions-Policy, read from the
+// file occulited embeds and sets on the shell's answers (internal/ui/csp.txt, header lines), so the
+// suite runs every page under exactly the policy the system sends (csp.spec.ts fails on a
+// violation). The addon pages under /addons/ get none, as on a system.
+const SHELL_HEADERS = Object.fromEntries(
+    fs.readFileSync(path.resolve(HERE, '../../../internal/ui/csp.txt'), 'utf8').split('\n').filter((l) => l.includes(': ')).map((l) => l.split(/: (.*)/s).slice(0, 2)),
+);
+if (!SHELL_HEADERS['Content-Security-Policy']) throw new Error('internal/ui/csp.txt has no Content-Security-Policy line');
+
+// task 259: the header credential. The daemon answers 403 request-header to a state-changing call
+// whose only credential is the session cookie and that lacks X-Occulite-Request. The stub knows no
+// sessions; a browser's request - Sec-Fetch-Site is the browser's own statement, no program sends
+// it - with a non-safe method to a guarded /api/ route stands in for "on the cookie alone", so
+// every fetch() of the shell is pinned to the header here, the raw ones included. The open routes
+// (login, setup, the ticket redeem, a pairing request) need none on the daemon either.
+const OPEN_API = new Set(['/api/auth/v1/login', '/api/auth/v1/setup', '/api/auth/v1/ticket/redeem', '/api/auth/v1/pairing/request']);
+function refusedWithoutHeader(req, pathname) {
+    if (!pathname.startsWith('/api/') || ['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return false;
+    if (!req.headers['sec-fetch-site'] || OPEN_API.has(pathname) || pathname.startsWith('/api/auth/v1/pairing/request/')) return false;
+    return !req.headers['x-occulite-request'];
+}
 const PORT = Number(process.env.PORT || 8799);
 
 const now = new Date().toISOString();
@@ -71,7 +93,7 @@ const routes = {
     'GET /api/system/v1/factory-reset': {hostname: 'ccu-vm-1', armed: false, container: '', update_staged: false, interfaces: {'BidCos-RF': {devices: 0, known: true}, 'HmIP-RF': {devices: 0, known: true}}, security_key_set: false, security_key_known: true, hmip_local_key: false},
     'GET /api/system/v1/health': {ok: true, version: 'stub', release: '1.0.0-alpha.0', base: '3.89.8.20260719', uptime_s: 12345, meta: {revision: 9, recovered: false}},
     // task 19: password_login follows the stub-oidc cookie (variant below), the group mapping is gone
-    'GET /api/auth/v1/config': {mode: 'oidc', modes: ['local','oidc','off'], name: 'authentik', issuer: 'https://auth.example.org/application/o/openccu-lite/', client_id: 'abc123', client_secret_set: true, username_claim: 'preferred_username', scopes: 'openid profile email', password_login: true, running: 'local', restart_required: true},
+    'GET /api/auth/v1/config': {mode: 'oidc', modes: ['local','oidc','off'], name: 'authentik', issuer: 'https://auth.example.org/application/o/openccu-lite/', client_id: 'abc123', client_secret_set: true, username_claim: 'preferred_username', scopes: 'openid profile email', password_login: true, running: 'local', restart_required: true, session_idle: '30m0s', session_max: '12h0m0s'},
     // task 85: the VM - persistent by default and mounted, nothing left in RAM after the flush
     // task 214: occulited's database file - the stub is the VM, persistent by default and open
     'GET /api/system/v1/datastore': {mode: '', location: '', default_location: 'userfs:etc/occulite/data', sync_interval: '', default_mode: 'persistent', default_sync_interval: '1h', sync_intervals: ['15min', '1h', '6h', '24h'], platform: 'ova', effective: 'persistent', open: true, path: '/usr/local/etc/occulite/data/occulited.db', size: 65_536, rows_per_series: 500, last_sync: '2026-09-24T18:00:00Z', next_sync: '2026-09-24T19:00:00Z', kept: {state: 34}},
@@ -94,11 +116,18 @@ const routes = {
     'GET /api/auth/v1/state': {setup_required: false, authenticated: true, user: 'admin', role: 'admin', must_change_password: false, sid: 'A1b2C3d4E5', method: 'password'},
     'GET /api/auth/v1/users': {
         users: [
-            {name: 'admin', role: 'admin', level: 'administer', created: '2026-08-14T09:12:00Z', password_set: true},
-            {name: 'sebastian', role: 'admin', level: 'administer', created: '2026-08-20T18:41:00Z', password_set: true, last_provider_login: '2026-09-14T21:12:00Z'},
+            {name: 'admin', role: 'admin', level: 'administer', created: '2026-08-14T09:12:00Z', password_set: true, webauthn_keys: 2},
+            {name: 'sebastian', role: 'admin', level: 'administer', created: '2026-08-20T18:41:00Z', password_set: true, last_provider_login: '2026-09-14T21:12:00Z', webauthn_keys: 0},
             {name: 'monitor', role: 'user', level: 'operate', created: '2026-09-01T07:03:00Z', must_change_password: true, password_set: true},
         ],
     },
+    // task 262: the caller's security keys (the account page), the feature route, an account's keys
+    'GET /api/auth/v1/webauthn': {passkeys: true, registered: false, name: 'ccu.example.home'},
+    'GET /api/auth/v1/me/webauthn': {name: 'ccu.example.home', keys: [
+        {id: 'a1b2c3d4e5f6g7h8', name: 'YubiKey blue', created: '2026-09-20T10:00:00Z', last_used: '2026-09-27T18:30:00Z', passkey: false, transports: ['usb', 'nfc']},
+        {id: 'h8g7f6e5d4c3b2a1', name: 'iPhone', created: '2026-09-21T09:00:00Z', passkey: true, transports: ['internal', 'hybrid']},
+    ]},
+    'GET /api/auth/v1/users/admin/webauthn': {keys: [{id: 'a1b2c3d4e5f6g7h8', name: 'YubiKey blue', created: '2026-09-20T10:00:00Z', passkey: false}, {id: 'h8g7f6e5d4c3b2a1', name: 'iPhone', created: '2026-09-21T09:00:00Z', passkey: true}]},
     'GET /api/auth/v1/tokens': {
         tokens: [
             {name: 'hm2mqtt', scopes: ['meta:read'], prefix: '7f3ac1', created: '2026-08-22T11:00:00Z', last_used: '2026-09-07T18:22:00Z'},
@@ -2193,6 +2222,12 @@ function variant(req, u, res) {
         sendJSON(res, {setup_required: false, authenticated: true, user: 'ci-token', scopes: ['*']});
         return true;
     }
+    // task 262: with the cookie stub-webauthn-registered=1 an account has a key, so the Network
+    // page warns before a rename
+    if (key === 'GET /api/auth/v1/webauthn' && jar['stub-webauthn-registered'] === '1') {
+        sendJSON(res, {...routes[key], registered: true});
+        return true;
+    }
     if (key === 'GET /api/auth/v1/state' && jar['stub-token'] === 'out') {
         sendJSON(res, {setup_required: false, authenticated: false});
         return true;
@@ -2216,7 +2251,7 @@ function variant(req, u, res) {
         req.on('end', () => {
             const b = JSON.parse(body || '{}');
             // openccu-lite B-206: strict like the API - GET's read-only fields are refused
-            const writable = ['mode', 'name', 'issuer', 'client_id', 'client_secret', 'username_claim', 'scopes', 'password_login'];
+            const writable = ['mode', 'name', 'issuer', 'client_id', 'client_secret', 'username_claim', 'scopes', 'password_login', 'session_idle', 'session_max'];
             const unknown = Object.keys(b).find((k) => !writable.includes(k));
             if (unknown) return sendJSON(res, {error: 'invalid-body', message: `"${unknown}" is not a field PUT /config takes (it may be one of GET's read-only fields); send only ${writable.join(', ')}`}, 422);
             const view = {...routes['GET /api/auth/v1/config'], ...b, client_secret_set: !!b.client_secret || routes['GET /api/auth/v1/config'].client_secret_set, running: oidc ? 'oidc' : 'local', restart_required: (oidc ? 'oidc' : 'local') !== b.mode};
@@ -2695,6 +2730,11 @@ const metaWrites = [];
 const srv = http.createServer((req, res) => {
     const u = new URL(req.url, 'http://x');
     const key = `${req.method} ${u.pathname}`;
+    if (refusedWithoutHeader(req, u.pathname)) {
+        console.error(`stub: ${key} without X-Occulite-Request (task 259)`);
+        res.writeHead(403, {'Content-Type': 'application/json'});
+        return res.end(JSON.stringify({error: 'request-header', message: 'a state-changing call with the session cookie alone must carry the header X-Occulite-Request'}));
+    }
     if (req.method === 'GET' && u.pathname === '/__stub/meta-writes') {
         const client = u.searchParams.get('client') ?? '';
         res.writeHead(200, {'Content-Type': 'application/json'});
@@ -3547,13 +3587,24 @@ const srv = http.createServer((req, res) => {
             res.writeHead(200, {'Content-Type': MIME[path.extname(f)] ?? 'application/octet-stream'});
             return res.end(fs.readFileSync(f));
         }
+        // frames.spec.ts: a framed page of the same origin that speaks Node-RED's theme protocol. It
+        // lives under /addons/ like a real addon page, outside the shell's CSP (a srcdoc frame would
+        // inherit the shell's policy, which allows no inline script)
+        if (u.pathname === '/addons/frames-probe/') {
+            res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
+            return res.end(`<!doctype html><script>
+    window.addEventListener('message', (e) => { parent.__theme = e.data; });
+    parent.postMessage({type: 'request-theme'}, '*');
+</script>`);
+        }
         // an addon settings page in the iframe: a stand-in, so the frame is not a 404
         res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
         return res.end(`<!doctype html><body style="font:13px system-ui;padding:20px">addon page stub: ${u.pathname}${FRAME_PROBE}</body>`);
     }
     let f = path.join(DIST, u.pathname);
     if (!f.startsWith(DIST) || !fs.existsSync(f) || fs.statSync(f).isDirectory()) f = path.join(DIST, 'index.html');
-    res.writeHead(200, {'Content-Type': MIME[path.extname(f)] ?? 'application/octet-stream'});
+    // the shell and its assets carry the system's CSP (task 259)
+    res.writeHead(200, {'Content-Type': MIME[path.extname(f)] ?? 'application/octet-stream', ...SHELL_HEADERS});
     res.end(fs.readFileSync(f));
 });
 srv.listen(PORT, process.env.HOST || '127.0.0.1', () => console.log(`stub on http://${process.env.HOST || '127.0.0.1'}:${PORT}`));

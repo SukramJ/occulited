@@ -6,9 +6,12 @@
 -- name. occulited keeps no session id outside its memory (B-102, D-67), so the gate hashes the id a
 -- request carries to find the file; neither the mirror nor occulited's session store holds a usable
 -- credential. A request without a valid session is redirected to the shell's login with the
--- original URL to return to. Accepted credentials: the session cookie - occulite_session from a
--- login over HTTP, __Secure-occulite_session from one over HTTPS - or ?sid= with the session id,
--- with or without the CCU's @ wrapping.
+-- original URL to return to. Accepted credentials: the gate cookie - occulite_gate from a login
+-- over HTTP, __Secure-occulite_gate from one over HTTPS (openccu-lite task 259, D-78: the same
+-- session id as the API's cookie, but scoped to Path=/addons/, while the API's cookie
+-- occulite_session is scoped to Path=/api and never reaches an addon; a session cookie that
+-- still arrives here, from a browser that has not loaded the shell since the change, is no
+-- credential at the gate) - or ?sid= with the session id, with or without the CCU's @ wrapping.
 --
 -- The legacy alias (task 125, D-77): the CCU's addon convention passes the session as
 -- ?sid=@xxxxxxxxxx@, ten alphanumerics, and the addons' CGIs parse exactly that shape. occulited
@@ -27,7 +30,7 @@
 -- the gate validated. The requests the gate does not run on lose it in the fork's lite
 -- modules.conf, which runs the same removal for every request on every socket.
 --
--- Cross-site requests (openccu-lite task 213, task 120's F-2, homematic-manager B-41): the session
+-- Cross-site requests (openccu-lite task 213, task 120's F-2, homematic-manager B-41): the gate
 -- cookie is SameSite=Lax, which still carries it on a top-level navigation from another site and on
 -- any request from the same site (another port of this host). A request the gate accepts by its
 -- cookie is therefore refused with 403 when the browser says it comes from elsewhere:
@@ -155,17 +158,17 @@ local function accept(sid)
     return 0
 end
 
--- 1. the cookies: the session id only, never an alias. One name per scheme, because a browser
+-- 1. the gate cookies: the session id only, never an alias. One name per scheme, because a browser
 -- neither sends a Secure cookie over plain HTTP nor lets an HTTP login replace it; over HTTPS it
 -- sends both names. Every occurrence of either is tried, so a stale cookie does not hide a live one. Each name is anchored at the start
 -- of the header or at a cookie separator, for the same reason the query string is (B-21): an
 -- unanchored match reads a cookie that merely *ends* in the name - one an addon page could set -
--- as the session cookie. Not a hole on its own, because live_sid still has to find the file, but
+-- as the gate cookie. Not a hole on its own, because live_sid still has to find the file, but
 -- the gate should not depend on that. The header gets a leading ";" so that its start is a
--- separator like any other.
+-- separator like any other. The API's own cookie (occulite_session) is not on the list (task 259).
 local COOKIE_PATTERNS = {
-    "[;,%s]__Secure%-occulite_session=([%w@]+)",
-    "[;,%s]occulite_session=([%w@]+)",
+    "[;,%s]__Secure%-occulite_gate=([%w@]+)",
+    "[;,%s]occulite_gate=([%w@]+)",
 }
 -- task 213: whether a cookie request comes from another site - nil when it may pass, "navigate"
 -- for a top-level navigation from elsewhere, else the reason for the refusal

@@ -5,7 +5,7 @@
      * Metadata page; that page went with the App (the App is the one editor of names and
      * assignments now), and the import, a once-at-setup act, lives on the Backup page.
      */
-    import {api} from './api';
+    import {api, REQUEST_HEADER} from './api';
     import {t} from './i18n.svelte';
     import Help from './Help.svelte';
 
@@ -27,7 +27,7 @@
                 if (!regaFile) return;
                 const fd = new FormData();
                 fd.append('file', regaFile, regaFile.name);
-                const res = await fetch(`/api/meta/v1/import/regadom?mode=${ccuMode}&dry_run=${dryRun}`, {method: 'POST', body: fd});
+                const res = await fetch(`/api/meta/v1/import/regadom?mode=${ccuMode}&dry_run=${dryRun}`, {method: 'POST', headers: REQUEST_HEADER, body: fd});
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.message ?? res.statusText);
                 r = data;

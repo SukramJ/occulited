@@ -22,7 +22,8 @@ var bothMethods = []string{MethodPassword, MethodOIDC}
 // dir/sessions/sessions.json, on the clock *now - a new occulited process over the same state.
 func openAt(t *testing.T, dir, mirror string, now *time.Time, methods []string) *Store {
 	t.Helper()
-	s, err := Open(dir, Options{SessionDir: mirror, SessionFile: storeFile(dir), RestoreMethods: methods, Now: func() time.Time { return *now }})
+	// the tests below count in the limits before openccu-lite task 262 (24 h idle, 30 days)
+	s, err := Open(dir, Options{SessionDir: mirror, SessionFile: storeFile(dir), RestoreMethods: methods, Now: func() time.Time { return *now }, IdleTimeout: 24 * time.Hour, MaxAge: 30 * 24 * time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}

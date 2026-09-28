@@ -8,10 +8,12 @@
 --
 -- and syntax-check the gate itself with:  luac -p deploy/lighttpd/occulite-gate.lua
 
--- the match rules of the gate; `live` stands in for the session directory
+-- the match rules of the gate; `live` stands in for the session directory. The cookie is the gate
+-- cookie (openccu-lite task 259): occulite_gate / __Secure-occulite_gate at Path=/addons/; the
+-- API's occulite_session is scoped to /api and is no credential here.
 local COOKIE_PATTERNS = {
-  "[;,%s]__Secure%-occulite_session=([%w@]+)",
-  "[;,%s]occulite_session=([%w@]+)",
+  "[;,%s]__Secure%-occulite_gate=([%w@]+)",
+  "[;,%s]occulite_gate=([%w@]+)",
 }
 -- task 125: a session id is 26 characters of base32, the legacy alias ten alphanumerics
 local SID_PATTERN = "^@?(" .. string.rep("[A-Z2-7]", 26) .. ")@?$"
@@ -48,25 +50,25 @@ local function want(got, expect, what)
   end
 end
 local ID = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-want(cookie_sid("occulite_session=" .. ID), ID, "HTTP cookie alone")
-want(cookie_sid("__Secure-occulite_session=" .. ID), ID, "HTTPS cookie alone")
-want(cookie_sid("theme=dark; occulite_session=" .. ID), ID, "HTTP cookie after another")
-want(cookie_sid("theme=dark; __Secure-occulite_session=" .. ID), ID, "HTTPS cookie after another")
-want(cookie_sid("occulite_session=@" .. ID .. "@"), ID, "cookie, @-wrapped")
-want(cookie_sid("a=1,occulite_session=" .. ID), ID, "comma-separated cookie")
-want(cookie_sid("a=1,__Secure-occulite_session=" .. ID), ID, "comma-separated HTTPS cookie")
-want(cookie_sid("x_occulite_session=" .. ID), nil, "a cookie merely ending in the name")
-want(cookie_sid("evilocculite_session=" .. ID), nil, "a cookie name glued to it")
-want(cookie_sid("evil-occulite_session=" .. ID), nil, "a cookie name glued to it with a dash")
-want(cookie_sid("x__Secure-occulite_session=" .. ID), nil, "a cookie merely ending in the HTTPS name")
-want(cookie_sid("__Secure-occulite_sessionx=" .. ID), nil, "a cookie name that only starts with it")
-want(cookie_sid("__Secure_occulite_session=" .. ID), nil, "a look-alike of the HTTPS name")
-want(cookie_sid("occulite_session=SHORT"), nil, "a sid of the wrong length")
-want(cookie_sid("occulite_session=" .. ID .. "A"), nil, "a sid that is too long")
-want(cookie_sid("occulite_session=abcdefghijklmnopqrstuvwxyz"), nil, "a sid in lower case is no base32 id")
-want(cookie_sid("occulite_session=ABCDEFGHIJKLMNOPQRSTUVWXY0"), nil, "a 0 or 1 is no base32 letter")
-want(cookie_sid("occulite_session=ABCDEFGHIJ"), nil, "the ten-character shape is no session id (task 125)")
-want(cookie_sid("occulite_session=@ABCDEFGHIJ@"), nil, "an @-wrapped alias is no cookie either")
+want(cookie_sid("occulite_gate=" .. ID), ID, "HTTP cookie alone")
+want(cookie_sid("__Secure-occulite_gate=" .. ID), ID, "HTTPS cookie alone")
+want(cookie_sid("theme=dark; occulite_gate=" .. ID), ID, "HTTP cookie after another")
+want(cookie_sid("theme=dark; __Secure-occulite_gate=" .. ID), ID, "HTTPS cookie after another")
+want(cookie_sid("occulite_gate=@" .. ID .. "@"), ID, "cookie, @-wrapped")
+want(cookie_sid("a=1,occulite_gate=" .. ID), ID, "comma-separated cookie")
+want(cookie_sid("a=1,__Secure-occulite_gate=" .. ID), ID, "comma-separated HTTPS cookie")
+want(cookie_sid("x_occulite_gate=" .. ID), nil, "a cookie merely ending in the name")
+want(cookie_sid("evilocculite_gate=" .. ID), nil, "a cookie name glued to it")
+want(cookie_sid("evil-occulite_gate=" .. ID), nil, "a cookie name glued to it with a dash")
+want(cookie_sid("x__Secure-occulite_gate=" .. ID), nil, "a cookie merely ending in the HTTPS name")
+want(cookie_sid("__Secure-occulite_gatex=" .. ID), nil, "a cookie name that only starts with it")
+want(cookie_sid("__Secure_occulite_gate=" .. ID), nil, "a look-alike of the HTTPS name")
+want(cookie_sid("occulite_gate=SHORT"), nil, "a sid of the wrong length")
+want(cookie_sid("occulite_gate=" .. ID .. "A"), nil, "a sid that is too long")
+want(cookie_sid("occulite_gate=abcdefghijklmnopqrstuvwxyz"), nil, "a sid in lower case is no base32 id")
+want(cookie_sid("occulite_gate=ABCDEFGHIJKLMNOPQRSTUVWXY0"), nil, "a 0 or 1 is no base32 letter")
+want(cookie_sid("occulite_gate=ABCDEFGHIJ"), nil, "the ten-character shape is no session id (task 125)")
+want(cookie_sid("occulite_gate=@ABCDEFGHIJ@"), nil, "an @-wrapped alias is no cookie either")
 want(shape(ID), ID, "the session id's shape")
 want(alias_shape(ID), nil, "a session id is no alias")
 want(alias_shape("@AbCd012345@"), "AbCd012345", "the alias's shape, @-wrapped")
@@ -76,12 +78,13 @@ want(alias_shape("AbCd0123456"), nil, "an eleven-character alias")
 -- both names, and stale ones in front of a live one
 local LIVEHTTP, LIVEHTTPS, STALE = "LIVEHTTPAAAAAAAAAAAAAAAAAA", "LIVEHTTPSAAAAAAAAAAAAAAAAA", "STALEAAAAAAAAAAAAAAAAAAAAA"
 local live = {[LIVEHTTPS] = true, [LIVEHTTP] = true}
-want(cookie_sid("occulite_session=" .. LIVEHTTP .. "; __Secure-occulite_session=" .. LIVEHTTPS, live), LIVEHTTPS, "both live: the HTTPS cookie first")
-want(cookie_sid("occulite_session=" .. STALE .. "; __Secure-occulite_session=" .. LIVEHTTPS, live), LIVEHTTPS, "a stale HTTP cookie, a live HTTPS one")
-want(cookie_sid("__Secure-occulite_session=" .. STALE .. "; occulite_session=" .. LIVEHTTP, live), LIVEHTTP, "a stale HTTPS cookie, a live HTTP one")
-want(cookie_sid("occulite_session=" .. STALE .. "; occulite_session=" .. LIVEHTTP, live), LIVEHTTP, "one name twice, the first stale")
-want(cookie_sid("occulite_session=" .. STALE .. "; __Secure-occulite_session=STALEBBBBBBBBBBBBBBBBBBBBB", live), nil, "only stale cookies")
-want(cookie_sid("x_occulite_session=" .. LIVEHTTP, live), nil, "a live sid under a look-alike name")
+want(cookie_sid("occulite_gate=" .. LIVEHTTP .. "; __Secure-occulite_gate=" .. LIVEHTTPS, live), LIVEHTTPS, "both live: the HTTPS cookie first")
+want(cookie_sid("occulite_gate=" .. STALE .. "; __Secure-occulite_gate=" .. LIVEHTTPS, live), LIVEHTTPS, "a stale HTTP cookie, a live HTTPS one")
+want(cookie_sid("__Secure-occulite_gate=" .. STALE .. "; occulite_gate=" .. LIVEHTTP, live), LIVEHTTP, "a stale HTTPS cookie, a live HTTP one")
+want(cookie_sid("occulite_gate=" .. STALE .. "; occulite_gate=" .. LIVEHTTP, live), LIVEHTTP, "one name twice, the first stale")
+want(cookie_sid("occulite_gate=" .. STALE .. "; __Secure-occulite_gate=STALEBBBBBBBBBBBBBBBBBBBBB", live), nil, "only stale cookies")
+want(cookie_sid("x_occulite_gate=" .. LIVEHTTP, live), nil, "a live sid under a look-alike name")
+want(cookie_sid("occulite_session=" .. LIVEHTTP, live), nil, "a live sid under the API cookie's name (task 259)")
 want(shape(query_sid("sid=@" .. ID .. "@")), ID, "query, first parameter")
 want(shape(query_sid("x=1&sid=@" .. ID .. "@")), ID, "query, later parameter")
 want(alias_shape(query_sid("x=1&sid=@AbCd012345@")), "AbCd012345", "query, an alias")
@@ -230,24 +233,27 @@ local FORGED_HDR = { "X-Occulite-Session", FORGED }
 case("no credential, a browser", { { "Accept", "text/html" } }, nil, 302)
 case("no credential, forged header, a browser", { { "Accept", "text/html" }, FORGED_HDR }, nil, 302)
 case("no credential, forged header, an API caller", { FORGED_HDR }, nil, 401)
-case("a stale cookie and a forged header", { { "Cookie", "occulite_session=" .. STALE }, FORGED_HDR }, nil, 401)
-case("a live id under a look-alike cookie, forged header", { { "Cookie", "x_occulite_session=" .. LIVEHTTP }, FORGED_HDR }, nil, 401)
+case("a stale cookie and a forged header", { { "Cookie", "occulite_gate=" .. STALE }, FORGED_HDR }, nil, 401)
+-- task 259: the API's session cookie, should a browser still send it here, opens nothing
+case("a live id under the API's cookie name", { { "Cookie", "occulite_session=" .. LIVEHTTP } }, nil, 401)
+case("a live id under the API's HTTPS cookie name", { { "Cookie", "__Secure-occulite_session=" .. LIVEHTTPS } }, nil, 401)
+case("a live id under a look-alike cookie, forged header", { { "Cookie", "x_occulite_gate=" .. LIVEHTTP }, FORGED_HDR }, nil, 401)
 case("?sid= of a stale session, forged header", { FORGED_HDR }, "sid=@" .. STALE .. "@", 401)
-case("an HTTP cookie", { { "Cookie", "occulite_session=" .. LIVEHTTP } }, nil, 0, "X-Occulite-Session=" .. LIVEHTTP)
-case("an HTTPS cookie, @-wrapped", { { "Cookie", "theme=dark; __Secure-occulite_session=@" .. LIVEHTTPS .. "@" } }, nil, 0, "X-Occulite-Session=" .. LIVEHTTPS)
-case("a live cookie and a forged header", { FORGED_HDR, { "Cookie", "occulite_session=" .. LIVEHTTP } }, nil, 0, "X-Occulite-Session=" .. LIVEHTTP)
-case("a live cookie, the forged header in lower case", { { "x-occulite-session", FORGED }, { "Cookie", "occulite_session=" .. LIVEHTTP } }, nil, 0, "x-occulite-session=" .. LIVEHTTP)
-case("a live cookie, forged under both cases", { { "X-OCCULITE-SESSION", FORGED }, { "x-occulite-session", "FORGEDBBBBBBBBBBBBBBBBBBBB" }, { "Cookie", "occulite_session=" .. LIVEHTTP } }, nil, 0, "X-OCCULITE-SESSION=" .. LIVEHTTP)
-case("a live cookie, forged as X_Occulite_Session and x.occulite.session", { { "X_Occulite_Session", FORGED }, { "x.occulite.session", "FORGEDBBBBBBBBBBBBBBBBBBBB" }, { "Cookie", "occulite_session=" .. LIVEHTTP } }, nil, 0, "X-Occulite-Session=" .. LIVEHTTP)
-case("a header that only resembles it stays", { { "X-Occulite-Sessions", "keep" }, { "Cookie", "occulite_session=" .. LIVEHTTP } }, nil, 0, "X-Occulite-Session=" .. LIVEHTTP)
+case("an HTTP cookie", { { "Cookie", "occulite_gate=" .. LIVEHTTP } }, nil, 0, "X-Occulite-Session=" .. LIVEHTTP)
+case("an HTTPS cookie, @-wrapped", { { "Cookie", "theme=dark; __Secure-occulite_gate=@" .. LIVEHTTPS .. "@" } }, nil, 0, "X-Occulite-Session=" .. LIVEHTTPS)
+case("a live cookie and a forged header", { FORGED_HDR, { "Cookie", "occulite_gate=" .. LIVEHTTP } }, nil, 0, "X-Occulite-Session=" .. LIVEHTTP)
+case("a live cookie, the forged header in lower case", { { "x-occulite-session", FORGED }, { "Cookie", "occulite_gate=" .. LIVEHTTP } }, nil, 0, "x-occulite-session=" .. LIVEHTTP)
+case("a live cookie, forged under both cases", { { "X-OCCULITE-SESSION", FORGED }, { "x-occulite-session", "FORGEDBBBBBBBBBBBBBBBBBBBB" }, { "Cookie", "occulite_gate=" .. LIVEHTTP } }, nil, 0, "X-OCCULITE-SESSION=" .. LIVEHTTP)
+case("a live cookie, forged as X_Occulite_Session and x.occulite.session", { { "X_Occulite_Session", FORGED }, { "x.occulite.session", "FORGEDBBBBBBBBBBBBBBBBBBBB" }, { "Cookie", "occulite_gate=" .. LIVEHTTP } }, nil, 0, "X-Occulite-Session=" .. LIVEHTTP)
+case("a header that only resembles it stays", { { "X-Occulite-Sessions", "keep" }, { "Cookie", "occulite_gate=" .. LIVEHTTP } }, nil, 0, "X-Occulite-Session=" .. LIVEHTTP)
 case("?sid=@..@ with the session id", {}, "sid=@" .. LIVEQUERY .. "@", 0, "X-Occulite-Session=" .. LIVEQUERY)
 case("?sid= and a forged header", { FORGED_HDR }, "x=1&sid=" .. LIVEQUERY, 0, "X-Occulite-Session=" .. LIVEQUERY)
-case("a stale cookie beside a live ?sid=", { { "Cookie", "occulite_session=" .. STALE }, FORGED_HDR }, "sid=@" .. LIVEQUERY .. "@", 0, "X-Occulite-Session=" .. LIVEQUERY)
-case("a stale HTTPS cookie before a live HTTP one", { { "Cookie", "__Secure-occulite_session=" .. STALE .. "; occulite_session=" .. LIVEHTTP } }, nil, 0, "X-Occulite-Session=" .. LIVEHTTP)
+case("a stale cookie beside a live ?sid=", { { "Cookie", "occulite_gate=" .. STALE }, FORGED_HDR }, "sid=@" .. LIVEQUERY .. "@", 0, "X-Occulite-Session=" .. LIVEQUERY)
+case("a stale HTTPS cookie before a live HTTP one", { { "Cookie", "__Secure-occulite_gate=" .. STALE .. "; occulite_gate=" .. LIVEHTTP } }, nil, 0, "X-Occulite-Session=" .. LIVEHTTP)
 -- fail closed: a lighttpd that does not remove or does not set the header
-case("the removal does not take, with a live cookie", { FORGED_HDR, { "Cookie", "occulite_session=" .. LIVEHTTP } }, nil, 500, nil, "remove")
+case("the removal does not take, with a live cookie", { FORGED_HDR, { "Cookie", "occulite_gate=" .. LIVEHTTP } }, nil, 500, nil, "remove")
 case("the removal does not take, no credential", { FORGED_HDR }, nil, 500, nil, "remove")
-case("the header cannot be set", { { "Cookie", "occulite_session=" .. LIVEHTTP } }, nil, 500, nil, "set")
+case("the header cannot be set", { { "Cookie", "occulite_gate=" .. LIVEHTTP } }, nil, 500, nil, "set")
 -- openccu-lite B-230: a client-sent X-Forwarded-For (and the other forwarding headers) never
 -- reaches the addon, in any spelling; lighttpd appends its own element after the gate
 do
@@ -271,23 +277,23 @@ do -- lighttpd before 1.4.60: no lighty.r
 end
 
 -- B-102: the session directory names a file by the SHA-256 of the id, never by the id
-local HC_LIVE = { { "Cookie", "occulite_session=" .. LIVEHTTP } }
+local HC_LIVE = { { "Cookie", "occulite_gate=" .. LIVEHTTP } }
 case("a file named by the id itself (the old mirror) is no session", HC_LIVE, nil, 401, nil, nil, { [LIVEHTTP] = true })
 case("a file named by the upper-case digest is no session", HC_LIVE, nil, 401, nil, nil, { [SHA256[LIVEHTTP]] = true })
-case("a live session's digest as the cookie", { { "Cookie", "occulite_session=" .. key(LIVEHTTP) } }, nil, 401)
+case("a live session's digest as the cookie", { { "Cookie", "occulite_gate=" .. key(LIVEHTTP) } }, nil, 401)
 case("a live session's digest as ?sid=", {}, "sid=@" .. key(LIVEQUERY) .. "@", 401)
-case("a forged id", { { "Cookie", "occulite_session=" .. FORGED }, FORGED_HDR }, nil, 401)
+case("a forged id", { { "Cookie", "occulite_gate=" .. FORGED }, FORGED_HDR }, nil, 401)
 case("a forged id as ?sid=", {}, "sid=@" .. FORGED .. "@", 401)
 do -- a session that ends: the same cookie before and after its file goes
   local live = { [key(REVOKED)] = true }
-  case("a session before it ends", { { "Cookie", "occulite_session=" .. REVOKED } }, nil, 0, "X-Occulite-Session=" .. REVOKED, nil, live)
+  case("a session before it ends", { { "Cookie", "occulite_gate=" .. REVOKED } }, nil, 0, "X-Occulite-Session=" .. REVOKED, nil, live)
   live[key(REVOKED)] = nil
-  case("the same cookie once the session ended", { { "Cookie", "occulite_session=" .. REVOKED } }, nil, 401, nil, nil, live)
+  case("the same cookie once the session ended", { { "Cookie", "occulite_gate=" .. REVOKED } }, nil, 401, nil, nil, live)
   case("the same id as ?sid= once the session ended", {}, "sid=@" .. REVOKED .. "@", 401, nil, nil, live)
 end
 do -- the gate hashes the bare id with sha256: not the @-wrapped one, not another algorithm
   md_inputs = {}
-  case("an @-wrapped HTTPS cookie", { { "Cookie", "__Secure-occulite_session=@" .. LIVEHTTPS .. "@" } }, nil, 0, "X-Occulite-Session=" .. LIVEHTTPS)
+  case("an @-wrapped HTTPS cookie", { { "Cookie", "__Secure-occulite_gate=@" .. LIVEHTTPS .. "@" } }, nil, 0, "X-Occulite-Session=" .. LIVEHTTPS)
   local seen = table.concat(md_inputs, " ")
   want(seen:find("sha256:" .. LIVEHTTPS, 1, true) ~= nil and seen:find("@", 1, true) == nil and seen:find("md5", 1, true) == nil, true, "hashed: " .. seen)
 end
@@ -303,12 +309,12 @@ case("no lighty.c, no credential: the gate fails closed", { { "Accept", "text/ht
 case("an alias as ?sid=@..@", {}, "sid=@aliasLive1@", 0, "X-Occulite-Session=aliasLive1")
 case("an alias as bare ?sid=", {}, "x=1&sid=aliasLive1", 0, "X-Occulite-Session=aliasLive1")
 case("an alias as ?sid= with a forged header", { FORGED_HDR }, "sid=@aliasLive1@", 0, "X-Occulite-Session=aliasLive1")
-case("a stale cookie beside a live alias", { { "Cookie", "occulite_session=" .. STALE } }, "sid=@aliasLive1@", 0, "X-Occulite-Session=aliasLive1")
+case("a stale cookie beside a live alias", { { "Cookie", "occulite_gate=" .. STALE } }, "sid=@aliasLive1@", 0, "X-Occulite-Session=aliasLive1")
 case("a live cookie wins over the alias", HC_LIVE, "sid=@aliasLive1@", 0, "X-Occulite-Session=" .. LIVEHTTP)
 case("auth off: the fixed alias", {}, "sid=@anonymous0@", 0, "X-Occulite-Session=anonymous0")
 case("an alias nobody has", {}, "sid=@aliasGone1@", 401)
-case("an alias as the HTTP cookie", { { "Cookie", "occulite_session=aliasLive1" } }, nil, 401)
-case("an alias as the HTTPS cookie, @-wrapped", { { "Cookie", "__Secure-occulite_session=@aliasLive1@" } }, nil, 401)
+case("an alias as the HTTP cookie", { { "Cookie", "occulite_gate=aliasLive1" } }, nil, 401)
+case("an alias as the HTTPS cookie, @-wrapped", { { "Cookie", "__Secure-occulite_gate=@aliasLive1@" } }, nil, 401)
 case("an alias whose file is in the session directory is no session", {}, "sid=@aliasLive1@", 401, nil, nil, { [key("aliasLive1")] = true }, nil, {})
 case("a session id whose file is in the alias directory is no alias", {}, "sid=@" .. LIVEQUERY .. "@", 401, nil, nil, {}, nil, { [key(LIVEQUERY)] = true })
 case("a file named by the alias itself is no alias", {}, "sid=@aliasLive1@", 401, nil, nil, nil, nil, { aliasLive1 = true })
@@ -330,7 +336,7 @@ end
 local function xs(what, headers, method, query, want_rc, want_loc, want_log)
   local resp, logged = {}, {}
   NEXT = { method = method, authority = "box.lan:443", resp_header = resp, print = function(line) logged[#logged + 1] = line end }
-  local h = { { "Cookie", "occulite_session=" .. LIVEHTTP } }
+  local h = { { "Cookie", "occulite_gate=" .. LIVEHTTP } }
   for _, x in ipairs(headers) do h[#h + 1] = x end
   local rc = run_gate(h, query, LIVE, nil, nil, ALIASES, "/addons/hmm/settings.cgi")
   NEXT = {}

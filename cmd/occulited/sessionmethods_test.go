@@ -8,6 +8,7 @@ import (
 )
 
 // B-102: which stored sessions a start restores follows the mode the start runs in.
+// (task 262: a passkey is a local login too, restored wherever a password login is)
 func TestSessionMethods(t *testing.T) {
 	provider := config.OIDCConfig{Issuer: "https://auth.example.org/", ClientID: "occulite"}
 	enabled := provider
@@ -17,13 +18,13 @@ func TestSessionMethods(t *testing.T) {
 		auth config.AuthConfig
 		want string
 	}{
-		{"no auth block", config.AuthConfig{}, "password"},
-		{"local", config.AuthConfig{Mode: "local"}, "password"},
-		{"local with a provider not enabled", config.AuthConfig{Mode: "local", OIDC: provider}, "password"},
-		{"oidc", config.AuthConfig{Mode: "oidc", OIDC: provider}, "password,oidc"},
-		{"oidc without an issuer", config.AuthConfig{Mode: "oidc", OIDC: config.OIDCConfig{ClientID: "x"}}, "password"},
-		{"the old oidc.enabled", config.AuthConfig{OIDC: enabled}, "password,oidc"},
-		{"local with oidc.enabled (the start enables it)", config.AuthConfig{Mode: "local", OIDC: enabled}, "password,oidc"},
+		{"no auth block", config.AuthConfig{}, "password,passkey"},
+		{"local", config.AuthConfig{Mode: "local"}, "password,passkey"},
+		{"local with a provider not enabled", config.AuthConfig{Mode: "local", OIDC: provider}, "password,passkey"},
+		{"oidc", config.AuthConfig{Mode: "oidc", OIDC: provider}, "password,passkey,oidc"},
+		{"oidc without an issuer", config.AuthConfig{Mode: "oidc", OIDC: config.OIDCConfig{ClientID: "x"}}, "password,passkey"},
+		{"the old oidc.enabled", config.AuthConfig{OIDC: enabled}, "password,passkey,oidc"},
+		{"local with oidc.enabled (the start enables it)", config.AuthConfig{Mode: "local", OIDC: enabled}, "password,passkey,oidc"},
 		{"off", config.AuthConfig{Mode: "off"}, ""},
 		{"off with a provider", config.AuthConfig{Mode: "off", OIDC: enabled}, ""},
 	} {

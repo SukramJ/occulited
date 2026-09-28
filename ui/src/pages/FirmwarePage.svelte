@@ -1,7 +1,7 @@
 <script lang="ts">
     import {onMount} from 'svelte';
     import {pageLife} from '../lib/pagelife.svelte';
-    import {api} from '../lib/api';
+    import {api, REQUEST_HEADER} from '../lib/api';
     import {t} from '../lib/i18n.svelte';
     import SystemTitle from '../lib/SystemTitle.svelte';
     import {auth} from '../lib/auth.svelte';
@@ -96,7 +96,7 @@
         try {
             const fd = new FormData();
             fd.append('file', file);
-            const res = await fetch('/api/system/v1/firmware/upload', {method: 'POST', body: fd});
+            const res = await fetch('/api/system/v1/firmware/upload', {method: 'POST', headers: REQUEST_HEADER, body: fd});
             const data = (await res.json()) as Bundle & {error?: string; message?: string};
             if (data.error) throw new Error(data.message ?? data.error);
             notice = `${t('Deployed')}: ${data.name} ${data.version}`;

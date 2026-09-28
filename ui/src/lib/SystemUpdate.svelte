@@ -9,7 +9,7 @@
      * switches HSTS off (max-age=0), and the page says what that means for the browser.
      */
     import {onMount} from 'svelte';
-    import {api, ApiError, type HTTPSView} from './api';
+    import {api, ApiError, REQUEST_HEADER, type HTTPSView} from './api';
     import {auth} from './auth.svelte';
     import {ask} from './dialog.svelte';
     import {t} from './i18n.svelte';
@@ -84,7 +84,7 @@
         try {
             const fd = new FormData();
             fd.append('file', updFile);
-            const res = await fetch('/api/system/v1/system-update/upload', {method: 'POST', body: fd});
+            const res = await fetch('/api/system/v1/system-update/upload', {method: 'POST', headers: REQUEST_HEADER, body: fd});
             const data = (await res.json()) as Staged & {error?: string; message?: string; detail?: Record<string, unknown>; hsts_error?: string};
             if (data.error) throw new Error(updateError(data.error, data.message ?? data.error, data.detail));
             updNotice = [data.warning ?? '', data.hsts_error ? t('HSTS could not be switched off: {e}', {e: data.hsts_error}) : ''].filter(Boolean).join(' ');

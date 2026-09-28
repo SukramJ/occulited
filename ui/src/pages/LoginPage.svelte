@@ -1,7 +1,8 @@
 <script lang="ts">
     import {t} from '../lib/i18n.svelte';
-    import {auth, login} from '../lib/auth.svelte';
-    import {onMount, untrack} from 'svelte';
+    import {auth, login, finishLogin} from '../lib/auth.svelte';
+    import {onMount, onDestroy, untrack} from 'svelte';
+    import {ceremonyError, conditionalAvailable, keyStep, passkeyLogin, supported as webauthnSupported, type SecondFactor, type WebAuthnInfo} from '../lib/webauthn';
     import {api} from '../lib/api';
     import {router, replace, link} from '../lib/router.svelte';
     import {mayBounce, onPage, parseBounce, safeReturn} from '../lib/routes';
@@ -64,6 +65,70 @@
     let busy = $state(false);
     const setup = $derived(auth.setupRequired);
 
+    // task 262: security keys and passkeys. An account with a key gets the key step after the
+    // password (POST /login answers second_factor); a passkey signs in alone through the button,
+    // or through the browser's autofill in the name field where it offers that (conditional UI).
+    let webauthn = $state<WebAuthnInfo>({passkeys: false, registered: false, name: ''});
+    let keyStepPending = $state<SecondFactor | null>(null);
+    let keyBusy = $state(false);
+    const canWebAuthn = webauthnSupported();
+    let conditional: AbortController | null = null;
+    let conditionalUI = $state(false);
+    onMount(async () => {
+        if (auth.authenticated && !auth.public) return;
+        try { webauthn = await api.get<WebAuthnInfo>('/api/auth/v1/webauthn'); } catch { /* an older daemon */ }
+        if (webauthn.passkeys && canWebAuthn && (await conditionalAvailable())) startConditional();
+    });
+    onDestroy(() => conditional?.abort());
+    // the autofill offer runs in the background until a passkey is picked or the form is used
+    function startConditional() {
+        conditional = new AbortController();
+        conditionalUI = true;
+        passkeyLogin('conditional', conditional.signal).then((r) => finishLogin(r), (e) => { if (ceremonyError(e) !== 'cancelled') conditionalUI = false; });
+    }
+    function keyError(e: unknown): string {
+        switch (ceremonyError(e)) {
+            case 'cancelled': return '';
+            case 'not-allowed': return t('The security key was not used: the browser cancelled, timed out or found no key for this system.');
+            case 'security': return t('The browser refused the security key: the page must be opened on the system\'s name over a trusted certificate.');
+            case 'unsupported': return t('This browser or device cannot use the security key here.');
+            default: return (e as Error).message;
+        }
+    }
+    async function runKeyStep() {
+        if (!keyStepPending) return;
+        keyBusy = true;
+        error = '';
+        try {
+            const r = await keyStep(keyStepPending);
+            keyStepPending = null;
+            finishLogin(r);
+            if (returnTo && !onPage(router.path, '/login')) location.assign(location.origin + returnTo);
+        } catch (e) {
+            const msg = keyError(e);
+            // the API refused it (a 401): the ceremony is spent, the password starts again
+            if ((e as {status?: number}).status) { keyStepPending = null; error = (e as Error).message; }
+            else error = msg;
+        } finally {
+            keyBusy = false;
+        }
+    }
+    async function usePasskey() {
+        conditional?.abort();
+        conditionalUI = false;
+        keyBusy = true;
+        error = '';
+        try {
+            forgetBounce();
+            finishLogin(await passkeyLogin('required'));
+            if (returnTo && !onPage(router.path, '/login')) location.assign(location.origin + returnTo);
+        } catch (e) {
+            error = (e as {status?: number}).status ? (e as Error).message : keyError(e);
+        } finally {
+            keyBusy = false;
+        }
+    }
+
     async function submit(e: Event) {
         e.preventDefault();
         error = '';
@@ -75,7 +140,16 @@
         try {
             // a login with fresh credentials is no bounce of an old session
             forgetBounce();
-            await login(username.trim(), password, setup);
+            const sf = await login(username.trim(), password, setup);
+            if (sf) {
+                // task 262: the password was right, the key comes next - started at once
+                conditional?.abort();
+                conditionalUI = false;
+                keyStepPending = sf;
+                password = '';
+                void runKeyStep();
+                return;
+            }
             // on /login the signed-in branch above takes it on; elsewhere the page stays
             if (returnTo && !onPage(router.path, '/login')) location.assign(location.origin + returnTo);
         } catch (err) {
@@ -100,9 +174,15 @@
         {#if setup}
             <p class="ol-muted">{t('This system has no users yet. Choose the name and password of the first administrator.')}</p>
         {/if}
-        {#if passwordLogin || setup}
+        {#if keyStepPending}
+            <!-- task 262: the second factor - the password was right, the key is asked for now -->
+            <div class="ol-keystep" data-key-step>
+                <p>{t('Confirm the login with your security key or passkey.')}</p>
+                <p class="ol-muted">{t('Touch the key, or use the device\'s PIN or biometrics when asked.')}</p>
+            </div>
+        {:else if passwordLogin || setup}
             <!-- B-112: the text above its field with the shared gap (app.css .ol-labelled), not a line break -->
-            <label class="ol-labelled"><span>{t('Username')}</span><input class="hmm-input" bind:value={username} autocomplete="username" required /></label>
+            <label class="ol-labelled"><span>{t('Username')}</span><input class="hmm-input" bind:value={username} autocomplete={conditionalUI ? 'username webauthn' : 'username'} required /></label>
             <label class="ol-labelled"><span>{t('Password')}</span><input class="hmm-input" type="password" bind:value={password} autocomplete={setup ? 'new-password' : 'current-password'} required minlength={setup ? 8 : undefined} /></label>
             {#if setup}
                 <label class="ol-labelled"><span>{t('Repeat password')}</span><input class="hmm-input" type="password" bind:value={repeat} autocomplete="new-password" required /></label>
@@ -113,8 +193,15 @@
         <!-- the message slot is always there, sized for two lines, so a wrong password does not
              move the button or grow the card (maintainer, 2026-09-09) -->
         <div class="ol-login-msg" aria-live="polite">{#if error}<div class="ol-notice error">{error}</div>{/if}</div>
-        {#if passwordLogin || setup}
+        {#if keyStepPending}
+            <button class="hmm-button primary ol-login-btn" type="button" onclick={runKeyStep} disabled={keyBusy} data-key-retry>{t('Use security key')}</button>
+            <button class="hmm-button ol-login-back" type="button" onclick={() => { keyStepPending = null; error = ''; }}>{t('Back')}</button>
+        {:else if passwordLogin || setup}
             <button class="hmm-button primary ol-login-btn" type="submit" disabled={busy}>{setup ? t('Create administrator') : t('Login')}</button>
+        {/if}
+        {#if webauthn.passkeys && canWebAuthn && passwordLogin && !setup && !keyStepPending}
+            <!-- task 262: a passkey signs in alone; the browser may offer it in the name field as well -->
+            <button class="hmm-button ol-login-passkey" type="button" onclick={usePasskey} disabled={keyBusy} data-passkey>{t('Sign in with a passkey')}</button>
         {/if}
         {#if auth.public}
             <!-- task 193: the Control app is public on this system - the way there without signing in -->
@@ -139,4 +226,6 @@
     .ol-login-btn { min-height: 42px; font-size: 1.05em; padding: 8px 14px; margin-top: 2px; }
     /* the provider's link is a button under Login; alone (password login off) it takes Login's size */
     .ol-login-sso { display: flex; align-items: center; justify-content: center; text-decoration: none; }
+    .ol-keystep p { margin: 0 0 6px; }
+    .ol-login-back, .ol-login-passkey { min-height: 36px; }
 </style>

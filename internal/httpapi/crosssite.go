@@ -64,19 +64,32 @@ func crossSite(r *http.Request) crossSiteVerdict {
 }
 
 // ambient says whether the request's session is the browser's ambient credential: the id one of
-// the session cookies carries, or - with authentication off - the anonymous session of any
+// the session or gate cookies carries, or - with authentication off - the anonymous session of any
 // request that brings no Authorization header. A token, a bearer header, ?sid= or the legacy alias
 // are not: another site can neither set a header nor know the id.
 func (a *AuthAPI) ambient(r *http.Request, sess *auth.Session) bool {
 	if sess == nil || sess.IsToken() {
 		return false
 	}
-	for _, id := range append(cookieSIDs(r, SecureCookieName), cookieSIDs(r, CookieName)...) {
+	if a.cookieAmbient(r, sess) {
+		return true
+	}
+	return a.Off && r.Header.Get("Authorization") == ""
+}
+
+// cookieAmbient is ambient's cookie half: a session or gate cookie of the request names the
+// session. It is what the header credential of task 259 hangs on - a program on a system without
+// login sends no cookie and owes no header.
+func (a *AuthAPI) cookieAmbient(r *http.Request, sess *auth.Session) bool {
+	if sess == nil || sess.IsToken() {
+		return false
+	}
+	for _, id := range append(append(cookieSIDs(r, SecureCookieName), cookieSIDs(r, CookieName)...), gateCookieSIDs(r)...) {
 		if id == sess.ID {
 			return true
 		}
 	}
-	return a.Off && r.Header.Get("Authorization") == ""
+	return false
 }
 
 func refuseCrossSite(w http.ResponseWriter) {

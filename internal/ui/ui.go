@@ -13,18 +13,57 @@ import (
 //go:embed all:dist
 var dist embed.FS
 
+// The shell's Content-Security-Policy and Permissions-Policy (openccu-lite task 259, D-78's F-5):
+// one file, header lines, embedded here and read by the UI's Playwright stub (ui/test/stub), so
+// the suite runs every page under exactly this policy (ui/test/e2e/csp.spec.ts fails on a
+// violation). They go on the shell's own answers alone - the page, its assets, the client-side
+// routes - and not on the API, not on an addon's pages under /addons/ (the CCU's conventions:
+// inline scripts, their own styles) and not on a path an addon's lighttpd drop-in claims outside
+// /addons/, which is why occulited sets them rather than lighttpd's fragment: a header added to
+// "everything but /api and /addons" there would reach those too. What the shell needs: scripts and
+// styles from its origin, style attributes ('unsafe-inline' for styles alone - Svelte writes
+// style="" into its templates; no inline script anywhere), images from itself and data: (the
+// favicon), connections to itself (fetch, EventSource), frames from itself (the addon pages),
+// framed by itself alone (X-Frame-Options' successor), forms to itself, no plugins, no <base>. The
+// camera is the shell's own (the QR scanner for device keys, task 154); microphone and geolocation
+// nobody's.
+//
+//go:embed csp.txt
+var policyFile string
+
+// Policy is the shell's security headers, by name, as csp.txt has them.
+var Policy = parsePolicy(policyFile)
+
+func parsePolicy(s string) map[string]string {
+	out := map[string]string{}
+	for _, line := range strings.Split(s, "\n") {
+		if name, value, ok := strings.Cut(line, ": "); ok && name != "" {
+			out[strings.TrimSpace(name)] = strings.TrimSpace(value)
+		}
+	}
+	return out
+}
+
+func setPolicy(w http.ResponseWriter) {
+	for name, value := range Policy {
+		w.Header().Set(name, value)
+	}
+}
+
 // Handler returns the SPA handler: static files from dist, index.html for every other path so
 // the client-side router owns navigation, and the placeholder when nothing was built.
 func Handler() http.Handler {
 	sub, _ := fs.Sub(dist, "dist")
 	if _, err := fs.Stat(sub, "index.html"); err != nil {
 		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			setPolicy(w)
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			_, _ = w.Write([]byte(placeholder))
 		})
 	}
 	files := http.FileServer(http.FS(sub))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		setPolicy(w) // on every answer of the shell, the 404 for a missing file included
 		p := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
 		if p == "" {
 			p = "index.html"

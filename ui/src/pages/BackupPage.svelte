@@ -1,5 +1,5 @@
 <script lang="ts">
-    import {api, ApiError} from '../lib/api';
+    import {api, ApiError, REQUEST_HEADER} from '../lib/api';
     import {ask} from '../lib/dialog.svelte';
     import {t} from '../lib/i18n.svelte';
     import SystemTitle from '../lib/SystemTitle.svelte';
@@ -246,7 +246,7 @@
         try {
             const fd = new FormData();
             fd.append('file', file, file.name);
-            const res = await fetch('/api/system/v1/restore/check', {method: 'POST', body: fd});
+            const res = await fetch('/api/system/v1/restore/check', {method: 'POST', headers: REQUEST_HEADER, body: fd});
             const data = await res.json();
             if (!res.ok) throw new Error(data.message ?? res.statusText);
             uploaded = data.file;

@@ -17,14 +17,14 @@ import (
 
 // subcommands are the words and flag-spelled modes main dispatches on, in the usage line's order.
 var subcommands = []string{
-	"helper", "passwd", "token", "auth", "radio", "wifi", "firewall", "syslog-forward",
+	"helper", "passwd", "token", "auth", "webauthn", "radio", "wifi", "firewall", "syslog-forward",
 	addonOwnFlag, lighttpdDropinsFlag, backupFlag,
 	// the helper's own child (openccu-lite B-201), not in the usage line: nobody else runs it
 	"rpc-drop",
 }
 
 const usageLine = "usage: occulited [--config FILE] [--state-dir DIR] [--listen ADDR] [--log auto|journal|text] [--root DIR] [--version]\n" +
-	"       occulited helper|passwd|token|auth|radio|wifi|firewall|syslog-forward ...\n" +
+	"       occulited helper|passwd|token|auth|webauthn|radio|wifi|firewall|syslog-forward ...\n" +
 	"       occulited -addon-own|-lighttpd-dropins|-backup ..."
 
 // errUsage is an unknown command or a stray word: main prints the usage line and exits 2.

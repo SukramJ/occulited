@@ -154,6 +154,13 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "webauthn" {
+		if err := webauthnCmd(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "occulited webauthn:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	opts, err := parseDaemonArgs(os.Args[1:], os.Stderr)
 	switch {
 	case errors.Is(err, flag.ErrHelp):
@@ -249,7 +256,16 @@ func run(opts daemonOptions) error {
 	// task 193: the favorites nodes follow the accounts (internal/favorites) - told by the auth
 	// store after every write, and run once at start below
 	var syncFavorites func()
-	users, err := auth.Open(cfg.StateDir, auth.Options{SessionDir: *sessionDir, SessionFile: auth.SessionStorePath(cfg.StateDir), RestoreMethods: sessionMethods(cfg.Auth), Changed: func() {
+	// task 262: the session lengths from occulited.json; an unusable value keeps the default
+	idle, maxAge, lerr := cfg.Auth.SessionLimits()
+	if lerr != nil {
+		slog.Warn("auth: a session limit in the configuration is not a duration; the default stays", "err", lerr)
+		idle, maxAge = 0, 0
+	} else if (idle != 0 || maxAge != 0) && !auth.ValidSessionLimits(orDefault(idle, auth.DefaultIdleTimeout), orDefault(maxAge, auth.DefaultMaxAge)) {
+		slog.Warn("auth: the session limits in the configuration are out of bounds; the defaults stay", "idle", idle, "max", maxAge, "bounds", auth.ErrSessionLimits)
+		idle, maxAge = 0, 0
+	}
+	users, err := auth.Open(cfg.StateDir, auth.Options{SessionDir: *sessionDir, SessionFile: auth.SessionStorePath(cfg.StateDir), RestoreMethods: sessionMethods(cfg.Auth), IdleTimeout: idle, MaxAge: maxAge, Changed: func() {
 		if syncFavorites != nil {
 			syncFavorites()
 		}
@@ -303,6 +319,15 @@ func run(opts daemonOptions) error {
 	authAPI.Pairing = &pairing.Manager{Minter: users, Log: area("auth"), Local: pairingLocal,
 		Enabled: func() bool { return httpapi.PairingEnabled(*cfgPath) }}
 	authAPI.CertFingerprint = certFingerprint(system.Root(*rootDir))
+	// task 262: the name security keys are made on - <host>.<domain>, or the host alone without a domain
+	authAPI.FQDN = func() string {
+		sysRoot := system.Root(*rootDir)
+		h, d := sysRoot.Hostname(), sysRoot.Domain()
+		if d == "" {
+			return h
+		}
+		return h + "." + d
+	}
 	authAPI.InitPublic(cfg.Auth.Public) // task 193: the Control app's public mode
 	if cfg.Auth.Public.Enabled {
 		log.Warn("auth.public: the Control app is public - anyone who reaches the web port operates the house", "account", cfg.Auth.Public.PublicAccount())
@@ -1117,12 +1142,20 @@ func run(opts daemonOptions) error {
 // accounts in both), the provider's where the start enables it (run: mode `oidc` or
 // `oidc.enabled`, with an issuer and a client id), none with authentication off - so switching
 // the mode off and on again restores nothing.
+// orDefault is d, or def when d is zero.
+func orDefault(d, def time.Duration) time.Duration {
+	if d == 0 {
+		return def
+	}
+	return d
+}
+
 func sessionMethods(a config.AuthConfig) []string {
 	mode := a.EffectiveMode()
 	if mode == "off" {
 		return nil
 	}
-	methods := []string{auth.MethodPassword}
+	methods := []string{auth.MethodPassword, auth.MethodPasskey} // task 262: a passkey is a local login too
 	if (mode == "oidc" || a.OIDC.Enabled) && a.OIDC.Issuer != "" && a.OIDC.ClientID != "" {
 		methods = append(methods, auth.MethodOIDC)
 	}
@@ -1357,6 +1390,75 @@ func authCmd(args []string) error {
 		fmt.Fprintln(os.Stderr, "a running occulited applies it at once; an account without a password gets one with `occulited passwd <user>`")
 	}
 	return nil
+}
+
+// webauthnCmd is the console side of the security keys (openccu-lite task 262): `occulited
+// webauthn list <user>` shows an account's keys, `occulited webauthn remove <user> <id>|--all`
+// removes one or all of them and ends the account's stored sessions - the way back in for an
+// administrator whose key is lost, next to `occulited passwd`. Run as root on the system, like
+// passwd; a running occulited follows the changed users.json at the account's next request.
+func webauthnCmd(args []string) error {
+	const usage = "usage: occulited webauthn list <user> | remove <user> <id>|--all   [--state-dir DIR]"
+	fs := flag.NewFlagSet("webauthn", flag.ContinueOnError)
+	stateDir := fs.String("state-dir", "/usr/local/etc/occulite", "state directory")
+	all := fs.Bool("all", false, "remove every key of the account")
+	var flags, words []string
+	for i := 0; i < len(args); i++ {
+		if strings.HasPrefix(args[i], "-") {
+			flags = append(flags, args[i])
+			if args[i] != "--all" && args[i] != "-all" && !strings.Contains(args[i], "=") && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				flags = append(flags, args[i+1])
+				i++
+			}
+		} else {
+			words = append(words, args[i])
+		}
+	}
+	if err := fs.Parse(flags); err != nil {
+		return err
+	}
+	if len(words) == 0 {
+		return errors.New(usage)
+	}
+	switch {
+	case len(words) == 2 && words[0] == "list":
+		keys, err := auth.ConsoleWebAuthnKeys(*stateDir, words[1])
+		if err != nil {
+			return err
+		}
+		if len(keys) == 0 {
+			fmt.Fprintf(os.Stderr, "%s has no security key\n", words[1])
+			return nil
+		}
+		for _, k := range keys {
+			kind := "second factor"
+			if k.Passkey {
+				kind = "passkey"
+			}
+			last := "never used"
+			if k.LastUsed != nil {
+				last = "last used " + k.LastUsed.UTC().Format(time.RFC3339)
+			}
+			fmt.Printf("%s\t%s\t%s\tcreated %s\t%s\n", k.ID, k.Name, kind, k.Created.UTC().Format(time.RFC3339), last)
+		}
+		return nil
+	case words[0] == "remove" && ((len(words) == 3 && !*all) || (len(words) == 2 && *all)):
+		id := ""
+		if !*all {
+			id = words[2]
+		}
+		n, err := auth.ConsoleRemoveWebAuthn(*stateDir, words[1], id)
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			fmt.Fprintf(os.Stderr, "%s has no security key; nothing changed\n", words[1])
+			return nil
+		}
+		fmt.Fprintf(os.Stderr, "%d key(s) of %s removed (users.json in %s); the account's sessions are ended\n", n, words[1], *stateDir)
+		return nil
+	}
+	return errors.New(usage)
 }
 
 // ledInternetTargets is what the LED's no-internet check connects to (task 95, decided in D-67):

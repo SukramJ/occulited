@@ -7,7 +7,7 @@
      * only: only administrators create tokens (D-85).
      */
     import {onMount} from 'svelte';
-    import {api} from './api';
+    import {api, REQUEST_HEADER} from './api';
     import {ask, askText} from './dialog.svelte';
     import {t} from './i18n.svelte';
     import Disclosure from './Disclosure.svelte';
@@ -84,7 +84,7 @@
     async function deleteToken(tk: Token) {
         if (!(await ask({message: t('Revoke token {name}?', {name: tk.name}), confirm: t('Revoke'), danger: true}))) return;
         try {
-            const r = await fetch(`/api/auth/v1/tokens/${encodeURIComponent(tk.name)}`, {method: 'DELETE'});
+            const r = await fetch(`/api/auth/v1/tokens/${encodeURIComponent(tk.name)}`, {method: 'DELETE', headers: REQUEST_HEADER});
             if (!r.ok) throw new Error(`${r.status}`);
             tokNotice = t('Token revoked');
             await loadTokens();

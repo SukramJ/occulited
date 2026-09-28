@@ -94,6 +94,18 @@ func newServer(t *testing.T) (*httptest.Server, *meta.Store) {
 	return srv, s
 }
 
+// shellHeader adds what the shell sends with every call (task 259): the header credential, when
+// the request rides on a cookie without an Authorization header. A test that wants the header left
+// out names RequestHeader in hdr with an empty value; one that sets it keeps its own.
+func shellHeader(req *http.Request, hdr map[string]string) {
+	if _, named := hdr[RequestHeader]; named {
+		return
+	}
+	if req.Header.Get("Cookie") != "" && req.Header.Get("Authorization") == "" {
+		req.Header.Set(RequestHeader, "1")
+	}
+}
+
 func do(t *testing.T, srv *httptest.Server, method, path, body string, hdr map[string]string) (int, map[string]any, string) {
 	t.Helper()
 	req, _ := http.NewRequest(method, srv.URL+path, strings.NewReader(body))
@@ -103,6 +115,7 @@ func do(t *testing.T, srv *httptest.Server, method, path, body string, hdr map[s
 	for k, v := range hdr {
 		req.Header.Set(k, v)
 	}
+	shellHeader(req, hdr)
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)

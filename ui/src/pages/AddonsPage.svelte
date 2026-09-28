@@ -16,7 +16,7 @@
      */
     import {onMount} from 'svelte';
     import {pageLife} from '../lib/pagelife.svelte';
-    import {api, type Addon, type NavEntry, type Service} from '../lib/api';
+    import {api, REQUEST_HEADER, type Addon, type NavEntry, type Service} from '../lib/api';
     import {ask} from '../lib/dialog.svelte';
     import {t, i18n} from '../lib/i18n.svelte';
     import {link} from '../lib/router.svelte';
@@ -398,7 +398,7 @@
         try {
             const fd = new FormData();
             fd.append('file', file);
-            const res = await fetch('/api/system/v1/addons/install', {method: 'POST', body: fd});
+            const res = await fetch('/api/system/v1/addons/install', {method: 'POST', headers: REQUEST_HEADER, body: fd});
             const data = (await res.json()) as InstallJob & {error?: string; message?: string};
             if (!res.ok) throw new Error(data.message ?? data.error ?? `HTTP ${res.status}`);
             file = null;

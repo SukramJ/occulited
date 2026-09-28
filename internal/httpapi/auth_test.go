@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -44,7 +46,7 @@ func cookieOf(t *testing.T, srv *httptest.Server, body string) string {
 	}
 	defer res.Body.Close()
 	for _, c := range res.Cookies() {
-		if c.Name == CookieName {
+		if c.Name == CookieName && c.Value != "" { // not the deletion of the pre-259 cookie at Path=/
 			return c.Value
 		}
 	}
@@ -623,8 +625,8 @@ func TestAuthOff(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if c := resp.Header.Get("Set-Cookie"); !strings.Contains(c, auth.AnonymousSID) {
-		t.Errorf("no cookie for the gate: %q", c)
+	if c := strings.Join(resp.Header.Values("Set-Cookie"), "\n"); !strings.Contains(c, CookieName+"="+auth.AnonymousSID) || !strings.Contains(c, GateCookieName+"="+auth.AnonymousSID) {
+		t.Errorf("no cookies for the gate: %q", c)
 	}
 	if st, out, _ := do(t, srv, "PUT", "/api/x", `{}`, nil); st != 200 || out["user"] != "anonymous" {
 		t.Errorf("a mutation without a session: %d %v", st, out)
@@ -632,25 +634,18 @@ func TestAuthOff(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(sessions, gateName(auth.AnonymousSID))); err != nil {
 		t.Errorf("gate mirror file: %v", err)
 	}
-	// over HTTPS the anonymous session goes into the HTTPS cookie, also when the browser already
-	// sends the HTTP one; once it carries the HTTPS one nothing is set again
-	for _, tc := range []struct {
-		name   string
-		cookie string
-		want   bool
-	}{
-		{"no cookie", "", true},
-		{"the HTTP cookie only", CookieName + "=" + auth.AnonymousSID, true},
-		{"the HTTPS cookie", SecureCookieName + "=" + auth.AnonymousSID, false},
-	} {
+	// over HTTPS the anonymous session goes into the HTTPS cookies - the session one at /api and
+	// the gate one at /addons/ (task 259) - on every state call, whatever the browser already
+	// sends: the route cannot see a gate cookie, and the id is fixed
+	for _, cookie := range []string{"", CookieName + "=" + auth.AnonymousSID, SecureCookieName + "=" + auth.AnonymousSID} {
 		hdr := map[string]string{"X-Forwarded-Proto": "https"}
-		if tc.cookie != "" {
-			hdr["Cookie"] = tc.cookie
+		if cookie != "" {
+			hdr["Cookie"] = cookie
 		}
 		_, cookies := cookieExchange(t, srv, "GET", "/api/auth/v1/state", "", hdr)
-		c := cookies[SecureCookieName]
-		if set := c != nil && c.Value == auth.AnonymousSID && c.Secure; set != tc.want || cookies[CookieName] != nil {
-			t.Errorf("%s: HTTPS cookie set %v, want %v (%v)", tc.name, set, tc.want, cookies)
+		c, g := cookies[SecureCookieName], cookies[SecureGateCookieName]
+		if c == nil || c.Value != auth.AnonymousSID || !c.Secure || c.Path != CookiePath || g == nil || g.Value != auth.AnonymousSID || !g.Secure || g.Path != GateCookiePath || cookies[CookieName] != nil {
+			t.Errorf("cookie %q: HTTPS cookies %v", cookie, cookies)
 		}
 	}
 }
@@ -664,6 +659,7 @@ func cookieExchange(t *testing.T, srv *httptest.Server, method, path, body strin
 	for k, v := range hdr {
 		req.Header.Set(k, v)
 	}
+	shellHeader(req, hdr)
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -692,15 +688,22 @@ func TestSessionCookiePerScheme(t *testing.T) {
 	// HTTPS first: the prefixed cookie, Secure, and nothing under the HTTP name
 	st, cookies := cookieExchange(t, srv, "POST", "/api/auth/v1/login", creds, https(map[string]string{}))
 	secure := cookies[SecureCookieName]
-	if st != 200 || secure == nil || !secure.Secure || !secure.HttpOnly || secure.MaxAge <= 0 || secure.Path != "/" || cookies[CookieName] != nil {
+	if st != 200 || secure == nil || !secure.Secure || !secure.HttpOnly || secure.MaxAge <= 0 || secure.Path != CookiePath || cookies[CookieName] != nil {
 		t.Fatalf("HTTPS login: %d %v", st, cookies)
+	}
+	// task 259: the gate cookie beside it, the same id at /addons/, and nothing under the HTTP names
+	if g := cookies[SecureGateCookieName]; g == nil || g.Value != secure.Value || !g.Secure || !g.HttpOnly || g.Path != GateCookiePath || g.MaxAge != secure.MaxAge || cookies[GateCookieName] != nil {
+		t.Fatalf("HTTPS login, gate cookie: %v", cookies)
 	}
 	// then HTTP, in the same browser (it does not send the Secure cookie over HTTP): the plain
 	// cookie without Secure, and the HTTPS one is not touched
 	st, cookies = cookieExchange(t, srv, "POST", "/api/auth/v1/login", creds, nil)
 	plain := cookies[CookieName]
-	if st != 200 || plain == nil || plain.Secure || !plain.HttpOnly || plain.MaxAge <= 0 || cookies[SecureCookieName] != nil {
+	if st != 200 || plain == nil || plain.Secure || !plain.HttpOnly || plain.MaxAge <= 0 || plain.Path != CookiePath || cookies[SecureCookieName] != nil {
 		t.Fatalf("HTTP login: %d %v", st, cookies)
+	}
+	if g := cookies[GateCookieName]; g == nil || g.Value != plain.Value || g.Secure || g.Path != GateCookiePath || cookies[SecureGateCookieName] != nil {
+		t.Fatalf("HTTP login, gate cookie: %v", cookies)
 	}
 	if plain.Value == secure.Value {
 		t.Fatal("both logins got the same session")
@@ -723,6 +726,9 @@ func TestSessionCookiePerScheme(t *testing.T) {
 		{"only stale cookies", https(map[string]string{"Cookie": CookieName + "=STALE00000; " + SecureCookieName + "=STALE11111"}), 401},
 		{"a cookie merely ending in the name", map[string]string{"Cookie": "x_" + CookieName + "=" + plain.Value}, 401},
 		{"a look-alike of the HTTPS name", map[string]string{"Cookie": "__Secure_occulite_session=" + secure.Value}, 401},
+		// task 259: the gate cookie opens addon pages, never the API
+		{"the gate cookie on the API", map[string]string{"Cookie": GateCookieName + "=" + plain.Value}, 401},
+		{"the HTTPS gate cookie on the API", https(map[string]string{"Cookie": SecureGateCookieName + "=" + secure.Value}), 401},
 	} {
 		if st, out, _ := do(t, srv, "GET", "/api/meta/v1/snapshot", "", tc.hdr); st != tc.want {
 			t.Errorf("%s: %d %v, want %d", tc.name, st, out, tc.want)
@@ -758,8 +764,14 @@ func TestRequireSessionCookies(t *testing.T) {
 		{"HTTP cookie", CookieName + "=" + sess.ID, 200},
 		{"HTTPS cookie", SecureCookieName + "=" + sess.ID, 200},
 		{"a stale HTTP cookie and a live HTTPS one", CookieName + "=STALE00000; " + SecureCookieName + "=" + sess.ID, 200},
+		// task 259: what a browser carries to /addons/ is the gate cookie
+		{"HTTP gate cookie", GateCookieName + "=" + sess.ID, 200},
+		{"HTTPS gate cookie, @-wrapped", SecureGateCookieName + "=@" + sess.ID + "@", 200},
+		{"a stale HTTPS gate cookie and a live HTTP one", SecureGateCookieName + "=STALE00000; " + GateCookieName + "=" + sess.ID, 200},
 		{"no cookie", "", 401},
 		{"a stale cookie", SecureCookieName + "=STALE00000", 401},
+		{"a stale gate cookie", GateCookieName + "=STALE00000", 401},
+		{"a look-alike of the gate name", "x_" + GateCookieName + "=" + sess.ID, 401},
 	} {
 		hdr := map[string]string{}
 		if tc.cookie != "" {
@@ -803,6 +815,13 @@ func TestLogoutAndStaleCookies(t *testing.T) {
 	if st != 200 || !deleted(cookies[SecureCookieName]) || !cookies[SecureCookieName].Secure || !deleted(cookies[CookieName]) {
 		t.Fatalf("HTTPS logout: %d %v", st, cookies)
 	}
+	// task 259: the gate cookies go with them, and the pre-259 cookie at Path=/ as well
+	if !deleted(cookies[SecureGateCookieName]) || cookies[SecureGateCookieName].Path != GateCookiePath || !deleted(cookies[GateCookieName]) {
+		t.Fatalf("HTTPS logout, gate cookies: %v", cookies)
+	}
+	if paths := setCookiePaths(t, srv, "POST", "/api/auth/v1/logout", "", httpsHdr(SecureCookieName+"="+login(map[string]string{"X-Forwarded-Proto": "https"})[SecureCookieName].Value), SecureCookieName); paths != "/,/api" {
+		t.Fatalf("HTTPS logout deletes %s at %q, want / and /api", SecureCookieName, paths)
+	}
 	if alive(SecureCookieName, s1) || alive(CookieName, s2) {
 		t.Fatal("a session outlived the HTTPS logout")
 	}
@@ -828,7 +847,9 @@ func TestLogoutAndStaleCookies(t *testing.T) {
 		wantSecureSet    bool
 	}{
 		{"state over HTTPS, stale HTTP cookie", "/api/auth/v1/state", "", httpsHdr(CookieName + "=STALE00000"), true, false},
-		{"state over HTTPS, live HTTP cookie", "/api/auth/v1/state", "", httpsHdr(CookieName + "=" + s1), false, false},
+		// (task 259: a live cookie session gets its cookies set again on every state call, so the
+		// Secure one is set here too)
+		{"state over HTTPS, live HTTP cookie", "/api/auth/v1/state", "", httpsHdr(CookieName + "=" + s1), false, true},
 		{"login over HTTPS, stale HTTP cookie", "/api/auth/v1/login", creds, httpsHdr(CookieName + "=STALE00000"), true, true},
 		{"login over HTTPS, live HTTP cookie", "/api/auth/v1/login", creds, httpsHdr(CookieName + "=" + s1), false, true},
 		{"state over HTTP, stale HTTP cookie", "/api/auth/v1/state", "", map[string]string{"Cookie": CookieName + "=STALE00000"}, true, false},
@@ -849,5 +870,124 @@ func TestLogoutAndStaleCookies(t *testing.T) {
 	// over HTTP nothing is said about the HTTPS cookie except on logout
 	if _, cookies := cookieExchange(t, srv, "GET", "/api/auth/v1/state", "", map[string]string{"Cookie": SecureCookieName + "=STALE00000"}); cookies[SecureCookieName] != nil {
 		t.Errorf("state over HTTP touched the HTTPS cookie: %v", cookies)
+	}
+}
+
+// setCookiePaths lists, sorted, the paths at which a response sets or deletes the cookie called name.
+func setCookiePaths(t *testing.T, srv *httptest.Server, method, path, body string, hdr map[string]string, name string) string {
+	t.Helper()
+	req, _ := http.NewRequest(method, srv.URL+path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	for k, v := range hdr {
+		req.Header.Set(k, v)
+	}
+	shellHeader(req, hdr)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	var paths []string
+	for _, c := range res.Cookies() {
+		if c.Name == name {
+			paths = append(paths, c.Path)
+		}
+	}
+	sort.Strings(paths)
+	return strings.Join(paths, ",")
+}
+
+// openccu-lite task 259: a browser from before the two cookies existed holds the session's name
+// at Path=/. The shell's first call, GET /state, moves it: the answer deletes that cookie and
+// sets the session cookie at /api and the gate cookie at /addons/ - and so does a login. A
+// session that came as a Bearer gets no cookie from /state.
+func TestStateMovesTheCookie(t *testing.T) {
+	srv := authServer(t)
+	if st, _, _ := do(t, srv, "POST", "/api/auth/v1/setup", `{"username":"admin","password":"secret123"}`, nil); st != 200 {
+		t.Fatalf("setup: %d", st)
+	}
+	sid := cookieOf(t, srv, `{"username":"admin","password":"secret123"}`)
+	// the login itself: the session cookie set at /api and deleted at /, the gate cookie at /addons/
+	if p := setCookiePaths(t, srv, "POST", "/api/auth/v1/login", `{"username":"admin","password":"secret123"}`, nil, CookieName); p != "/,/api" {
+		t.Errorf("login sets %s at %q, want / (deleted) and /api", CookieName, p)
+	}
+	if p := setCookiePaths(t, srv, "POST", "/api/auth/v1/login", `{"username":"admin","password":"secret123"}`, nil, GateCookieName); p != GateCookiePath {
+		t.Errorf("login sets %s at %q, want %s", GateCookieName, p, GateCookiePath)
+	}
+	// a state call on the cookie: the same three
+	hdr := map[string]string{"Cookie": CookieName + "=" + sid}
+	st, cookies := cookieExchange(t, srv, "GET", "/api/auth/v1/state", "", hdr)
+	if st != 200 || cookies[CookieName] == nil || cookies[CookieName].Value != sid || cookies[CookieName].Path != CookiePath || cookies[GateCookieName] == nil || cookies[GateCookieName].Value != sid {
+		t.Fatalf("state on the cookie: %d %v", st, cookies)
+	}
+	if p := setCookiePaths(t, srv, "GET", "/api/auth/v1/state", "", hdr, CookieName); p != "/,/api" {
+		t.Errorf("state sets %s at %q, want / (deleted) and /api", CookieName, p)
+	}
+	// over HTTPS the deletion of the HTTPS name at / is Secure, as the cookie was
+	st, cookies = cookieExchange(t, srv, "GET", "/api/auth/v1/state", "", map[string]string{"Cookie": SecureCookieName + "=" + sid, "X-Forwarded-Proto": "https"})
+	if st != 200 || cookies[SecureCookieName] == nil || !cookies[SecureCookieName].Secure || cookies[SecureGateCookieName] == nil || !cookies[SecureGateCookieName].Secure {
+		t.Fatalf("state over HTTPS: %d %v", st, cookies)
+	}
+	// a Bearer session gets nothing set
+	st, cookies = cookieExchange(t, srv, "GET", "/api/auth/v1/state", "", map[string]string{"Authorization": "Bearer " + sid})
+	if st != 200 || len(cookies) != 0 {
+		t.Errorf("state on a Bearer: %d %v", st, cookies)
+	}
+	// nor does an unauthenticated call
+	st, cookies = cookieExchange(t, srv, "GET", "/api/auth/v1/state", "", nil)
+	if st != 200 || len(cookies) != 0 {
+		t.Errorf("state without a session: %d %v", st, cookies)
+	}
+}
+
+// openccu-lite task 259 (D-78): a state-changing API call whose only credential is a cookie must
+// carry X-Occulite-Request; a safe method, a Bearer, a token and a call with the header pass.
+func TestRequestHeader(t *testing.T) {
+	srv := authServer(t)
+	if st, _, _ := do(t, srv, "POST", "/api/auth/v1/setup", `{"username":"admin","password":"secret123"}`, nil); st != 200 {
+		t.Fatalf("setup: %d", st)
+	}
+	sid := cookieOf(t, srv, `{"username":"admin","password":"secret123"}`)
+	_, tok, _ := do(t, srv, "POST", "/api/auth/v1/tokens", `{"name":"t259","role":"admin"}`, map[string]string{"Cookie": CookieName + "=" + sid})
+	token, _ := tok["token"].(string)
+	if token == "" {
+		t.Fatalf("no token: %v", tok)
+	}
+	cookie := CookieName + "=" + sid
+	body := `{"id":"t259","name":{"en":"x"}}`
+	for _, tc := range []struct {
+		name   string
+		method string
+		path   string
+		hdr    map[string]string
+		want   int
+		code   string
+	}{
+		{"cookie alone, no header", "POST", "/api/meta/v1/enums", map[string]string{"Cookie": cookie, RequestHeader: ""}, 403, "request-header"},
+		{"cookie and the header", "POST", "/api/meta/v1/enums", map[string]string{"Cookie": cookie, RequestHeader: "1"}, 201, ""},
+		{"cookie, the header with another value", "PATCH", "/api/meta/v1/enums/t259", map[string]string{"Cookie": cookie, RequestHeader: "shell"}, 200, ""},
+		{"cookie alone, a safe method", "GET", "/api/meta/v1/snapshot", map[string]string{"Cookie": cookie, RequestHeader: ""}, 200, ""},
+		{"cookie and a Bearer of the same session", "PATCH", "/api/meta/v1/enums/t259", map[string]string{"Cookie": cookie, "Authorization": "Bearer " + sid, RequestHeader: ""}, 200, ""},
+		{"a Bearer alone", "PATCH", "/api/meta/v1/enums/t259", map[string]string{"Authorization": "Bearer " + sid}, 200, ""},
+		{"a token", "PATCH", "/api/meta/v1/enums/t259", map[string]string{"Authorization": "Bearer " + token}, 200, ""},
+		{"a token and a stale cookie", "PATCH", "/api/meta/v1/enums/t259", map[string]string{"Cookie": CookieName + "=STALE00000", "Authorization": "Bearer " + token, RequestHeader: ""}, 200, ""},
+		{"?sid=", "PATCH", "/api/meta/v1/enums/t259?sid=" + sid, map[string]string{RequestHeader: ""}, 200, ""},
+		{"cookie alone, the logout", "POST", "/api/auth/v1/logout", map[string]string{"Cookie": cookie, RequestHeader: ""}, 403, "request-header"},
+		{"cookie alone, the login is open", "POST", "/api/auth/v1/login", map[string]string{"Cookie": cookie, RequestHeader: ""}, 200, ""},
+	} {
+		b := body
+		if tc.method == "GET" {
+			b = ""
+		}
+		if tc.path == "/api/auth/v1/login" {
+			b = `{"username":"admin","password":"secret123"}`
+		}
+		if tc.method == "PATCH" {
+			b = `{"name":{"en":` + strconv.Quote(tc.name) + `}}` // a new name each time: an unchanged one answers 304
+		}
+		st, out, _ := do(t, srv, tc.method, tc.path, b, tc.hdr)
+		if st != tc.want || (tc.code != "" && out["error"] != tc.code) {
+			t.Errorf("%s: %d %v, want %d %s", tc.name, st, out, tc.want, tc.code)
+		}
 	}
 }

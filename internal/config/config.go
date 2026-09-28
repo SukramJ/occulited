@@ -5,12 +5,14 @@ package config
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // Config is the content of occulited.json.
@@ -156,6 +158,28 @@ type AuthConfig struct {
 	// Pairing is the switch of client pairing (task 219): a program may ask for access and an
 	// administrator approves it on the Status page. nil = on (the default).
 	Pairing *bool `json:"pairing,omitempty"`
+	// SessionIdle and SessionMax are the login sessions' idle timeout and absolute lifetime
+	// (openccu-lite task 262), Go durations ("30m", "12h"); empty means the defaults, ASVS Level
+	// 2's 30 minutes and 12 hours. Set on System -> Users (Authentication); in force at once.
+	SessionIdle string `json:"session_idle,omitempty"`
+	SessionMax  string `json:"session_max,omitempty"`
+}
+
+// SessionLimits parses auth.session_idle and auth.session_max: zero for an empty value (the
+// store's default), an error for a value that is not a duration - the caller keeps the default
+// then and says so.
+func (a AuthConfig) SessionLimits() (idle, maxAge time.Duration, err error) {
+	if a.SessionIdle != "" {
+		if idle, err = time.ParseDuration(a.SessionIdle); err != nil {
+			return 0, 0, fmt.Errorf("auth.session_idle %q: %w", a.SessionIdle, err)
+		}
+	}
+	if a.SessionMax != "" {
+		if maxAge, err = time.ParseDuration(a.SessionMax); err != nil {
+			return 0, 0, fmt.Errorf("auth.session_max %q: %w", a.SessionMax, err)
+		}
+	}
+	return idle, maxAge, nil
 }
 
 // PublicConfig is auth.public: the Control app's public mode.

@@ -10,7 +10,7 @@
     import Loading from './Loading.svelte';
     import Help from './Help.svelte';
     import {scrollToAnchor} from './anchor';
-    import {authConfigBody} from './authconfig';
+    import {authConfigBody, durationMinutes, sessionLengths} from './authconfig';
     import OIDCTrust from './OIDCTrust.svelte';
 
     // ---- authentication ---------------------------------------------------------------------
@@ -31,6 +31,9 @@
         password_login: boolean;
         running: string;
         restart_required: boolean;
+        /** task 262: the sessions' idle timeout and lifetime, Go durations ("30m", "12h") */
+        session_idle?: string;
+        session_max?: string;
     }
     let cfg = $state<AuthConfig | null>(null);
     let authError = $state('');
@@ -44,11 +47,17 @@
     const viaProvider = $derived(sessionMethod === 'oidc');
     const turningOff = $derived(!!cfg && cfg.mode === 'oidc' && storedPasswordLogin && !cfg.password_login);
     const providerName = $derived(cfg?.name || 'SSO');
+    // task 262: the session lengths as the page edits them - minutes idle, hours lifetime - from
+    // and to the API's durations (lib/authconfig)
+    let idleMinutes = $state(30);
+    let maxHours = $state(12);
 
     async function loadAuth() {
         try {
             cfg = await api.get<AuthConfig>('/api/auth/v1/config');
             storedPasswordLogin = cfg.password_login !== false;
+            idleMinutes = durationMinutes(cfg.session_idle, 30);
+            maxHours = durationMinutes(cfg.session_max, 12 * 60) / 60;
             try { sessionMethod = (await api.get<{method?: string}>('/api/auth/v1/state')).method ?? ''; } catch { /* an older daemon */ }
         } catch (e) {
             const msg = (e as Error).message;
@@ -74,8 +83,10 @@
         authNotice = '';
         try {
             // B-206: the writable fields only - the API refuses GET's read-only ones
-            cfg = await api.put<AuthConfig>('/api/auth/v1/config', authConfigBody(cfg, secret));
+            cfg = await api.put<AuthConfig>('/api/auth/v1/config', authConfigBody(cfg, secret, sessionLengths(idleMinutes, maxHours)));
             storedPasswordLogin = cfg.password_login !== false;
+            idleMinutes = durationMinutes(cfg.session_idle, 30);
+            maxHours = durationMinutes(cfg.session_max, 12 * 60) / 60;
             secret = '';
             authNotice = cfg.restart_required ? t('Saved. The change takes effect when occulited is restarted.') : t('Saved.');
         } catch (e) {
@@ -153,6 +164,16 @@
                 </Help>
             </div>
         {/if}
+        {#if cfg.mode !== 'off'}
+            <!-- task 262: the session lengths; the defaults are ASVS Level 2's (30 min idle, 12 h) -->
+            <div class="ol-sessions" data-section="session-lengths">
+                <h3>{t('Sessions')}<Help>{t('A signed-in browser stays signed in until it has been idle for the first time, or in any case after the second - then it signs in again (a phone on the wall or a household tablet more often with short values). The defaults, 30 minutes and 12 hours, are the values ASVS Level 2 asks of a system that controls a home; the values before, 24 hours and 30 days, can be set back here. A change applies to running sessions at their next request.')}</Help></h3>
+                <div class="ol-form ol-secform">
+                    <label><span>{t('Sign out after idle (minutes)')}</span><input class="hmm-input" type="number" min="5" max="43200" step="1" bind:value={idleMinutes} data-session-idle /></label>
+                    <label><span>{t('Sign out at the latest after (hours)')}</span><input class="hmm-input" type="number" min="1" max="2160" step="1" bind:value={maxHours} data-session-max /></label>
+                </div>
+            </div>
+        {/if}
         <div class="ol-actions" style="margin-top:10px">
             <button class="hmm-button primary" onclick={saveAuth} disabled={authBusy}>{t('Save')}</button>
         </div>
@@ -174,6 +195,8 @@
         .ol-secform input { margin-bottom: 7px; }
     }
     .ol-oidc-guide { margin: 0 0 4px; }
+    .ol-sessions { margin: 12px 0 4px; }
+    .ol-sessions h3 { margin: 0 0 8px; font-size: 1em; }
     .ol-oidc-note { margin: 0 0 8px; max-width: 760px; }
     .ol-checks { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 4px; max-width: 760px; }
     .ol-checks label { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }

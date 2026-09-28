@@ -92,12 +92,13 @@ var quietScopes = map[auth.Scope]bool{
 // quietRoutes are single routes of a changing scope that change nothing lasting: the LED page's
 // preview, the browser's boot timings, the own UI preferences, the session hand-overs.
 var quietRoutes = map[string]bool{
-	"POST /api/system/v1/led/preview":   true,
-	"DELETE /api/system/v1/led/preview": true,
-	"POST /api/system/v1/boot-timing":   true,
-	"PUT /api/auth/v1/me/preferences":   true,
-	"POST /api/auth/v1/ticket":          true,
-	"POST /api/auth/v1/legacy-sid":      true,
+	"POST /api/system/v1/led/preview":     true,
+	"DELETE /api/system/v1/led/preview":   true,
+	"POST /api/system/v1/boot-timing":     true,
+	"PUT /api/auth/v1/me/preferences":     true,
+	"POST /api/auth/v1/me/webauthn/begin": true, // task 262: a challenge, not yet a key
+	"POST /api/auth/v1/ticket":            true,
+	"POST /api/auth/v1/legacy-sid":        true,
 }
 
 // audited reports whether a request to the route pattern with these scopes changes the system.

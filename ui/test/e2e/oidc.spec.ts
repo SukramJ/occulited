@@ -188,7 +188,8 @@ test('saving the OIDC settings sends the writable fields only and saves', async 
         page.locator('button.primary', {hasText: 'Save'}).first().click(),
     ]);
     const body = req.postDataJSON();
-    expect(Object.keys(body).sort()).toEqual(['client_id', 'client_secret', 'issuer', 'mode', 'name', 'password_login', 'scopes', 'username_claim']);
+    // (task 262: the session lengths ride with every save)
+    expect(Object.keys(body).sort()).toEqual(['client_id', 'client_secret', 'issuer', 'mode', 'name', 'password_login', 'scopes', 'session_idle', 'session_max', 'username_claim']);
     expect(body).toMatchObject({mode: 'oidc', issuer: 'https://auth.example.org/application/o/lite/', client_id: 'lite-client', client_secret: 's3cret'});
     await expect(page.getByText('Saved. The change takes effect when occulited is restarted.')).toBeVisible();
     await expect(page.getByText(/unknown field|is not a field/)).toHaveCount(0);

@@ -19,8 +19,10 @@ does not repeat them.
   where they appear in a path segment (`BidCos-RF.JEQ9000001%3A1`).
 - All endpoints require a credential except `/version`: a session id (cookie
   `occulite_session` from a login over HTTP or `__Secure-occulite_session` from one over HTTPS,
-  both accepted on either scheme; `Authorization: Bearer <sid>`; or `?sid=<sid>` — with or without the CCU's
-  `@` wrapping) or an **API token** (`olt_<32 hex>`, same three places; created on System → Users (API tokens)
+  both accepted on either scheme, scoped to `Path=/api`; `Authorization: Bearer <sid>`; or `?sid=<sid>` — with or without the CCU's
+  `@` wrapping) or an **API token**. **A mutation that rides on the cookie alone also carries the header
+  `X-Occulite-Request`** (any value; `403 request-header` without it — openccu-lite task 259, the rule in
+  [system-api.md → `/api/auth/v1`](system-api.md#apiauthv1)); a Bearer or a token needs none, a read neither (`olt_<32 hex>`, same three places; created on System → Users (API tokens)
   or `POST /api/auth/v1/tokens`; the system's own token is in `<state>/local-token` for
   programs running on it). **Scopes** (the model in
   [system-api.md → Scopes](system-api.md#scopes)): every read below needs
