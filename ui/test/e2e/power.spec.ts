@@ -44,7 +44,7 @@ test('a user session has no power button', async ({page}) => {
 test('the menu lists reboot, halt and recovery with a hint each, and closes on Escape and outside', async ({page}) => {
     await page.goto('/');
     const menu = await openMenu(page);
-    await expect(menu.locator('[data-action]')).toHaveCount(3);
+    await expect(menu.locator('[data-action]')).toHaveCount(4);
     await expect(menu.locator('[data-action="reboot"]')).toContainText('Back in about a minute');
     await expect(menu.locator('[data-action="halt"]')).toContainText('Stays off until it is powered on again');
     await expect(menu.locator('[data-action="recovery"]')).toContainText('For repairs and firmware images; leave it from its own page');
@@ -232,11 +232,99 @@ test('a container has no recovery entry', async ({page}) => {
     await page.goto('/');
     const menu = await openMenu(page);
     await expect(menu.locator('[data-action="recovery"]')).toHaveCount(0);
-    await expect(menu.locator('[data-action]')).toHaveCount(2);
+    // Logout, reboot, halt (task 292)
+    await expect(menu.locator('[data-action]')).toHaveCount(3);
 });
 
 test('the Status page has no Reboot button any more', async ({page}) => {
     await page.goto('/');
     await expect(page.locator('main h1')).toHaveText('Status');
     await expect(page.locator('main').getByRole('button', {name: 'Reboot'})).toHaveCount(0);
+});
+
+// Task 292: Logout first, then a divider, then the three power entries; no Logout and no divider
+// while the login is off; the arrow keys pass over the divider.
+
+const AUTH_OFF = {setup_required: false, authenticated: true, user: '', role: 'admin', must_change_password: false, auth_off: true};
+
+test('Logout is the first entry, a divider follows, then reboot, halt and recovery', async ({page}) => {
+    await page.goto('/');
+    const menu = await openMenu(page);
+    // the order of everything in the menu, the divider included
+    const order = await menu.locator('> *').evaluateAll((els) => els.map((e) => e.getAttribute('data-action') ?? e.getAttribute('role')));
+    expect(order).toEqual(['logout', 'separator', 'reboot', 'halt', 'recovery']);
+    await expect(menu.getByRole('menuitem')).toHaveCount(4);
+    await expect(menu.getByRole('menuitem').first()).toContainText('Logout');
+    await expect(menu.locator('[data-action="logout"]')).toContainText('Logged in as admin');
+    const sep = menu.getByRole('separator');
+    await expect(sep).toHaveCount(1);
+    // a visible hairline, not a gap: a height and a colour of its own
+    const look = await sep.evaluate((e) => ({h: e.getBoundingClientRect().height, bg: getComputedStyle(e).backgroundColor}));
+    expect(look.h).toBeGreaterThan(0);
+    expect(look.bg).not.toBe('rgba(0, 0, 0, 0)');
+    await expect(page.locator('.ol-powerbtn')).toHaveAttribute('aria-label', 'Log out, reboot or shut down');
+});
+
+test('Logout signs out without a question and lands on the login page', async ({page}) => {
+    page.on('dialog', (d) => {
+        throw new Error(`native dialog: ${d.message()}`);
+    });
+    let out = false;
+    await page.route('**/api/auth/v1/logout', (r) => {
+        out = true;
+        return r.fulfill({json: {}});
+    });
+    await page.route('**/api/auth/v1/state', (r) => (out ? r.fulfill({json: {setup_required: false, authenticated: false, must_change_password: false}}) : r.fallback()));
+    await page.goto('/');
+    const menu = await openMenu(page);
+    await menu.getByRole('menuitem', {name: /Logout/}).click();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await expect(page.getByRole('heading', {level: 1, name: 'Login'})).toBeVisible();
+    expect(out).toBe(true);
+    await expect(page.locator('.ol-powerbtn')).toHaveCount(0);
+});
+
+test('with the login off there is no Logout and no divider', async ({page}) => {
+    await page.route('**/api/auth/v1/state', (r) => r.fulfill({json: AUTH_OFF}));
+    await page.goto('/');
+    const menu = await openMenu(page);
+    await expect(menu.locator('[data-action]')).toHaveCount(3);
+    await expect(menu.locator('[data-action="logout"]')).toHaveCount(0);
+    await expect(menu.getByRole('separator')).toHaveCount(0);
+    await expect(menu.getByRole('menuitem').first()).toHaveAttribute('data-action', 'reboot');
+    await expect(page.locator('.ol-powerbtn')).toHaveAttribute('aria-label', 'Reboot or shut down');
+});
+
+test('the arrow keys move between the entries and pass over the divider', async ({page}) => {
+    await page.goto('/');
+    await page.locator('.ol-powerbtn').focus();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.ol-powerpop')).toBeVisible();
+    const focused = () => page.evaluate(() => document.activeElement?.getAttribute('data-action') ?? document.activeElement?.getAttribute('role') ?? '');
+    await page.keyboard.press('ArrowDown');
+    expect(await focused()).toBe('logout');
+    // down from Logout: the divider is skipped
+    await page.keyboard.press('ArrowDown');
+    expect(await focused()).toBe('reboot');
+    await page.keyboard.press('ArrowUp');
+    expect(await focused()).toBe('logout');
+    await page.keyboard.press('ArrowUp');
+    expect(await focused()).toBe('recovery');
+    await page.keyboard.press('ArrowDown');
+    expect(await focused()).toBe('logout');
+    await page.keyboard.press('End');
+    expect(await focused()).toBe('recovery');
+    await page.keyboard.press('Home');
+    expect(await focused()).toBe('logout');
+    // Tab never stops on the divider either: it takes no focus
+    await expect(page.locator('.ol-powerpop [role="separator"]')).not.toHaveAttribute('tabindex', /.*/);
+});
+
+test('German: Abmelden first, and the button says so', async ({page}) => {
+    await page.addInitScript(() => localStorage.setItem('ol.language', 'de'));
+    await page.goto('/');
+    const menu = await openMenu(page);
+    await expect(menu.getByRole('menuitem').first()).toContainText('Abmelden');
+    await expect(menu.locator('[data-action="logout"]')).toContainText('Angemeldet als admin');
+    await expect(page.locator('.ol-powerbtn')).toHaveAttribute('aria-label', 'Abmelden, neu starten oder herunterfahren');
 });

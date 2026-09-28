@@ -775,6 +775,8 @@ const CATALOGUE: Record<string, {de: string; en?: string}> = {
     'Reboot this system now? The interfaces and every addon are unreachable until it is back, about a minute.': {de: 'Dieses System jetzt neu starten? Die Schnittstellen und alle Addons sind bis dahin nicht erreichbar, etwa eine Minute.'},
     // the top bar's power menu: its entries, their questions, and the page after the box answered
     'Reboot or shut down': {de: 'Neu starten oder herunterfahren'},
+    // task 292: the power menu's first entry signs out
+    'Log out, reboot or shut down': {de: 'Abmelden, neu starten oder herunterfahren'},
     Halt: {de: 'Herunterfahren'},
     'Reboot into the recovery system': {de: 'In das Recovery-System neu starten'},
     'Back in about a minute': {de: 'In etwa einer Minute wieder da'},

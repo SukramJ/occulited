@@ -19,8 +19,15 @@
      * when the question opens (lib/recovery.ts). The name follows as a second link only while HSTS is
      * known to be off. A plain reboot with an update set to install ends in the recovery too, so its
      * question and waiting page name the same address.
+     *
+     * Task 292: the first entry is Logout, then a divider, then the three power entries. It asks
+     * nothing - signing out is harmless and undone by signing in - and it is left out, with its
+     * divider, while the login is switched off: the anonymous administrator has nothing to sign out
+     * of. The Account page keeps its own Logout. The arrow keys, Home and End move between the
+     * entries and pass over the divider, which is a separator and never takes the focus.
      */
     import {api, ApiError, type HTTPSView} from './api';
+    import {auth, logout, refresh} from './auth.svelte';
     import {ask} from './dialog.svelte';
     import {i18n, t} from './i18n.svelte';
     import {link, router} from './router.svelte';
@@ -32,6 +39,7 @@
     import {boxUptime, haltKind, type HaltKind} from './power';
     import {isIPLiteral, lookupBoxAddress, LOOKUP_TIMEOUT_MS, nameLink, withTimeout, type BoxAddress, type NetworkView} from './recovery';
     import {hstsRemembered} from './hsts';
+    import {step} from './systemmenu';
 
     type Action = 'reboot' | 'halt' | 'recovery';
     type Phase = '' | 'rebooting' | 'halted' | 'recovery';
@@ -41,6 +49,7 @@
 
     let open = $state(false);
     let root = $state<HTMLElement | null>(null);
+    let pop = $state<HTMLElement | null>(null);
     let button = $state<HTMLButtonElement | null>(null);
     // on a phone the header wraps and the button may sit anywhere: the menu is then laid over the
     // viewport's width under the button instead of hanging off its right edge
@@ -71,6 +80,40 @@
             {action: 'recovery', icon: 'lifebuoy', label: t('Reboot into the recovery system'), hint: t('For repairs and firmware images; leave it from its own page')},
         ] satisfies {action: Action; icon: IconName; label: string; hint: string}[]).filter((e) => e.action !== 'recovery' || !container),
     );
+
+    // nothing to sign out of while the login is off (task 29)
+    const offerLogout = $derived(!auth.authOff);
+    const buttonLabel = $derived(offerLogout ? t('Log out, reboot or shut down') : t('Reboot or shut down'));
+
+    async function signOut() {
+        open = false;
+        try {
+            await logout();
+        } catch {
+            // the session is dropped in the shell either way (auth.logout); ask the box what is left
+            await refresh();
+        }
+    }
+
+    // the entries as the arrow keys see them: the divider is no menuitem, so it is passed over
+    function items(): HTMLElement[] {
+        return pop ? [...pop.querySelectorAll<HTMLElement>('[role="menuitem"]')] : [];
+    }
+    function onMenuKey(ev: KeyboardEvent) {
+        if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(ev.key)) return;
+        const all = items();
+        if (all.length === 0) return;
+        ev.preventDefault();
+        all[step(all.indexOf(document.activeElement as HTMLElement), all.length, ev.key)]?.focus();
+    }
+    // from the button of an open menu, Arrow down goes to the first entry and Arrow up to the last
+    function onButtonKey(ev: KeyboardEvent) {
+        if (!open || (ev.key !== 'ArrowDown' && ev.key !== 'ArrowUp')) return;
+        const all = items();
+        if (all.length === 0) return;
+        ev.preventDefault();
+        all[ev.key === 'ArrowDown' ? 0 : all.length - 1]?.focus();
+    }
 
     async function toggle() {
         open = !open;
@@ -217,11 +260,19 @@
 </script>
 
 <div class="ol-menu ol-power" bind:this={root}>
-    <button type="button" class="ol-iconlink ol-powerbtn" class:active={open} bind:this={button} aria-haspopup="menu" aria-expanded={open} title={t('Reboot or shut down')} aria-label={t('Reboot or shut down')} onclick={toggle}>
+    <button type="button" class="ol-iconlink ol-powerbtn" class:active={open} bind:this={button} aria-haspopup="menu" aria-expanded={open} title={buttonLabel} aria-label={buttonLabel} onclick={toggle} onkeydown={onButtonKey}>
         <Icon name="power" size={18} />
     </button>
     {#if open}
-        <div class="ol-menupop ol-powerpop" role="menu" style={popStyle}>
+        <!-- svelte-ignore a11y_interactive_supports_focus -->
+        <div class="ol-menupop ol-powerpop" role="menu" style={popStyle} bind:this={pop} onkeydown={onMenuKey}>
+            {#if offerLogout}
+                <button type="button" role="menuitem" class="ol-menuitem ol-poweritem" data-action="logout" onclick={signOut}>
+                    <span class="ol-powericon"><Icon name="leave" size={16} /></span>
+                    <span class="ol-powertext"><span class="ol-powerlabel">{t('Logout')}</span>{#if auth.user}<span class="ol-powerhint">{t('Logged in as')} {auth.user}</span>{/if}</span>
+                </button>
+                <div class="ol-menusep ol-powersep" role="separator"></div>
+            {/if}
             {#each entries as e (e.action)}
                 <button type="button" role="menuitem" class="ol-menuitem ol-poweritem" data-action={e.action} onclick={() => choose(e.action)}>
                     <span class="ol-powericon"><Icon name={e.icon} size={16} /></span>
