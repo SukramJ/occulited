@@ -9,7 +9,8 @@ does not repeat them.
 
 - Every response carries `revision` (the store's current revision after the request).
 - Every mutating response returns the new revision; a mutation that changes nothing returns `304`
-  with the unchanged revision and does not bump it.
+  and does not bump it. A `304` has no body (HTTP allows none): the unchanged revision is in its
+  `ETag` header, as it is on every mutation's answer.
 - Conditional writes: a mutating request may send `If-Match: <revision>`; if the store's revision
   differs the request fails with `409` `revision-conflict` and nothing changes.
 - Errors: `{"error": "<code>", "message": "<human text>", "detail": {...}}`. Codes are stable and
@@ -58,6 +59,11 @@ a write's own answer. Writes need an administrator session; a user sees the stor
 
 A consumer that gets this answers "openccu-lite"; one that gets a 404 or a non-JSON body keeps
 using whatever it used before (ReGa, typically). No authentication.
+
+The interfaces the system runs are not in this open answer — they say which radio hardware the
+system has. A client asks `GET /api/rpc/v1/interfaces` with a credential that holds `rpc:read`
+(occulited's `docs/system-api.md`, lite-rpc): each interface's `InterfacesList.xml` name, the name
+`/api/rpc/v1/xmlrpc/{interface}` and `/api/rpc/v1/json/{interface}` take, and whether it runs.
 
 **`hmip`** (2026-09-23) is what a pairing client needs to know about the HmIP network,
 readable without a system or radio scope — the one radio fact in this API, because this is where a
@@ -153,8 +159,9 @@ worth adding is on the backlog. The events:
 Every event carries the revision it produced. A consumer that observes a gap (`revision` jumped by
 more than 1 since its last event) or connects late sends `?since=<revision>`: the server replays
 the events it still has (at least the last 1000) or answers with a single `{"kind": "resync",
-"revision": N}` telling the consumer to fetch the snapshot. Heartbeat: an empty SSE comment / a
-WebSocket ping every 30 s.
+"revision": N}` telling the consumer to fetch the snapshot. The stream opens with the comment
+`: connected` and sends the comment `: ping` every 30 s as its heartbeat (SSE only; there is no
+WebSocket here). Its messages carry `data:` alone — no `id:`, no `event:`; resuming is `?since=`.
 
 ## Optional MQTT publication
 
@@ -184,7 +191,7 @@ WebSockets are not offered.
 | `invalid-id` | 422 | enum or node id violates `[a-z0-9][a-z0-9-]*` / length |
 | `unknown-object` | 404 | |
 | `unknown-enum` | 404 | |
-| `unknown-path` | 404 on read, 422 in a body | node path does not resolve |
+| `unknown-path` | 422 | node path does not resolve — in a body, in a query (`GET /objects?enum=`) and in a URL (`/enums/{enum}/nodes/{path}`) alike |
 | `duplicate-id` | 409 | enum id or sibling node id already taken |
 | `duplicate-path` | 422 | the same path twice in an object's `enums` |
 | `has-members` | 409 | delete refused; `detail.refs` lists the members |

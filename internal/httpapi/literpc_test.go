@@ -206,6 +206,16 @@ func TestLiteRPCRequests(t *testing.T) {
 	if st, _, raw := do(t, rig.srv, "POST", "/api/rpc/v1/xmlrpc/HmIP-RF", xml, map[string]string{"Authorization": "Bearer " + adminSess.ID}); st != 200 || !strings.Contains(raw, "<i4>42</i4>") {
 		t.Fatalf("header call: %d %s", st, raw)
 	}
+	// task 286: the interfaces' names are here, behind rpc:read (the open /version does not list
+	// them): a read token gets them, a token without an rpc tier does not
+	rig.as(tokenRead)
+	if st, _, raw := do(t, rig.srv, "GET", "/api/rpc/v1/interfaces", "", nil); st != 200 || !strings.Contains(raw, `"name":"HmIP-RF"`) {
+		t.Fatalf("interfaces for rpc:read: %d %s", st, raw)
+	}
+	// the scope is the middleware's table (this rig has no middleware)
+	if got := RouteScopes()["GET /api/rpc/v1/interfaces"]; len(got) != 1 || got[0] != auth.ScopeRPCRead {
+		t.Fatalf("the interfaces route's scope: %v", got)
+	}
 	// no session at all
 	rig.as(nil)
 	if st, _, _ := do(t, rig.srv, "GET", "/api/rpc/v1/interfaces", "", nil); st != 401 {

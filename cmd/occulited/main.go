@@ -355,15 +355,7 @@ func run(opts daemonOptions) error {
 	// task 192: /version tells a pairing client the key-server mode and the count of device keys
 	metaAPI.HmIPPairing = func() radio.Pairing { return system.HmIPPairing(root) }
 	// what a client can use (tasks 194, 195, 219): the capability object of /version
-	metaAPI.Capabilities = func() map[string]any {
-		return map[string]any{"pairing": httpapi.PairingEnabled(*cfgPath), "state": true, "history": true,
-			// task 196, S1: the API versions a client checks its majors against, the stream's
-			// transports and limits, and S2's typed double in the JSON path
-			"apis":        map[string]int{"meta": 1, "rpc": 1, "system": 1, "auth": 1},
-			"transports":  []string{"sse", "websocket"},
-			"limits":      map[string]int{"streams_per_token": literpc.PerSubject, "streams_total": literpc.Total, "buffer_seconds": literpc.BufferSeconds, "buffer_events": literpc.BufferEvents},
-			"json_double": true}
-	}
+	metaAPI.Capabilities = func() map[string]any { return httpapi.Capabilities(httpapi.PairingEnabled(*cfgPath)) }
 	// the addons' rc.d layer (task 187): the nav, the update check and - without systemd - the
 	// read-only addon list; SystemdAddons runs the same scripts in a scope below
 	scripts := system.AddonScripts{Root: root, HTTP: trustStore.HTTPClient(trust.StoreOcculited, 0)} // task 231: an addon's own update URL

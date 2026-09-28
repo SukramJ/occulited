@@ -180,6 +180,10 @@ func TestInterfacesAndForward(t *testing.T) {
 	if len(ifs) != 1 || ifs[0].Name != "HmIP-RF" || !ifs[0].Running || ifs[0].URLPath != "/api/rpc/v1/xmlrpc/HmIP-RF" || ifs[0].Protocol != "xmlrpc" {
 		t.Fatalf("interfaces: %+v", ifs)
 	}
+	// task 286: without a subscriber the list is empty, never null
+	if n := New(Config{}).Interfaces(); n == nil || len(n) != 0 {
+		t.Fatalf("interfaces without a subscriber: %#v", n)
+	}
 	i, _ := svc.Lookup("HmIP-RF")
 	// a client's call in ISO-8859-1 with an umlaut, the answer back in UTF-8
 	c, err := DecodeCall([]byte("<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?><methodCall><methodName>setValue</methodName><params><param><value>ABC:1</value></param><param><value><string>NAME</string></value></param><param><value>K\xfcche</value></param></params></methodCall>"))
