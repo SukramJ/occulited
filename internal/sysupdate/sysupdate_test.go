@@ -226,9 +226,27 @@ func TestSemverNewer(t *testing.T) {
 		{"1.0.0", "1.0.0", false},
 		{"1.0.0-alpha.0-snapshot.abc", "1.0.0-alpha.0", true},
 		{"0-beta.2", "1.0.0-alpha.0", true}, // not semver on one side: differs
+		// openccu-lite task 291: dev < alpha < beta < rc, not SemVer's ASCII order (dev > beta)
+		{"1.0.0-alpha.0", "1.0.0-dev.30", true},
+		{"1.0.0-beta.0", "1.0.0-dev.31", true},
+		{"1.0.0-dev.31", "1.0.0-beta.0", false},
+		{"1.0.0-dev.31", "1.0.0-dev.30", true},
+		{"1.0.0-beta.10", "1.0.0-beta.1", true},
+		{"1.0.0-beta.1", "1.0.0-beta.10", false},
+		{"1.0.0-dev.99", "1.0.0-rc.1", false},
+		{"1.0.0-dev.0", "1.0.0-nightly.5", true}, // an unknown tag ranks below dev
 	} {
 		if got := semverNewer(c.a, c.b); got != c.want {
 			t.Errorf("%s newer than %s: %v", c.a, c.b, got)
+		}
+	}
+	// the whole chain, each one newer than every one before it and none newer than itself
+	chain := []string{"1.0.0-dev.30", "1.0.0-alpha.0", "1.0.0-beta.0", "1.0.0-beta.1", "1.0.0-beta.10", "1.0.0-rc.1", "1.0.0"}
+	for i, a := range chain {
+		for j, b := range chain {
+			if got := semverNewer(a, b); got != (i > j) {
+				t.Errorf("%s newer than %s: %v", a, b, got)
+			}
 		}
 	}
 	if p, s, err := assetPattern(system.Version{Product: "ova", Platform: "ova", Variant: "lite", Lite: "1.0.0-alpha.0"}); err != nil || p != "openccu-lite-x86_64-ova-" || s != ".zip" {
@@ -263,6 +281,11 @@ func TestReleaseListFollowsPrereleases(t *testing.T) {
 			fmt.Fprint(w, list)
 		case "/empty":
 			fmt.Fprint(w, " [ ]\n")
+		case "/beta":
+			// openccu-lite task 291: the first beta after the last dev release, newest first as GitHub lists them
+			fmt.Fprint(w, "["+rel("v1.0.0-beta.0", true, false, "1.0.0-beta.0")+","+rel("v1.0.0-dev.31", true, false, "1.0.0-dev.31")+","+rel("v1.0.0-dev.30", true, false, "1.0.0-dev.30")+"]")
+		case "/beta-reversed":
+			fmt.Fprint(w, "["+rel("v1.0.0-dev.31", true, false, "1.0.0-dev.31")+","+rel("v1.0.0-beta.0", true, false, "1.0.0-beta.0")+"]")
 		case "/unflagged":
 			// a prerelease version the publisher forgot to flag is still a prerelease
 			fmt.Fprint(w, "["+rel("v1.1.0-beta.1", false, false, "1.1.0-beta.1")+","+rel("v1.0.1", false, false, "1.0.1")+"]")
@@ -280,6 +303,11 @@ func TestReleaseListFollowsPrereleases(t *testing.T) {
 		{"a released system sees releases only", "0.9.0", "/releases", "0.9.1", "v0.9.1", true},
 		{"an unflagged prerelease version is skipped by a released system", "1.0.0", "/unflagged", "1.0.1", "v1.0.1", true},
 		{"a beta system takes the beta over an older release", "1.1.0-alpha.2", "/unflagged", "1.1.0-beta.1", "v1.1.0-beta.1", true},
+		{"the last dev release is offered the first beta", "1.0.0-dev.31", "/beta", "1.0.0-beta.0", "v1.0.0-beta.0", true},
+		{"an older dev release is offered the first beta", "1.0.0-dev.30", "/beta", "1.0.0-beta.0", "v1.0.0-beta.0", true},
+		{"the beta wins whatever the list's order", "1.0.0-dev.31", "/beta-reversed", "1.0.0-beta.0", "v1.0.0-beta.0", true},
+		{"a beta system is not offered the last dev release", "1.0.0-beta.0", "/beta", "1.0.0-beta.0", "v1.0.0-beta.0", false},
+		{"nor in the other order", "1.0.0-beta.0", "/beta-reversed", "1.0.0-beta.0", "v1.0.0-beta.0", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			r := fakeRoot(t, "VERSION=3.89.11.20260919\nPRODUCT=ova\nPLATFORM=ova\nVARIANT=lite\nLITE="+c.running+"\n")

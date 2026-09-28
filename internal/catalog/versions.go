@@ -4,6 +4,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/hobbyquaker/occulited/internal/prerelease"
 )
 
 // The version comparisons the catalogue and the shell use: whether a release is an update of an
@@ -22,7 +24,9 @@ var dottedRe = regexp.MustCompile(`^[0-9]+(\.[0-9]+)*$`)
 // (B-22): installed "3.6.0", latest "3.6.0-beta" offered a downgrade to a beta of what the box
 // already runs. When both sides share a dotted core and only the release carries a prerelease
 // suffix, there is no update. The other direction — installed "3.6.0-beta", latest "3.6.0" — is
-// an update and stays one.
+// an update and stays one. Two prereleases of one core are ordered as VersionAtLeast orders them
+// (dev < alpha < beta < rc), so installed "3.6.0-beta.2" is offered "3.6.0-rc.1" but not
+// "3.6.0-beta.1" or "3.6.0-dev.9".
 func UpdateAvailable(installed, latest string) bool {
 	a, b := strings.TrimPrefix(strings.TrimSpace(installed), "v"), strings.TrimPrefix(strings.TrimSpace(latest), "v")
 	if a == "" || b == "" || a == b {
@@ -40,6 +44,12 @@ func UpdateAvailable(installed, latest string) bool {
 		// same core: a prerelease is older than the release it precedes
 		if apre == "" && bpre != "" {
 			return false
+		}
+		// two prereleases of one core are ordered (openccu-lite task 291: dev < alpha < beta < rc),
+		// so an installed beta is not offered a dev build of the same core; with a "+build" on
+		// either side they only differ
+		if apre != "" && bpre != "" && !strings.Contains(apre, "+") && !strings.Contains(bpre, "+") {
+			return prerelease.Compare(bpre, apre) > 0
 		}
 	}
 	return true
@@ -79,9 +89,10 @@ func compareDotted(a, b string) int {
 // VersionAtLeast says whether an installed version is since or newer (task 88: from which version on
 // an addon reads the gate's session header). It orders by the rules UpdateAvailable compares with - a
 // leading "v" ignored, the dotted core numerically, a prerelease older than the release it precedes -
-// and, where UpdateAvailable only needs "the release differs", it also orders prereleases of one core:
-// their dot-separated identifiers compare as numbers when both are digits and as text otherwise, digits
-// before text, the shorter list first (3.0.0-beta.9 < 3.0.0-beta.16 < 3.0.0-rc.1 < 3.0.0). A "+build"
+// and prereleases of one core in the order of package prerelease: their dot-separated identifiers
+// compare as numbers when both are digits, digits before text, the tags as dev < alpha < beta < rc
+// with any other text below dev, the shorter list first (3.0.0-dev.30 < 3.0.0-beta.9 <
+// 3.0.0-beta.16 < 3.0.0-rc.1 < 3.0.0). A "+build"
 // suffix counts only between two otherwise equal versions (2.1.2 < 2.1.2+2 < 2.1.2+3). What it cannot
 // order - an empty version, a date, a git hash, two different builds that are no numbers - is not at
 // least: the caller stays on the safe side.
@@ -89,8 +100,6 @@ func VersionAtLeast(installed, since string) bool {
 	c, ok := compareVersions(installed, since)
 	return ok && c >= 0
 }
-
-var digitsRe = regexp.MustCompile(`^[0-9]+$`)
 
 // compareVersions orders two versions for VersionAtLeast; ok is false when they cannot be ordered.
 func compareVersions(a, b string) (c int, ok bool) {
@@ -115,7 +124,7 @@ func compareVersions(a, b string) (c int, ok bool) {
 	case bpre == "":
 		return -1, true
 	default:
-		if c := comparePrerelease(apre, bpre); c != 0 {
+		if c := prerelease.Compare(apre, bpre); c != 0 {
 			return c, true
 		}
 	}
@@ -130,38 +139,4 @@ func compareVersions(a, b string) (c int, ok bool) {
 		return compareDotted(abuild, bbuild), true
 	}
 	return 0, false
-}
-
-// comparePrerelease orders two prerelease suffixes ("beta.15", "beta.16", "rc.1") identifier by identifier.
-func comparePrerelease(a, b string) int {
-	as, bs := strings.Split(a, "."), strings.Split(b, ".")
-	for i := 0; i < len(as) && i < len(bs); i++ {
-		x, y := as[i], bs[i]
-		xd, yd := digitsRe.MatchString(x), digitsRe.MatchString(y)
-		switch {
-		case xd && yd:
-			if c := compareDotted(strings.TrimLeft(x, "0")+"0", strings.TrimLeft(y, "0")+"0"); c != 0 {
-				return c
-			}
-		case xd:
-			return -1
-		case yd:
-			return 1
-		default:
-			if c := strings.Compare(x, y); c != 0 {
-				return c
-			}
-		}
-	}
-	return cmpInt(len(as), len(bs))
-}
-
-func cmpInt(a, b int) int {
-	switch {
-	case a < b:
-		return -1
-	case a > b:
-		return 1
-	}
-	return 0
 }

@@ -23,6 +23,16 @@ func TestUpdateAvailable(t *testing.T) {
 		{"3.8.0", "3.7.0-rc1", false}, // an older core, prerelease or not, is a downgrade
 		{"3.7.0", "3.8.0-rc1", true},  // a newer core is an update even as a prerelease
 		{"3.6.0-beta", "3.6.0", true}, // and the other direction still is one
+		// openccu-lite task 291: prereleases of one core in order, dev < alpha < beta < rc
+		{"1.0.0-dev.30", "1.0.0-alpha.0", true},
+		{"1.0.0-dev.31", "1.0.0-beta.0", true},
+		{"1.0.0-beta.0", "1.0.0-dev.31", false}, // no dev build for a beta
+		{"1.0.0-beta.1", "1.0.0-beta.10", true},
+		{"1.0.0-beta.10", "1.0.0-beta.1", false},
+		{"1.0.0-beta.10", "1.0.0-rc.1", true},
+		{"1.0.0-rc.1", "1.0.0-beta.10", false},
+		{"1.0.0-rc.1", "1.0.0", true},
+		{"1.0.0-beta.1+2", "1.0.0-beta.1+3", true}, // a build suffix: they only differ
 	} {
 		if got := UpdateAvailable(c.installed, c.latest); got != c.want {
 			t.Errorf("UpdateAvailable(%q, %q) = %v, want %v", c.installed, c.latest, got, c.want)
@@ -56,7 +66,15 @@ func TestVersionAtLeast(t *testing.T) {
 		{"3.0.0-beta", "3.0.0-beta.1", false}, // the shorter list first
 		{"3.0.0-beta.1", "3.0.0-beta", true},
 		{"3.0.0-beta.1", "3.0.0-1", true}, // digits before text
-		{"2.1.2+3", "2.1.2", true},        // a build counts only between equal versions
+		// openccu-lite task 291: dev < alpha < beta < rc, an unknown tag below dev
+		{"1.0.0-alpha.0", "1.0.0-dev.30", true},
+		{"1.0.0-dev.31", "1.0.0-beta.0", false},
+		{"1.0.0-beta.0", "1.0.0-dev.31", true},
+		{"1.0.0-beta.10", "1.0.0-beta.1", true},
+		{"1.0.0-rc.1", "1.0.0-beta.10", true},
+		{"1.0.0-dev.1", "1.0.0-snapshot.9", true},
+		{"1.0.0-snapshot.9", "1.0.0-dev.1", false},
+		{"2.1.2+3", "2.1.2", true}, // a build counts only between equal versions
 		{"2.1.2", "2.1.2+3", false},
 		{"2.1.2+3", "2.1.2+2", true},
 		{"2.1.2+2", "2.1.2+3", false},
@@ -69,6 +87,19 @@ func TestVersionAtLeast(t *testing.T) {
 	} {
 		if got := VersionAtLeast(c.installed, c.since); got != c.want {
 			t.Errorf("VersionAtLeast(%q, %q) = %v, want %v", c.installed, c.since, got, c.want)
+		}
+	}
+	// the whole chain: each one at least every one before it, none at least a later one, and an
+	// update from each earlier one
+	chain := []string{"1.0.0-dev.30", "1.0.0-alpha.0", "1.0.0-beta.0", "1.0.0-beta.1", "1.0.0-beta.10", "1.0.0-rc.1", "1.0.0"}
+	for i, a := range chain {
+		for j, b := range chain {
+			if got := VersionAtLeast(a, b); got != (i >= j) {
+				t.Errorf("VersionAtLeast(%q, %q) = %v", a, b, got)
+			}
+			if got := UpdateAvailable(a, b); got != (j > i) {
+				t.Errorf("UpdateAvailable(%q, %q) = %v", a, b, got)
+			}
 		}
 	}
 }

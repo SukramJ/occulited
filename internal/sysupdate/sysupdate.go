@@ -24,6 +24,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hobbyquaker/occulited/internal/prerelease"
 	"github.com/hobbyquaker/occulited/internal/system"
 )
 
@@ -147,7 +148,9 @@ func assetPattern(v system.Version) (prefix, suffix string, err error) {
 }
 
 // semverNewer says a is a newer version than b, both semantic versions with an optional
-// prerelease (1.0.0-alpha.0 < 1.0.0-alpha.1 < 1.0.0-beta.0 < 1.0.0-rc.1 < 1.0.0 < 1.0.1).
+// prerelease (1.0.0-dev.31 < 1.0.0-alpha.0 < 1.0.0-beta.0 < 1.0.0-beta.10 < 1.0.0-rc.1 < 1.0.0 <
+// 1.0.1). The prerelease tags rank dev < alpha < beta < rc, not in SemVer's ASCII order, which
+// would put dev after beta (package prerelease).
 // Anything that is not a semantic version falls back to "differs", which is what the old
 // script did.
 func semverNewer(a, b string) bool {
@@ -165,7 +168,7 @@ func semverNewer(a, b string) bool {
 	if pa.pre == "" || pb.pre == "" {
 		return pa.pre == "" && pb.pre != ""
 	}
-	return comparePre(pa.pre, pb.pre) > 0
+	return prerelease.Compare(pa.pre, pb.pre) > 0
 }
 
 type semver struct {
@@ -186,34 +189,6 @@ func parseSemver(s string) (semver, bool) {
 	}
 	v.pre = m[4]
 	return v, true
-}
-
-// comparePre orders prerelease strings by their dot-separated identifiers: numeric ones
-// numerically, others lexically, numeric before alphanumeric, a shorter list first.
-func comparePre(a, b string) int {
-	as, bs := strings.Split(a, "."), strings.Split(b, ".")
-	for i := 0; i < len(as) && i < len(bs); i++ {
-		na, ea := strconv.Atoi(as[i])
-		nb, eb := strconv.Atoi(bs[i])
-		switch {
-		case ea == nil && eb == nil:
-			if na != nb {
-				if na > nb {
-					return 1
-				}
-				return -1
-			}
-		case ea == nil:
-			return -1
-		case eb == nil:
-			return 1
-		default:
-			if c := strings.Compare(as[i], bs[i]); c != 0 {
-				return c
-			}
-		}
-	}
-	return len(as) - len(bs)
 }
 
 // release is the part of a GitHub release the check reads.
