@@ -192,7 +192,14 @@ func hmipUserConfMode(conf string) os.FileMode {
 	return 0o644
 }
 
-func (k *HmIPLocalKey) writeConf(conf string) error {
+// editConf rewrites hmip_user.conf through edit, from the file as it is now; a file that could
+// not be read is left alone rather than rewritten from nothing (B-271).
+func (k *HmIPLocalKey) editConf(edit func(string) string) error {
+	conf, _, err := readFileErr(k.Root.join(hmipUserConf))
+	if err != nil {
+		return err
+	}
+	conf = edit(conf)
 	return writeFileAtomic(k.Root.join(hmipUserConf), []byte(conf), hmipUserConfMode(conf))
 }
 
@@ -408,7 +415,7 @@ func (k *HmIPLocalKey) Enable(mode, networkKey, backboneKey string) error {
 			k.end(fmt.Errorf("the snapshot failed, nothing was changed: %w", err))
 			return
 		}
-		if err := k.writeConf(radio.SetLocalKey(conf, nwk, bbk)); err != nil {
+		if err := k.editConf(func(c string) string { return radio.SetLocalKey(c, nwk, bbk) }); err != nil {
 			k.end(fmt.Errorf("writing hmip_user.conf: %w", err))
 			return
 		}
@@ -451,7 +458,7 @@ func (k *HmIPLocalKey) Disable() error {
 			}
 		}
 		before, _ := os.ReadFile(filepath.Join(dir, "hmip_user.conf"))
-		if err := k.writeConf(radio.RestoreKeyLines(k.conf(), string(before))); err != nil {
+		if err := k.editConf(func(c string) string { return radio.RestoreKeyLines(c, string(before)) }); err != nil {
 			k.end(fmt.Errorf("writing hmip_user.conf: %w", err))
 			return
 		}
@@ -492,7 +499,7 @@ func (k *HmIPLocalKey) setOverride(ctx context.Context, on bool) error {
 	if on {
 		mode = radio.KeyServerLocalFallback
 	}
-	if err := k.writeConf(radio.SetKeyServerMode(k.conf(), mode)); err != nil {
+	if err := k.editConf(func(c string) string { return radio.SetKeyServerMode(c, mode) }); err != nil {
 		return fmt.Errorf("writing hmip_user.conf: %w", err)
 	}
 	k.update(func(st *localKeyState) {

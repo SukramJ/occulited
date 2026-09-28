@@ -120,8 +120,87 @@ type RadioConnStatus struct {
 	// HmIPFatal: hmipserver's last start failed on a known fatal error (D-102), e.g. the key server
 	// rejecting the adapter exchange; the unit waits for the next run of the radio stack
 	HmIPFatal *radio.HmIPFatal `json:"hmip_fatal,omitempty"`
-	Running   *ConnApply       `json:"running"`
-	Last      *ConnApply       `json:"last"`
+	// Modules is every module the detection found, with the roles the plan gave it - the page's
+	// module cards (openccu-lite B-272): a module in no role, such as the one on an HB-RF-ETH
+	// added while both interface processes are pinned to a stick, is shown all the same.
+	Modules []ConnModule `json:"modules"`
+	// HBRFETH is the configured HB-RF-ETH's state, nil when none is configured (B-272): the page
+	// says a board is on its way while its module is not in the detection yet.
+	HBRFETH *ConnHBRFETH `json:"hb_rf_eth,omitempty"`
+	Running *ConnApply   `json:"running"`
+	Last    *ConnApply   `json:"last"`
+}
+
+// ConnModule is one detected module as the Interfaces page lists it (openccu-lite B-272).
+type ConnModule struct {
+	Serial     string `json:"serial"`
+	Hardware   string `json:"hardware"`
+	Node       string `json:"node,omitempty"`
+	DeviceType string `json:"device_type,omitempty"`
+	SGTIN      string `json:"sgtin,omitempty"`
+	Version    string `json:"version,omitempty"`
+	// Probe is the detection's verdict (ok, none, timeout, error); Detail its message when not ok.
+	Probe  string `json:"probe"`
+	Detail string `json:"detail,omitempty"`
+	// Roles are the interface protocols the plan runs on the module: BidCos-RF, HmIP-RF; empty
+	// for a module no process uses.
+	Roles []string `json:"roles"`
+}
+
+// ConnHBRFETH is the configured HB-RF-ETH's state on the Interfaces page (openccu-lite B-272).
+type ConnHBRFETH struct {
+	Address string `json:"address"`
+	// Connected: the kernel module has the board.
+	Connected bool `json:"connected"`
+	// Detected: a module behind the board is in the detection (the radio hotplug has run since
+	// the board was connected); Serial is that module's.
+	Detected bool   `json:"detected"`
+	Serial   string `json:"serial,omitempty"`
+}
+
+// connModules lists the detection's modules with the plan's roles (B-272). A role names its module
+// by node, the HM-CFG-USB-2 (no node) by serial.
+func connModules(det radio.Detection, p radio.Plan) []ConnModule {
+	out := []ConnModule{}
+	holds := func(r *radio.Role, m radio.Module) bool {
+		if r == nil {
+			return false
+		}
+		if m.Node != "" || r.Node != "" {
+			return r.Node == m.Node
+		}
+		return r.Serial != "" && r.Serial == m.Serial
+	}
+	for _, m := range det.Modules {
+		c := ConnModule{Serial: m.Serial, Hardware: m.Hardware, Node: m.Node, DeviceType: m.DeviceType, SGTIN: m.SGTIN, Version: m.Version, Probe: m.Probe, Detail: m.Detail, Roles: []string{}}
+		if m.USBAdapter {
+			c.Hardware, c.DeviceType = "HM-CFG-USB-2", "USB"
+		}
+		if holds(p.HmRF, m) {
+			c.Roles = append(c.Roles, "BidCos-RF")
+		}
+		if p.HmIPServerHmIP && holds(p.HmIP, m) {
+			c.Roles = append(c.Roles, "HmIP-RF")
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+// hbRFETH is the configured board's state against the detection (B-272), nil without a board.
+func (s *RadioConnections) hbRFETH(det radio.Detection) *ConnHBRFETH {
+	addr := radio.HBRFETHAddress(string(s.Root))
+	if addr == "" {
+		return nil
+	}
+	h := &ConnHBRFETH{Address: addr}
+	h.Connected, _ = radio.HBRFETHConnected(string(s.Root))
+	for _, m := range det.Modules {
+		if m.DeviceType == "HB-RF-ETH@"+addr {
+			h.Detected, h.Serial = true, m.Serial
+		}
+	}
+	return h
 }
 
 // ConnPreview is what a change would give: the new plan, and what it costs.
@@ -215,12 +294,12 @@ func (s *RadioConnections) Load(ctx context.Context) {
 }
 
 // read returns a file through the helper where occulited may not read it (rfd.conf is 0640
-// root:rfd), and whether it exists.
+// root:rfd; hmip_user.conf lies in hmipserver's crRFD directory, 0750 since B-253), and whether it
+// exists. A stat is no test here: in a closed directory it fails for a file that is there, and the
+// choices read as automatic (B-271).
 func (s *RadioConnections) read(p string) (string, bool) {
-	if _, err := os.Stat(s.Root.join(p)); err != nil {
-		return "", false
-	}
-	return readFile(s.Root.join(p)), true
+	c, ok, _ := readFileErr(s.Root.join(p))
+	return c, ok
 }
 
 func (s *RadioConnections) detection() (radio.Detection, bool) {
@@ -257,16 +336,18 @@ func (s *RadioConnections) choices() radio.Choices {
 
 // Status assembles the answer.
 func (s *RadioConnections) Status() RadioConnStatus {
-	st := RadioConnStatus{Choices: s.choices(), Options: radio.Options{HmIP: []radio.Option{}, BidCos: []radio.Option{}}}
+	st := RadioConnStatus{Choices: s.choices(), Options: radio.Options{HmIP: []radio.Option{}, BidCos: []radio.Option{}}, Modules: []ConnModule{}}
 	det, okDet := s.detection()
 	p, okPlan := s.bootPlan()
 	if okDet && okPlan {
 		st.Available = true
 		st.Options = radio.ChoiceOptions(det)
+		st.Modules = connModules(det, p)
 		cp := connPlan(p)
 		st.Plan, st.Mode = &cp, p.Mode
 		st.HmIPFatal = radio.ReadHmIPFatal(string(s.Root))
 	}
+	st.HBRFETH = s.hbRFETH(det)
 	s.mu.Lock()
 	st.Running, st.Last = copyApply(s.running), copyApply(s.last)
 	s.mu.Unlock()
@@ -423,7 +504,10 @@ func orAuto(v string) string {
 // writeChoices writes the files whose choice changed.
 func (s *RadioConnections) writeChoices(prev, c radio.Choices) error {
 	if c.BidCos != prev.BidCos {
-		conf, ok := s.read(rfdConfPath)
+		conf, ok, err := readFileErr(s.Root.join(rfdConfPath))
+		if err != nil {
+			return fmt.Errorf("reading %s: %w", rfdConfPath, err)
+		}
 		if !ok {
 			return fmt.Errorf("%s is missing", rfdConfPath)
 		}
@@ -436,7 +520,12 @@ func (s *RadioConnections) writeChoices(prev, c radio.Choices) error {
 		}
 	}
 	if c.HmIP != prev.HmIP || c.HmIPPath != prev.HmIPPath {
-		conf, _ := s.read(hmipUserConf)
+		// the file holds hmipserver's other lines too (the local key, the device key map): a
+		// file that could not be read is not rewritten from nothing (B-271)
+		conf, _, err := readFileErr(s.Root.join(hmipUserConf))
+		if err != nil {
+			return fmt.Errorf("reading %s: %w", hmipUserConf, err)
+		}
 		conf = radio.SetHmIPPath(radio.SetHmIPChoice(conf, c.HmIP), c.HmIPPath)
 		if err := writeFileAtomic(s.Root.join(hmipUserConf), []byte(conf), hmipUserConfMode(conf)); err != nil {
 			return fmt.Errorf("writing %s: %w", hmipUserConf, err)

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hobbyquaker/occulited/internal/priv"
 	"github.com/hobbyquaker/occulited/internal/radio"
 )
 
@@ -264,5 +265,280 @@ func TestRadioConnServiceNotes(t *testing.T) {
 	var none *RadioConnections
 	if got := none.OverlayServiceNotes(list); len(got) != 3 {
 		t.Fatal("a box without the service keeps its list")
+	}
+}
+
+// closedDirPriv is the privilege helper for a directory closed to the daemon, as hmipserver's
+// crRFD is since B-253 (0750 hmipserver): the daemon's own reads fail with EACCES there, the
+// helper (root) reads and writes. The test opens the directory for the helper's call only.
+type closedDirPriv struct {
+	priv.Local
+	dir      string
+	failRead bool
+}
+
+func (p closedDirPriv) open(fn func() error) error {
+	if err := os.Chmod(p.dir, 0o755); err != nil {
+		return err
+	}
+	defer os.Chmod(p.dir, 0) //nolint:errcheck
+	return fn()
+}
+
+func (p closedDirPriv) ReadFile(path string) (b []byte, err error) {
+	if p.failRead {
+		return nil, errors.New("privilege helper: connection refused")
+	}
+	err = p.open(func() error { b, err = os.ReadFile(path); return err })
+	return b, err
+}
+
+func (p closedDirPriv) WriteFile(path string, data []byte, mode os.FileMode) error {
+	return p.open(func() error { return p.Local.WriteFile(path, data, mode) })
+}
+
+// rfusbRoot is an x86_64 system with one HmIP-RFUSB and nothing else, hmip_user.conf in a
+// crRFD directory closed to the daemon, carrying the local key's lines.
+func rfusbRoot(t *testing.T) (root string, p closedDirPriv) {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a closed directory")
+	}
+	root = t.TempDir()
+	w := func(p, c string) {
+		full := filepath.Join(root, p)
+		_ = os.MkdirAll(filepath.Dir(full), 0o755)
+		if err := os.WriteFile(full, []byte(c), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mod := radio.Module{Name: "raw-uart", Node: "/dev/raw-uart", DeviceType: "eQ-3 HmIP-RFUSB@usb-0000:00:14.0-1", Hardware: "HMIP-RFUSB", Serial: "0000000A01", SGTIN: "3014F711A000040000000A01", HmRFAddress: "0xFF0001", HmIPAddress: "0xB00001", Version: "4.4.18", Probe: "ok"}
+	det := radio.Detection{Modules: []radio.Module{mod}}
+	w("var/hm_mode", "HM_HOST='ova'\nHM_MODE='NORMAL'\n")
+	w("etc/config/rfd.conf", connRFDConf)
+	w("etc/config_templates/rfd.conf", connRFDConf)
+	w("etc/config_templates/InterfacesList.xml", "<interfaces><ipc><name>BidCos-RF</name><url>xmlrpc_bin://127.0.0.1:32001</url><info>BidCos-RF</info></ipc><ipc><name>VirtualDevices</name><url>xmlrpc://127.0.0.1:39292/groups</url><info>Virtual Devices</info></ipc><ipc><name>HmIP-RF</name><url>xmlrpc://127.0.0.1:32010</url><info>HmIP-RF</info></ipc></interfaces>")
+	w("etc/config/crRFD/hmip_user.conf", rfusbUserConf)
+	b, _ := json.Marshal(det)
+	w("run/occulite/radio/modules.json", string(b))
+	in := radio.Load(context.Background(), root, fakeRunner, det)
+	b, _ = json.Marshal(radio.MakePlan(in))
+	w("run/occulite/radio/plan.json", string(b))
+	p = closedDirPriv{dir: filepath.Join(root, "etc/config/crRFD")}
+	if err := os.Chmod(p.dir, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(p.dir, 0o755) })
+	return root, p
+}
+
+// the local key's lines (example keys) and the device key map, which a choice must keep
+const rfusbUserConf = "SGTIN.LocalKey.MappingFile=/etc/config/crRFD/sgtin.map\nNetwork.Key=00112233445566778899AABBCCDDEEFF\nKeyServer.Mode=LOCAL\n"
+
+// withPriv swaps the helper for the test.
+func withPriv(t *testing.T, p priv.Ops) {
+	t.Helper()
+	old := Priv
+	Priv = p
+	t.Cleanup(func() { Priv = old })
+}
+
+// B-271: the HmIP-RFUSB chosen through multimacd survives the Apply, the re-detection and a
+// restart of occulited (a reboot's fresh service), with hmip_user.conf in a directory closed to
+// the daemon - and the file's other lines stay.
+func TestRadioConnChoiceRoundTripClosedDir(t *testing.T) {
+	root, p := rfusbRoot(t)
+	withPriv(t, p)
+	s, svc := newConn(t, root, nil)
+	// the run is root's: it reads the closed directory
+	svc.onDetect = func() {
+		_ = p.open(func() error {
+			det, _ := s.detection()
+			in := radio.Load(context.Background(), root, fakeRunner, det)
+			b, _ := json.Marshal(radio.MakePlan(in))
+			return os.WriteFile(filepath.Join(root, "run/occulite/radio/plan.json"), b, 0o644)
+		})
+	}
+	// automatic runs the dual stick through multimacd already: the pin is the same plan, and it
+	// must stay a pin all the same
+	if st := s.Status(); st.Choices.Explicit() || st.Plan.HmIPServer.Node != "/dev/mmd_hmip" {
+		t.Fatalf("before: automatic: %+v %+v", st.Choices, st.Plan.HmIPServer)
+	}
+	want := radio.Choices{HmIP: "0000000A01", HmIPPath: radio.PathMultimacd, BidCos: "0000000A01"}
+	if _, err := s.Apply(context.Background(), want, false); err != nil {
+		t.Fatal(err)
+	}
+	if a := waitApply(t, s); !a.OK {
+		t.Fatalf("the change failed: %+v", a)
+	}
+	check := func(what string, s *RadioConnections) {
+		t.Helper()
+		st := s.Status()
+		if st.Choices != want {
+			t.Fatalf("%s: the choice reads %+v, want %+v", what, st.Choices, want)
+		}
+		if !st.Plan.Multimacd.Run || st.Plan.Multimacd.Node != "/dev/raw-uart" || st.Plan.HmIPServer.Node != "/dev/mmd_hmip" || st.Plan.RFD.Node != "/dev/mmd_bidcos" {
+			t.Fatalf("%s: hmipserver over multimacd on the stick: %+v", what, st.Plan)
+		}
+	}
+	check("after the Apply and the re-detection", s)
+	// a reboot: a new service reads the files, the boot's run plans from them
+	svc.onDetect()
+	s2, _ := newConn(t, root, nil)
+	s2.Load(context.Background())
+	check("after a restart", s2)
+	// an unchanged choice is no change
+	if pv, err := s2.Preview(context.Background(), want); err != nil || pv.Changed {
+		t.Fatalf("the saved choice again: changed=%v err=%v", pv.Changed, err)
+	}
+	var b []byte
+	_ = p.open(func() (err error) { b, err = os.ReadFile(filepath.Join(p.dir, "hmip_user.conf")); return })
+	if string(b) != rfusbUserConf+"occu"+"lite.hmip.adapter=0000000A01\noccu"+"lite.hmip.path=multimacd\n" {
+		t.Fatalf("hmip_user.conf keeps the key lines:\n%s", b)
+	}
+	// back to automatic: the key lines still stay
+	if _, err := s2.Apply(context.Background(), radio.Choices{}, false); err != nil {
+		t.Fatal(err)
+	}
+	if a := waitApply(t, s2); !a.OK {
+		t.Fatalf("back: %+v", a)
+	}
+	_ = p.open(func() (err error) { b, err = os.ReadFile(filepath.Join(p.dir, "hmip_user.conf")); return })
+	if string(b) != rfusbUserConf || s2.Status().Choices.Explicit() {
+		t.Fatalf("automatic again:\n%s", b)
+	}
+}
+
+// B-271: a hmip_user.conf the helper could not read is not rewritten from nothing.
+func TestRadioConnUnreadableUserConfNotRewritten(t *testing.T) {
+	root, p := rfusbRoot(t)
+	p.failRead = true
+	withPriv(t, p)
+	s, _ := newConn(t, root, nil)
+	_, err := s.Apply(context.Background(), radio.Choices{HmIP: "0000000A01", HmIPPath: radio.PathMultimacd}, false)
+	if err == nil {
+		err = errors.New(waitApply(t, s).Error)
+	}
+	if !strings.Contains(err.Error(), "reading /etc/config/crRFD/hmip_user.conf") {
+		t.Fatalf("refused: %v", err)
+	}
+	var b []byte
+	_ = p.open(func() (err error) { b, err = os.ReadFile(filepath.Join(p.dir, "hmip_user.conf")); return })
+	if string(b) != rfusbUserConf {
+		t.Fatalf("hmip_user.conf rewritten:\n%s", b)
+	}
+}
+
+// pinnedStickRoot is a lab system as B-272 found it: an HmIP-RFUSB pinned for HmIP-RF (through
+// multimacd) and BidCos-RF, and an HB-RF-ETH configured under LAN devices. With board, the radio
+// hotplug has attached it and its HM-MOD-RPI-PCB is in the detection; without, the board is
+// configured and not connected yet (the address just set, or the board not answering).
+func pinnedStickRoot(t *testing.T, board bool) string {
+	t.Helper()
+	root := t.TempDir()
+	w := func(p, c string) {
+		full := filepath.Join(root, p)
+		_ = os.MkdirAll(filepath.Dir(full), 0o755)
+		if err := os.WriteFile(full, []byte(c), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stick := radio.Module{Name: "raw-uart", Node: "/dev/raw-uart", DeviceType: "eQ-3 HmIP-RFUSB@usb-0000:02:1b.0-1", Hardware: "HMIP-RFUSB", Serial: "0000000A01", SGTIN: "3014F711A000040000000A01", HmRFAddress: "0xFF0001", HmIPAddress: "0xB00001", Version: "4.4.18", Probe: "ok"}
+	det := radio.Detection{Modules: []radio.Module{stick}, HBRFETH: "192.0.2.50", HBRFETHConnected: board}
+	if board {
+		det.Modules = append(det.Modules, radio.Module{Name: "raw-uart1", Node: "/dev/raw-uart1", DeviceType: "HB-RF-ETH@192.0.2.50", Hardware: "HM-MOD-RPI-PCB", Serial: "MEQ9000005", SGTIN: "3014F711A061A70000000A05", HmRFAddress: "0x3D0A01", HmIPAddress: "0xB0A001", Version: "2.8.6", Probe: "ok"})
+		w("sys/class/hb-rf-eth/hb-rf-eth/is_connected", "1\n")
+	} else {
+		w("sys/class/hb-rf-eth/hb-rf-eth/is_connected", "0\n")
+	}
+	w("etc/config/hb_rf_eth", "192.0.2.50\n")
+	w("var/hm_mode", "HM_HOST='ova'\nHM_MODE='NORMAL'\n")
+	w("etc/config/rfd.conf", "# occulite.bidcos.module=0000000A01\n"+connRFDConf)
+	w("etc/config_templates/rfd.conf", connRFDConf)
+	w("etc/config_templates/InterfacesList.xml", "<interfaces><ipc><name>BidCos-RF</name><url>xmlrpc_bin://127.0.0.1:32001</url><info>BidCos-RF</info></ipc><ipc><name>VirtualDevices</name><url>xmlrpc://127.0.0.1:39292/groups</url><info>Virtual Devices</info></ipc><ipc><name>HmIP-RF</name><url>xmlrpc://127.0.0.1:32010</url><info>HmIP-RF</info></ipc></interfaces>")
+	w("etc/config/crRFD/hmip_user.conf", rfusbUserConf+"occulite.hmip.adapter=0000000A01\nocculite.hmip.path=multimacd\n")
+	b, _ := json.Marshal(det)
+	w("run/occulite/radio/modules.json", string(b))
+	in := radio.Load(context.Background(), root, fakeRunner, det)
+	b, _ = json.Marshal(radio.MakePlan(in))
+	w("run/occulite/radio/plan.json", string(b))
+	return root
+}
+
+// openccu-lite B-272: an HB-RF-ETH added under LAN devices while both processes are pinned to
+// the stick. Its module holds no role, so the plan's files never name it - the status lists it all
+// the same, with no role, offers it for both processes, and says the board is detected; before the
+// hotplug attached it, the board is configured and not detected, and the list is the stick alone.
+func TestRadioConnStatusPinnedStickAndLANDevice(t *testing.T) {
+	root := pinnedStickRoot(t, true)
+	s, _ := newConn(t, root, nil)
+	st := s.Status()
+	if !st.Available || st.Choices.HmIP != "0000000A01" || st.Choices.BidCos != "0000000A01" || st.Plan == nil || st.Plan.HmIP == nil || st.Plan.HmIP.Serial != "0000000A01" || st.Plan.HmRF == nil || st.Plan.HmRF.Serial != "0000000A01" {
+		t.Fatalf("the pin: %+v %+v", st.Choices, st.Plan)
+	}
+	ids := func(list []radio.Option) (out []string) {
+		for _, o := range list {
+			out = append(out, o.ID)
+		}
+		return
+	}
+	if !reflect.DeepEqual(ids(st.Options.HmIP), []string{"0000000A01", "MEQ9000005"}) || !reflect.DeepEqual(ids(st.Options.BidCos), []string{"0000000A01", "MEQ9000005"}) {
+		t.Fatalf("the board's module is not offered: %+v", st.Options)
+	}
+	want := []ConnModule{
+		{Serial: "0000000A01", Hardware: "HMIP-RFUSB", Node: "/dev/raw-uart", DeviceType: "eQ-3 HmIP-RFUSB@usb-0000:02:1b.0-1", SGTIN: "3014F711A000040000000A01", Version: "4.4.18", Probe: "ok", Roles: []string{"BidCos-RF", "HmIP-RF"}},
+		{Serial: "MEQ9000005", Hardware: "HM-MOD-RPI-PCB", Node: "/dev/raw-uart1", DeviceType: "HB-RF-ETH@192.0.2.50", SGTIN: "3014F711A061A70000000A05", Version: "2.8.6", Probe: "ok", Roles: []string{}},
+	}
+	if !reflect.DeepEqual(st.Modules, want) {
+		t.Fatalf("modules:\n%+v\nwant\n%+v", st.Modules, want)
+	}
+	if !reflect.DeepEqual(st.HBRFETH, &ConnHBRFETH{Address: "192.0.2.50", Connected: true, Detected: true, Serial: "MEQ9000005"}) {
+		t.Fatalf("the board: %+v", st.HBRFETH)
+	}
+	// choosing the board's module works: HmIP through multimacd (the PCB's only path) and BidCos-RF
+	pv, err := s.Preview(context.Background(), radio.Choices{HmIP: "MEQ9000005", HmIPPath: radio.PathMultimacd, BidCos: "MEQ9000005"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !pv.Changed || pv.Plan.HmIP == nil || pv.Plan.HmIP.Serial != "MEQ9000005" || pv.Plan.HmRF == nil || pv.Plan.HmRF.Node != "/dev/raw-uart1" || pv.Plan.Multimacd.Node != "/dev/raw-uart1" {
+		t.Fatalf("the board's module chosen: %+v", pv.Plan)
+	}
+
+	// the board just added: configured, not connected, its module not in the detection
+	root = pinnedStickRoot(t, false)
+	s, _ = newConn(t, root, nil)
+	st = s.Status()
+	if len(st.Modules) != 1 || st.Modules[0].Serial != "0000000A01" || len(st.Options.HmIP) != 1 {
+		t.Fatalf("before the hotplug: %+v %+v", st.Modules, st.Options)
+	}
+	if !reflect.DeepEqual(st.HBRFETH, &ConnHBRFETH{Address: "192.0.2.50"}) {
+		t.Fatalf("the board pending: %+v", st.HBRFETH)
+	}
+	// no board configured: nothing about one
+	if err := os.Remove(filepath.Join(root, "etc/config/hb_rf_eth")); err != nil {
+		t.Fatal(err)
+	}
+	if st = s.Status(); st.HBRFETH != nil {
+		t.Fatalf("no board: %+v", st.HBRFETH)
+	}
+}
+
+// B-272: the roles of the module list - the HM-CFG-USB-2 (no node) by serial, a module that
+// failed its probe in no role.
+func TestConnModulesRoles(t *testing.T) {
+	adapter := radio.Module{USBAdapter: true, Serial: "JEQ9000002", Probe: "ok"}
+	dead := radio.Module{Name: "raw-uart1", Node: "/dev/raw-uart1", DeviceType: "HB-RF-ETH@192.0.2.50", Probe: "none", Detail: "nothing answered"}
+	det := radio.Detection{Modules: []radio.Module{adapter, dead}}
+	p := radio.Plan{HmRF: &radio.Role{Serial: "JEQ9000002"}}
+	got := connModules(det, p)
+	want := []ConnModule{
+		{Serial: "JEQ9000002", Hardware: "HM-CFG-USB-2", DeviceType: "USB", Probe: "ok", Roles: []string{"BidCos-RF"}},
+		{Node: "/dev/raw-uart1", DeviceType: "HB-RF-ETH@192.0.2.50", Probe: "none", Detail: "nothing answered", Roles: []string{}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got\n%+v\nwant\n%+v", got, want)
+	}
+	if got := connModules(radio.Detection{}, radio.Plan{}); len(got) != 0 || got == nil {
+		t.Fatalf("empty: %#v", got)
 	}
 }

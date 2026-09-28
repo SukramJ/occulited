@@ -737,16 +737,21 @@ const connState = new Map();
 // task 199: `basic` is a module that carries HmIP but cannot route for HmIP-HAPs and DRAPs (an
 // HM-MOD-RPI-PCB against an RPI-RF-MOD) - the red mark before the routing sentence
 function connPlan(ch, missing, basic) {
-    const role = {hardware: 'HMIP-RFUSB', node: '/dev/raw-uart', device_type: CONN_MODULE.device_type, address: '0xBC0A08', serial: '0000000A02', sgtin: CONN_MODULE.sgtin, version: '4.4.18', module: 0};
+    const stick = {hardware: 'HMIP-RFUSB', node: '/dev/raw-uart', device_type: CONN_MODULE.device_type, address: '0xBC0A08', serial: '0000000A02', sgtin: CONN_MODULE.sgtin, version: '4.4.18', module: 0};
+    // B-272: the board's module when it is the choice (stub-conn-board=detected)
+    const board = {hardware: 'HM-MOD-RPI-PCB', node: '/dev/raw-uart1', device_type: BOARD_MODULE.device_type, address: '0x3D0A01', serial: BOARD_MODULE.id, sgtin: BOARD_MODULE.sgtin, version: '2.8.6', module: 1};
+    const hmrf = ch.bidcos === BOARD_MODULE.id ? board : stick;
+    const hmip = ch.hmip === BOARD_MODULE.id ? board : stick;
     const none = ch.bidcos === 'none';
     // HmIP through multimacd: with BidCos-RF on the module, or by choice (task 150)
     const mmdHmIP = !missing && (!none || ch.hmip_path === 'multimacd');
     const mmd = !none || mmdHmIP;
+    const mmdNode = none ? hmip.node : hmrf.node;
     return {
-        multimacd: mmd ? {run: true, node: '/dev/raw-uart', reason: 'HmIP and BidCos-RF share the module on /dev/raw-uart'} : {run: false, reason: 'not required: BidCos-RF has no local module'},
+        multimacd: mmd ? {run: true, node: mmdNode, reason: `HmIP and BidCos-RF share the module on ${mmdNode}`} : {run: false, reason: 'not required: BidCos-RF has no local module'},
         rfd: none ? {run: true, reason: 'BidCos-RF: a LAN gateway'} : {run: true, node: '/dev/mmd_bidcos', reason: 'BidCos-RF: the module through /dev/mmd_bidcos, a LAN gateway'},
-        hmipserver: missing ? {run: true, reason: 'no HmIP module: the VirtualDevices half alone'} : !mmdHmIP ? {run: true, node: '/dev/raw-uart', reason: 'HmIP on /dev/raw-uart directly'} : {run: true, node: '/dev/mmd_hmip', reason: 'HmIP on /dev/raw-uart through the multiplexer'},
-        ...(none ? {} : {hmrf: role}), ...(missing ? {missing_hmip: missing} : {hmip: role}),
+        hmipserver: missing ? {run: true, reason: 'no HmIP module: the VirtualDevices half alone'} : !mmdHmIP ? {run: true, node: hmip.node, reason: `HmIP on ${hmip.node} directly`} : {run: true, node: '/dev/mmd_hmip', reason: `HmIP on ${mmdNode} through the multiplexer`},
+        ...(none ? {} : {hmrf}), ...(missing ? {missing_hmip: missing} : {hmip}),
         rfd_local: !none, rfd_usb_adapter: false, rfd_lan_gateway: true, hmip_advanced: !missing && !basic,
         interfaces: missing ? ['BidCos-RF', 'VirtualDevices'] : ['BidCos-RF', 'VirtualDevices', 'HmIP-RF'], notes: [],
     };
@@ -762,13 +767,40 @@ function connFatal(jar) {
     if (!cause || exCleared.has(jar['stub-conn'])) return undefined;
     return {code: 'adapter-exchange-rejected', line: 'Adapter exchange was rejected by key server.', adapter: CONN_MODULE.sgtin, at: '2026-09-23T10:00:00Z', ...(cause === 'plain' ? {} : {cause})};
 }
+// openccu-lite B-272: an HB-RF-ETH configured under LAN devices while both processes are pinned
+// to the stick - stub-conn-board=detected: the radio hotplug attached it and its HM-MOD-RPI-PCB is
+// in the detection with no role; pending: the board does not answer (192.0.2.60); arriving: the
+// address just set, the first two reads say it is not detected yet, then it is (per stub-conn cookie)
+const BOARD_MODULE = {id: 'MEQ9000005', hardware: 'HM-MOD-RPI-PCB', node: '/dev/raw-uart1', device_type: 'HB-RF-ETH@192.0.2.50', sgtin: '3014F711A061A70000000A05', version: '2.8.6'};
+const connBoardReads = new Map();
+function connBoard(jar) {
+    const mode = jar['stub-conn-board'];
+    if (!mode) return null;
+    if (mode === 'pending') return {address: '192.0.2.60', connected: false, detected: false};
+    if (mode === 'arriving') {
+        const n = (connBoardReads.get(jar['stub-conn']) ?? 0) + 1;
+        connBoardReads.set(jar['stub-conn'], n);
+        if (n <= 2) return {address: '192.0.2.50', connected: n === 2, detected: false};
+    }
+    return {address: '192.0.2.50', connected: true, detected: true, serial: BOARD_MODULE.id};
+}
+function connModule(o, roles) {
+    const {id, ...rest} = o;
+    return {serial: id, ...rest, probe: 'ok', roles};
+}
 function connStatus(jar) {
     const s = connState.get(jar['stub-conn']) ?? {choices: {hmip: '', bidcos: '', hmip_path: ''}, last: null};
     // stub-conn-missing=<id>: the stick HmIP-RF is pinned to is unplugged
     const missing = jar['stub-conn-missing'];
     const choices = missing ? {...s.choices, hmip: missing} : s.choices;
     const fatal = connFatal(jar);
-    return {available: true, choices, options: {hmip: missing ? [] : [CONN_HMIP], bidcos: missing ? [] : [CONN_MODULE]}, plan: connPlan(choices, missing, jar['stub-conn-basic'] === '1'), mode: 'NORMAL', ...(fatal ? {hmip_fatal: fatal} : {}), running: null, last: s.last};
+    const board = connBoard(jar);
+    const withBoard = !!board?.detected;
+    const options = {hmip: missing ? [] : [CONN_HMIP, ...(withBoard ? [{...BOARD_MODULE, paths: ['multimacd']}] : [])], bidcos: missing ? [] : [CONN_MODULE, ...(withBoard ? [BOARD_MODULE] : [])]};
+    const plan = connPlan(choices, missing, jar['stub-conn-basic'] === '1');
+    const rolesOf = (id) => [...(plan.hmrf?.serial === id ? ['BidCos-RF'] : []), ...(plan.hmip?.serial === id ? ['HmIP-RF'] : [])];
+    const modules = [...(missing ? [] : [connModule(CONN_MODULE, rolesOf(CONN_MODULE.id))]), ...(withBoard ? [connModule(BOARD_MODULE, rolesOf(BOARD_MODULE.id))] : [])];
+    return {available: true, choices, options, plan, mode: 'NORMAL', ...(fatal ? {hmip_fatal: fatal} : {}), modules, ...(board ? {hb_rf_eth: board} : {}), running: null, last: s.last};
 }
 function exView(jar) {
     const lk = lkStateOf(jar);

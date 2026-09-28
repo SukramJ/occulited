@@ -2,6 +2,7 @@ package radio
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -337,5 +338,103 @@ func TestHBRFETHWatchGraceAfterPowerCycle(t *testing.T) {
 	hbDetector(root, &calls).hbRFETHRescan(context.Background(), Detection{HBRFETH: "192.0.2.10", HBRFETHConnected: true}, &det, func(string, ...any) {})
 	if _, err := os.Stat(filepath.Join(root, HBRFETHReconnectFile)); err == nil {
 		t.Error("the note stayed on a connected board")
+	}
+}
+
+// openccu-lite B-273: the first connect at an address has its own line, with the serial and no
+// lost_for (the zero lostAt gave 2562047h47m16s); the daemons are asked only when the plan puts one
+// on the board. A real loss and return keeps the lost_for line and the ask.
+func TestHBRFETHWatchFirstConnect(t *testing.T) {
+	const addr = "192.0.2.10"
+	shadow := func(root, name string, v any) {
+		b, _ := json.Marshal(v)
+		p := shadowPath(root, name)
+		_ = os.MkdirAll(filepath.Dir(p), 0o755)
+		_ = os.WriteFile(p, b, 0o644)
+	}
+	stick := &Role{Hardware: "HMIP-RFUSB", Node: "/dev/raw-uart", DeviceType: "eQ-3 HmIP-RFUSB@usb-1", Serial: "0000000A01"}
+	board := &Role{Hardware: "HM-MOD-RPI-PCB", Node: "/dev/raw-uart1", DeviceType: "HB-RF-ETH@" + addr, Serial: "MEQ9000005"}
+	for _, tc := range []struct {
+		name    string
+		plan    Plan
+		loss    bool // connected at start, lost and back; else a Kick and a first connect
+		line    string
+		daemons string
+		asks    int
+	}{
+		{name: "first connect, nothing on the board", line: `msg="radio: the HB-RF-ETH is connected"`,
+			plan: Plan{HmRF: stick, HmIP: stick, HmIPServerHmIP: true, Multimacd: Daemon{Run: true, Node: "/dev/raw-uart"}, RFD: Daemon{Run: true}, HmIPServer: Daemon{Run: true}}},
+		{name: "first connect, the board in use", line: `msg="radio: the HB-RF-ETH is connected; the daemons on it are asked shortly"`, daemons: "daemons=multimacd,rfd", asks: 1,
+			plan: Plan{HmRF: board, HmIP: stick, HmIPServerHmIP: true, Multimacd: Daemon{Run: true, Node: "/dev/raw-uart1"}, RFD: Daemon{Run: true}, HmIPServer: Daemon{Run: true, Node: "/dev/raw-uart"}}},
+		{name: "a real loss and return", loss: true, line: `msg="radio: the kernel has the HB-RF-ETH back; the daemons on it are asked shortly" address=192.0.2.10 lost_for=30s`, asks: 1,
+			plan: Plan{HmRF: board, Multimacd: Daemon{Run: true, Node: "/dev/raw-uart1"}, RFD: Daemon{Run: true}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			conn := "0"
+			if tc.loss {
+				conn = "1"
+			}
+			root := hbRoot(t, addr, conn)
+			set := func(v string) { _ = os.WriteFile(filepath.Join(root, HBRFETHConnectedFile), []byte(v+"\n"), 0o644) }
+			shadow(root, "plan.json", tc.plan)
+			shadow(root, "modules.json", Detection{HBRFETH: addr, Modules: []Module{
+				{Name: "raw-uart", Node: "/dev/raw-uart", DeviceType: stick.DeviceType, Serial: stick.Serial},
+				{Name: "raw-uart1", Node: "/dev/raw-uart1", DeviceType: board.DeviceType, Serial: board.Serial},
+			}})
+			now := time.Date(2026, 9, 28, 21, 5, 0, 0, time.UTC)
+			var starts, asks int
+			var buf strings.Builder
+			w := &HBRFETHWatch{Root: root, Now: func() time.Time { return now }, Verify: 30 * time.Second, Grace: time.Hour,
+				Start:   func(context.Context) error { starts++; return nil },
+				Restart: func(context.Context) error { t.Error("restarted"); return nil },
+				Healthy: func(context.Context) (bool, string, error) { asks++; return true, "", nil }}
+			log := slog.New(slog.NewTextHandler(&buf, nil))
+			tick := func(d time.Duration) { now = now.Add(d); w.step(context.Background(), log) }
+			if tc.loss {
+				w.connAddr = addr // Run's: the boot's detection connected it
+				tick(0)
+				set("0")
+				tick(30 * time.Second)
+				tick(30 * time.Second)
+				set("1")
+				tick(0)
+				if starts != 0 {
+					t.Fatalf("the hotplug started during the loss: %d", starts)
+				}
+			} else {
+				w.Kick()
+				tick(0) // not connected: the hotplug connects it
+				if starts != 1 {
+					t.Fatalf("no hotplug after the kick: %d", starts)
+				}
+				set("1")
+				tick(30 * time.Second)
+			}
+			out := buf.String()
+			if !strings.Contains(out, tc.line) {
+				t.Fatalf("no line %s in:\n%s", tc.line, out)
+			}
+			if !tc.loss && (strings.Contains(out, "lost_for") || !strings.Contains(out, "serial=MEQ9000005")) {
+				t.Errorf("a first connect with lost_for or without the serial:\n%s", out)
+			}
+			if tc.loss && strings.Contains(out, "is connected") {
+				t.Errorf("a return said as a first connect:\n%s", out)
+			}
+			if tc.daemons != "" && !strings.Contains(out, tc.daemons) {
+				t.Errorf("no %s in:\n%s", tc.daemons, out)
+			}
+			tick(10 * time.Second)
+			if asks != 0 {
+				t.Fatalf("asked before Verify: %d", asks)
+			}
+			tick(30 * time.Second)
+			tick(30 * time.Second)
+			if asks != tc.asks {
+				t.Fatalf("asks %d, want %d:\n%s", asks, tc.asks, buf.String())
+			}
+			if n := strings.Count(buf.String(), "HB-RF-ETH is connected") + strings.Count(buf.String(), "has the HB-RF-ETH back"); n != 1 {
+				t.Errorf("%d connect lines:\n%s", n, buf.String())
+			}
+		})
 	}
 }

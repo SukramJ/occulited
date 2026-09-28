@@ -335,7 +335,10 @@ func (d *HmIPDeviceKeys) write(keys []radio.DeviceKey, changed string) error {
 	if err := writeFileAtomic(d.Root.join(radio.DeviceKeyMapFile), []byte(radio.FormatDeviceKeyMap(keys)), 0o640); err != nil {
 		return fmt.Errorf("writing %s: %w", radio.DeviceKeyMapFile, err)
 	}
-	conf := readFile(d.Root.join(hmipUserConf))
+	conf, _, err := readFileErr(d.Root.join(hmipUserConf))
+	if err != nil {
+		return fmt.Errorf("reading hmip_user.conf: %w", err)
+	}
 	if cur := radio.MappingFile(conf); cur != radio.DeviceKeyMapFile {
 		if cur != "" {
 			d.log().Warn("hmip device keys: hmip_user.conf named another map; it names this one now", "was", cur)

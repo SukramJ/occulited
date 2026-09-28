@@ -50,17 +50,23 @@ func TestLGWFirmware(t *testing.T) {
 	if !reflect.DeepEqual(rec.calls, want) {
 		t.Fatalf("calls:\n%v", strings.Join(rec.calls, "\n"))
 	}
-	// a failed update fails the step; no network fails it before any update
+	// a failed update fails the step
 	root, rec = lgwRoot(t, rfdTemplate+lgwSection, "")
 	rec.fails["eq3configcmd"] = true
 	if err := LGWFirmware(ctx, LGWStep{Root: root, Run: rec.run}, logf); err == nil || !strings.Contains(err.Error(), "RF LAN gateways' coprocessor") {
 		t.Fatalf("failure: %v", err)
 	}
-	root, rec = lgwRoot(t, rfdTemplate+lgwSection, "")
-	rec.fails["ping"] = true
-	sleeps := 0
-	if err := LGWFirmware(ctx, LGWStep{Root: root, Run: rec.run, Sleep: func(time.Duration) { sleeps++ }}, logf); err == nil || sleeps != 5 || rec.called("eq3configcmd") {
-		t.Fatalf("no network: %v sleeps %d", err, sleeps)
+	// openccu-lite B-229: no network at all - the default gateway silent, or no default route - is
+	// a skip with a journal line after five tries, not a failed unit, and no eq3configcmd runs
+	for _, c := range []struct{ name, fail string }{{"silent default gateway", "ping"}, {"no default route", "ip"}} {
+		root, rec = lgwRoot(t, rfdTemplate+lgwSection, "[Interface 0]\nType = HMWLGW\nSerial Number = JEQ0000001\n")
+		rec.fails[c.fail] = true
+		sleeps := 0
+		var lines []string
+		err := LGWFirmware(ctx, LGWStep{Root: root, Run: rec.run, Sleep: func(time.Duration) { sleeps++ }}, func(f string, a ...any) { lines = append(lines, fmt.Sprintf(f, a...)) })
+		if err != nil || sleeps != 5 || rec.called("eq3configcmd") || len(lines) != 1 || !strings.Contains(lines[0], "no network") || !strings.Contains(lines[0], "skipped until the next start") {
+			t.Fatalf("%s: %v sleeps %d lines %q calls %v", c.name, err, sleeps, lines, rec.calls)
+		}
 	}
 	// openccu-lite B-229: a gateway with an address that does not answer a ping is not an update
 	// that failed - the check is skipped (two pings, no eq3configcmd, the unit a success), as the

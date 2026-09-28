@@ -295,6 +295,32 @@ func readFile(path string) string {
 	return string(pb)
 }
 
+// readFileErr is readFile for a caller that rewrites the file from what it read: a missing file is
+// ("", false, nil), a file that could not be read - a closed directory the helper did not open, a
+// helper that did not answer - is an error, never an empty file. hmipserver's crRFD directory is
+// closed to occulited since B-253; a stat there failed, the connection choice read as automatic and
+// its write replaced hmip_user.conf with the two choice lines, dropping the local key's (B-271).
+func readFileErr(path string) (string, bool, error) {
+	b, err := os.ReadFile(path)
+	if err == nil {
+		return string(b), true, nil
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", false, nil
+	}
+	if !errors.Is(err, fs.ErrPermission) || Priv == nil {
+		return "", false, err
+	}
+	pb, perr := Priv.ReadFile(path)
+	switch {
+	case perr == nil:
+		return string(pb), true, nil
+	case errors.Is(perr, fs.ErrNotExist):
+		return "", false, nil
+	}
+	return "", false, fmt.Errorf("%s: %w", path, perr)
+}
+
 // readDir lists the names in a directory the daemon may see, falling back to the privilege helper
 // when the directory is closed to it: hmipserver's data directory is 0700 since openccu-lite
 // B-253, and what occulited needs from it are names (which devices, which modules have files

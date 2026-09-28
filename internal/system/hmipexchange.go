@@ -171,7 +171,7 @@ func (k *HmIPLocalKey) FreshStart(localKey bool) error {
 			}
 		}
 		if nwk != "" {
-			if err := k.writeConf(radio.SetLocalKey(conf, nwk, bbk)); err != nil {
+			if err := k.editConf(func(c string) string { return radio.SetLocalKey(c, nwk, bbk) }); err != nil {
 				k.end(fmt.Errorf("writing hmip_user.conf: %w", err))
 				return
 			}

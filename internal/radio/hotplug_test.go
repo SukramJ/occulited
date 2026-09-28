@@ -282,3 +282,59 @@ func TestHotplugBoardPowerCycle(t *testing.T) {
 		t.Errorf("order: %s", calls)
 	}
 }
+
+// openccu-lite B-272: both processes pinned to an HmIP-RFUSB, then an HB-RF-ETH added under LAN
+// devices (the address written, the watch's hotplug). The hotplug attaches the board and probes its
+// module; the plan stays on the stick and no daemon restarts, but the detection lists the board's
+// module and offers it for both processes.
+func TestHotplugBoardAddedWhilePinned(t *testing.T) {
+	fakeUsers(t)
+	root, rec := boxRoot(t, map[string]string{"raw-uart": "eQ-3 HmIP-RFUSB@usb-1"})
+	rec.probe.answers = map[string]string{"raw-uart": "HMIP-RFUSB 0000000A01 3014F711A000040000000A01 0xFF0001 0xB00001 4.4.18"}
+	for p, c := range map[string]string{
+		"etc/config/rfd.conf":                     "# occulite.bidcos.module=0000000A01\n" + rfdTemplate,
+		"etc/config/crRFD/hmip_user.conf":         "occulite.hmip.adapter=0000000A01\nocculite.hmip.path=multimacd\n",
+		"sys/module/hb_rf_eth/parameters/connect": "",
+		"sys/class/hb-rf-eth/hb-rf-eth/connect":   "",
+		HBRFETHConnectedFile[1:]:                  "0\n",
+	} {
+		_ = os.MkdirAll(filepath.Join(root, filepath.Dir(p)), 0o755)
+		_ = os.WriteFile(filepath.Join(root, p), []byte(c), 0o644)
+	}
+	d := Detector{Root: root, Run: rec.run, Sleep: func(time.Duration) {}}
+	logf := func(string, ...any) {}
+	ctx := context.Background()
+	if _, err := Run(ctx, root, d, logf); err != nil {
+		t.Fatal(err)
+	}
+	p, err := LoadPlan(root)
+	if err != nil || p.HmRF == nil || p.HmRF.Serial != "0000000A01" || p.HmIP == nil || p.HmIP.Serial != "0000000A01" || p.Multimacd.Node != "/dev/raw-uart" {
+		t.Fatalf("the pin: %v %+v", err, p)
+	}
+	// the board added: its address configured, the kernel's node appears once connected
+	_ = os.WriteFile(filepath.Join(root, "etc/config/hb_rf_eth"), []byte("192.0.2.50\n"), 0o644)
+	rec.probe.answers["raw-uart1"] = "HM-MOD-RPI-PCB MEQ9000005 3014F711A061A70000000A05 0x3D0A01 0xB40A03 2.8.6"
+	plug(t, root, "raw-uart1", "HB-RF-ETH@192.0.2.50")
+	resetCalls(rec)
+	rep, err := Hotplug(ctx, root, d, 0, logf)
+	if err != nil || !rep.Changed || len(rep.Restarted) != 0 || len(systemctlCalls(rec)) != 0 {
+		t.Fatalf("the board added: %+v %v %v", rep, err, systemctlCalls(rec))
+	}
+	if b, _ := os.ReadFile(filepath.Join(root, "sys/class/hb-rf-eth/hb-rf-eth/connect")); string(b) != "192.0.2.50" {
+		t.Fatalf("the board was not connected: %q", b)
+	}
+	var det Detection
+	if err := readJSONFile(filepath.Join(root, "run/occulite/radio/modules.json"), &det); err != nil || len(det.Modules) != 2 || det.HBRFETH != "192.0.2.50" || !det.HBRFETHConnected {
+		t.Fatalf("modules.json: %+v %v", det, err)
+	}
+	if det.Modules[1].Serial != "MEQ9000005" || det.Modules[1].DeviceType != "HB-RF-ETH@192.0.2.50" || !det.Modules[1].OK() || rec.probe.seen["raw-uart"] != 1 {
+		t.Fatalf("the board's module: %+v (probes of the held stick %d)", det.Modules[1], rec.probe.seen["raw-uart"])
+	}
+	if p, err = LoadPlan(root); err != nil || p.HmRF.Serial != "0000000A01" || p.HmIP.Serial != "0000000A01" || p.Multimacd.Node != "/dev/raw-uart" {
+		t.Fatalf("the plan left the stick: %v %+v", err, p)
+	}
+	o := ChoiceOptions(det)
+	if len(o.HmIP) != 2 || o.HmIP[1].ID != "MEQ9000005" || !reflect.DeepEqual(o.HmIP[1].Paths, []string{PathMultimacd}) || len(o.BidCos) != 2 || o.BidCos[1].ID != "MEQ9000005" {
+		t.Fatalf("the board's module is not offered: %+v", o)
+	}
+}

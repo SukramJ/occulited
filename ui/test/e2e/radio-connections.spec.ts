@@ -272,3 +272,97 @@ test('a user sees the diagnosis, not the actions, and the view is not asked for'
     await expect(notice.getByRole('checkbox')).toHaveCount(0);
     expect(calls).not.toContain('/api/system/v1/radio/hmip/exchange');
 });
+
+// openccu-lite B-272: an HB-RF-ETH added under LAN devices while both processes are pinned to the
+// stick. The module cards come from /var/hm_mode (a module in a role), so the board's module had no
+// card and, until the radio hotplug had attached it, no dropdown entry either - and nothing said a
+// board was on its way.
+async function withBoard(page: Page, baseURL: string | undefined, mode: string) {
+    await ownConn(page, baseURL);
+    await page.context().addCookies([{name: 'stub-conn-board', value: mode, url: baseURL!}]);
+}
+
+test("an HB-RF-ETH's module in no role has a card, is offered in both dropdowns and can be chosen", async ({page, baseURL}) => {
+    await withBoard(page, baseURL, 'detected');
+    const puts: string[] = [];
+    page.on('request', (r) => {
+        if (r.method() === 'PUT' && r.url().endsWith('/radio/connections')) puts.push(r.postData() ?? '');
+    });
+    await page.goto('/radio');
+    const card = page.locator('[data-module-unused="MEQ9000005"]');
+    await expect(card.locator('.ol-card-title')).toHaveText('HM-MOD-RPI-PCB');
+    await expect(card.locator('.ol-card-sub')).toHaveText('Not used');
+    await expect(card.locator('[data-module-via]')).toHaveText('HB-RF-ETH@192.0.2.50');
+    await expect(card).toContainText('MEQ9000005');
+    await expect(card).toContainText('3014F711A061A70000000A05');
+    await expect(card.locator('[data-module-unused-why]')).toHaveText('No interface process uses this module. It can be chosen for HmIP-RF or BidCos-RF under Connections.');
+    // the stick's cards keep their place, and nothing says a board is on its way
+    await expect(page.locator('#ol-module-BidCos-RF [data-module-device]')).toHaveText('HMIP-RFUSB');
+    await expect(page.locator('[data-notice="hb-rf-eth-pending"]')).toHaveCount(0);
+    // both dropdowns offer it beside the stick: HmIP through multimacd only (an HM-MOD-RPI-PCB)
+    await expect(page.getByLabel('Module for HmIP-RF').locator('option')).toHaveText(['Automatic', 'HMIP-RFUSB · 0000000A02 · /dev/raw-uart', 'HMIP-RFUSB · 0000000A02 · /dev/mmd_hmip through multimacd on /dev/raw-uart', 'HM-MOD-RPI-PCB · MEQ9000005 · /dev/mmd_hmip through multimacd on /dev/raw-uart1']);
+    await expect(page.getByLabel('Module for BidCos-RF').locator('option')).toHaveText(['Automatic', 'HMIP-RFUSB · 0000000A02 · /dev/mmd_bidcos through multimacd on /dev/raw-uart', 'HM-MOD-RPI-PCB · MEQ9000005 · /dev/mmd_bidcos through multimacd on /dev/raw-uart1', 'No local radio (LAN gateways only)']);
+    // choosing it: the preview names it, the change carries it
+    await page.getByLabel('Module for HmIP-RF').selectOption('MEQ9000005|multimacd');
+    await page.getByLabel('Module for BidCos-RF').selectOption('MEQ9000005');
+    await page.getByRole('button', {name: 'Apply changes'}).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toContainText('HmIP-RF: HM-MOD-RPI-PCB · MEQ9000005 · /dev/mmd_hmip through multimacd on /dev/raw-uart1');
+    await expect(dialog).toContainText('BidCos-RF: HM-MOD-RPI-PCB · MEQ9000005 · /dev/raw-uart1');
+    await expect(dialog).toContainText('hmipserver: HM-MOD-RPI-PCB MEQ9000005, shared with BidCos-RF through multimacd');
+    await expect(dialog).toContainText('multimacd: runs on /dev/raw-uart1');
+    await dialog.getByRole('button', {name: 'Change'}).click();
+    await expect(dialog).toBeHidden();
+    expect(puts).toHaveLength(1);
+    expect(JSON.parse(puts[0]!)).toEqual({hmip: 'MEQ9000005', hmip_path: 'multimacd', bidcos: 'MEQ9000005', confirm: false});
+    await expect(page.locator('[data-process="hmipserver"] .conn-now')).toHaveText('Chosen: HM-MOD-RPI-PCB MEQ9000005, shared with BidCos-RF through multimacd');
+    await expect(page.locator('[data-process="multimacd"] .conn-mmd-uses')).toHaveText('connected to /dev/raw-uart1 · HM-MOD-RPI-PCB MEQ9000005');
+    // in both roles now: no "not used" card for it
+    await expect(card).toHaveCount(0);
+});
+
+test('a board just added: the page says it is on its way, reads again, and shows its module once the hotplug attached it', async ({page, baseURL}) => {
+    await withBoard(page, baseURL, 'arriving');
+    await page.goto('/radio');
+    const notice = page.locator('[data-notice="hb-rf-eth-pending"]');
+    await expect(notice).toHaveAttribute('data-board-address', '192.0.2.50');
+    await expect(notice).toContainText('The HB-RF-ETH at 192.0.2.50 is configured but does not answer yet. The system tries it again by itself; its module appears here once the board answers.');
+    await expect(notice.locator('a')).toHaveText('LAN devices');
+    await expect(page.locator('[data-module-unused]')).toHaveCount(0);
+    // the second read: the kernel has the board, its module is being probed - no Try now for that
+    await expect(notice).toContainText('The HB-RF-ETH at 192.0.2.50 is connected; its radio module is being detected.', {timeout: 10_000});
+    await expect(notice.locator('[data-action="try-board"]')).toHaveCount(0);
+    // the third: the module is in the detection - its card, its entries, the notice gone
+    await expect(page.locator('[data-module-unused="MEQ9000005"]')).toBeVisible({timeout: 10_000});
+    await expect(notice).toHaveCount(0);
+    await expect(page.getByLabel('Module for HmIP-RF').locator('option')).toHaveCount(4);
+    await expect(page.getByLabel('Module for BidCos-RF').locator('option', {hasText: 'MEQ9000005'})).toHaveCount(1);
+});
+
+test('a board that does not answer: the notice says the system keeps trying, and Try now asks at once', async ({page, baseURL}) => {
+    await withBoard(page, baseURL, 'pending');
+    const puts: string[] = [];
+    page.on('request', (r) => {
+        if (r.method() === 'PUT' && r.url().endsWith('/radio/hb-rf-eth')) puts.push(r.postData() ?? '');
+    });
+    await page.goto('/radio');
+    const notice = page.locator('[data-notice="hb-rf-eth-pending"]');
+    await expect(notice).toContainText('The HB-RF-ETH at 192.0.2.60 is configured but does not answer yet.');
+    await expect(notice.locator('a')).toHaveAttribute('href', '/system/lan-devices#hb-rf-eth');
+    await notice.locator('[data-action="try-board"]').click();
+    await expect.poll(() => puts.length).toBe(1);
+    expect(JSON.parse(puts[0]!)).toEqual({address: '192.0.2.60'});
+    // still pending: the stick's cards alone, the dropdowns as before
+    await expect(page.locator('[data-module-unused]')).toHaveCount(0);
+    await expect(page.getByLabel('Module for HmIP-RF').locator('option')).toHaveCount(3);
+});
+
+test('a user sees the pending board without Try now', async ({page, baseURL}) => {
+    await withBoard(page, baseURL, 'pending');
+    await page.route('**/api/auth/v1/state', (r) => r.fulfill({json: {setup_required: false, authenticated: true, user: 'monitor', role: 'user', must_change_password: false, sid: 'U1'}}));
+    await page.route('**/api/system/v1/radio/firmware', (r) => r.fulfill({status: 403, json: {error: 'forbidden', message: 'administrator role required'}}));
+    await page.goto('/radio');
+    const notice = page.locator('[data-notice="hb-rf-eth-pending"]');
+    await expect(notice).toContainText('does not answer yet');
+    await expect(notice.getByRole('button')).toHaveCount(0);
+});

@@ -51,6 +51,9 @@ type HBRFETHWatch struct {
 	Restart func(ctx context.Context) error
 	// Now is the clock; nil = time.Now.
 	Now func() time.Time
+	// Board says the serial of the board's module and the daemons the plan puts on it (openccu-lite
+	// B-273); nil = read from the radio stack's modules.json and plan.json under Root.
+	Board func(addr string) (serial string, daemons []string)
 
 	mu      sync.Mutex
 	tries   int
@@ -167,10 +170,28 @@ func (w *HBRFETHWatch) step(ctx context.Context, log *slog.Logger) {
 		w.connAddr, w.lostAt, w.backAt = "", time.Time{}, time.Time{}
 		hotplug = loaded && c
 	case c:
-		// back after a loss the kernel mended, or connected by a hotplug of the watch's (also one
-		// after a restart of occulited during a loss, B-218's power cycle): the daemons are asked
-		if (w.connAddr == addr && !w.lostAt.IsZero()) || w.tries > 0 {
+		switch {
+		case w.connAddr == addr && !w.lostAt.IsZero():
+			// back after a loss the kernel mended, or the hotplug connected afresh after Grace: the
+			// daemons are asked
 			log.Info("radio: the kernel has the HB-RF-ETH back; the daemons on it are asked shortly", "address", addr, "lost_for", now.Sub(w.lostAt).Round(time.Second))
+			w.backAt, w.checkErrs = now, 0
+		case w.connAddr != addr:
+			// openccu-lite B-273: the first connect at this address - after a Kick (the address set
+			// on the page), or after a restart of occulited while the board was away (B-218's power
+			// cycle), which the watch cannot tell apart. There was no loss to measure; the daemons
+			// are asked only when the plan puts one on this board - a board nothing uses is only
+			// said, and offered on the Interfaces page (B-272).
+			serial, daemons := w.board(addr)
+			if len(daemons) == 0 {
+				log.Info("radio: the HB-RF-ETH is connected", "address", addr, "serial", serial)
+			} else {
+				log.Info("radio: the HB-RF-ETH is connected; the daemons on it are asked shortly", "address", addr, "serial", serial, "daemons", strings.Join(daemons, ","))
+				w.backAt, w.checkErrs = now, 0
+			}
+		case w.tries > 0:
+			// the kernel module was gone and the hotplug loaded it again: no loss the watch timed
+			log.Info("radio: the HB-RF-ETH is connected again; the daemons on it are asked shortly", "address", addr)
 			w.backAt, w.checkErrs = now, 0
 		}
 		w.connAddr, w.lostAt, w.tries = addr, time.Time{}, 0
@@ -228,6 +249,33 @@ func (w *HBRFETHWatch) step(ctx context.Context, log *slog.Logger) {
 	if n == 1 || err != nil {
 		log.Info("radio: HB-RF-ETH not connected - the radio hotplug tries it", "address", addr, "err", err)
 	}
+}
+
+// board is Board, or the module's serial from modules.json and the daemons from plan.json: those
+// OnHBRFETH names when a role it names sits on this address. No plan: nothing uses the board.
+func (w *HBRFETHWatch) board(addr string) (serial string, daemons []string) {
+	if w.Board != nil {
+		return w.Board(addr)
+	}
+	dt := "HB-RF-ETH@" + addr
+	var det Detection
+	if readJSONFile(shadowPath(w.Root, "modules.json"), &det) == nil {
+		for _, m := range det.Modules {
+			if m.DeviceType == dt {
+				serial = m.Serial
+				break
+			}
+		}
+	}
+	p, err := LoadPlan(w.Root)
+	if err != nil {
+		return serial, nil
+	}
+	hmrf, hmip, ds := p.OnHBRFETH()
+	if (hmrf != nil && hmrf.DeviceType == dt) || (hmip != nil && hmip.DeviceType == dt) {
+		daemons = ds
+	}
+	return serial, daemons
 }
 
 // check asks the daemons on the board, once the kernel has had it back for Verify.

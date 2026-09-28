@@ -136,7 +136,7 @@ func (s LGWStep) waitForNetwork(ctx context.Context) error {
 			time.Sleep(2 * time.Second)
 		}
 	}
-	return errors.New("the default gateway did not answer: no network to reach the LAN gateways")
+	return errors.New("no network: the default gateway did not answer")
 }
 
 // LGWFirmware is S58LGWFirmwareUpdate: the RF gateways' coprocessor and firmware and the wired
@@ -151,8 +151,13 @@ func LGWFirmware(ctx context.Context, s LGWStep, logf func(string, ...any)) erro
 		logf("lgw: no LAN gateway in rfd.conf or hs485d.conf")
 		return nil
 	}
+	// no network at all (no default route, or its gateway silent after five tries) is not an update
+	// that failed either: nothing can reach a LAN gateway, so the check is skipped with a journal
+	// line and runs again at the next start, as for a silent gateway (openccu-lite B-229, the
+	// maintainer's decision of 2026-09-28; before, the unit failed on a box booted without a link)
 	if err := s.waitForNetwork(ctx); err != nil {
-		return err
+		logf("lgw: %v: the firmware check is skipped until the next start", err)
+		return nil
 	}
 	// a gateway that does not answer is not an update that failed: the check is skipped, with the
 	// addresses in the journal, and runs again at the next boot (the unit stays a success)

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"os"
 	"path/filepath"
@@ -225,6 +226,14 @@ func (c Client) callWith(ctx context.Context, req request, f *os.File) (response
 	return res, nil
 }
 
+// notExistError is the helper's answer for a file that is not there, with its own text: it is
+// fs.ErrNotExist to errors.Is, so a caller that reads through the helper can tell a missing file
+// from one it could not read (openccu-lite B-271).
+type notExistError string
+
+func (e notExistError) Error() string        { return string(e) }
+func (e notExistError) Is(target error) bool { return target == fs.ErrNotExist }
+
 // err turns a helper answer into the client's error: a refusal keeps ErrRefused and a missing
 // program ErrNotAvailable, so callers can tell "not allowed" and "not here" from "it broke".
 func (r response) err() error {
@@ -236,6 +245,9 @@ func (r response) err() error {
 	}
 	if strings.HasPrefix(r.Error, "not-available:") {
 		return fmt.Errorf("%w: %s", ErrNotAvailable, strings.TrimPrefix(r.Error, "not-available: "))
+	}
+	if strings.HasSuffix(r.Error, ": "+syscall.ENOENT.Error()) {
+		return notExistError(r.Error)
 	}
 	return errors.New(r.Error)
 }

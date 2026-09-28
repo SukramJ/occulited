@@ -2,6 +2,8 @@ package priv
 
 import (
 	"context"
+	"errors"
+	"io/fs"
 	"net"
 	"os"
 	"path/filepath"
@@ -139,5 +141,45 @@ func TestServerRefusesNearMissPaths(t *testing.T) {
 	}
 	if err := c.Remove(j("usr/local/etc/monit-mosquitto.cfg")); err != nil {
 		t.Errorf("remove monit-mosquitto.cfg: %v", err)
+	}
+}
+
+// B-271: a file the helper reads for the daemon and that is not there is fs.ErrNotExist to the
+// caller, with the helper's text; a file that is there is read, and any other failure is not
+// "missing" - the caller that rewrites a file tells the two apart.
+func TestClientReadMissingIsNotExist(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "etc/config/crRFD")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sock := filepath.Join(t.TempDir(), "h.sock")
+	l, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	srv := &Server{Policy: DefaultPolicy(root, "/usr/local/etc/occulite")}
+	go func() { _ = srv.Serve(ctx, l) }()
+	c := Client{Socket: sock}
+	p := filepath.Join(dir, "hmip_user.conf")
+	_, err = c.ReadFile(p)
+	if !errors.Is(err, fs.ErrNotExist) || !strings.Contains(err.Error(), "hmip_user.conf") {
+		t.Fatalf("missing: %v", err)
+	}
+	if err := os.WriteFile(p, []byte("KeyServer.Mode=LOCAL\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := c.ReadFile(p); err != nil || string(b) != "KeyServer.Mode=LOCAL\n" {
+		t.Fatalf("read: %q %v", b, err)
+	}
+	if _, err := c.ReadFile(filepath.Join(dir, "other.conf")); err == nil || errors.Is(err, fs.ErrNotExist) || !errors.Is(err, ErrRefused) {
+		t.Fatalf("a refusal is not a missing file: %v", err)
+	}
+	for _, e := range []response{{Error: "read x: is a directory"}, {Error: "privilege helper: no such file or directory in the policy"}} {
+		if errors.Is(e.err(), fs.ErrNotExist) {
+			t.Errorf("%q is not a missing file", e.Error)
+		}
 	}
 }

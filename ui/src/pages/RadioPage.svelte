@@ -9,7 +9,7 @@
     import Loading from '../lib/Loading.svelte';
     import Disclosure from '../lib/Disclosure.svelte';
     import SystemTitle from '../lib/SystemTitle.svelte';
-    import RadioConnections from '../lib/RadioConnections.svelte';
+    import RadioConnections, {type ConnBoard, type ConnModule} from '../lib/RadioConnections.svelte';
     import SectionHead from '../lib/SectionHead.svelte';
     import Subscribers from '../lib/Subscribers.svelte';
     import Icon from '../lib/Icon.svelte';
@@ -30,6 +30,30 @@
     let notice = $state('');
     async function reloadRadio() {
         radio = await api.get<Radio & Extra>('/api/system/v1/radio');
+    }
+    // openccu-lite B-272: the cards above come from /var/hm_mode, so only a module in a role had one -
+    // a module on an HB-RF-ETH added while both processes are pinned to a stick appeared nowhere. The
+    // connections' status lists every detected module with its roles: the ones in none get a card of
+    // their own, and a configured board whose module is not detected yet is said, with Try now.
+    let conn = $state<{modules?: ConnModule[]; hb_rf_eth?: ConnBoard} | null>(null);
+    let connView = $state<RadioConnections | undefined>(undefined);
+    const unusedModules = $derived((conn?.modules ?? []).filter((m) => m.roles.length === 0));
+    const boardPending = $derived(conn?.hb_rf_eth && !conn.hb_rf_eth.detected ? conn.hb_rf_eth : null);
+    let boardBusy = $state(false);
+    let boardErr = $state('');
+    async function tryBoard() {
+        if (!boardPending) return;
+        boardBusy = true;
+        boardErr = '';
+        try {
+            // the LAN devices page's PUT with the same address: the system tries the board at once
+            await api.put('/api/system/v1/radio/hb-rf-eth', {address: boardPending.address});
+            connView?.reload();
+        } catch (e) {
+            boardErr = (e as Error).message;
+        } finally {
+            boardBusy = false;
+        }
     }
     // the maintainer, 2026-09-20: the radio firmware section is the Updates page's; the module
     // cards here still say what a module runs and whether a newer file waits there
@@ -246,7 +270,25 @@
     {#each (fw?.modules ?? []).filter((x) => x.verdict === 'unusable') as u (u.device_node)}
         <div class="ol-notice warn" data-module-unusable={u.device_node}>{t('The radio module {device} at {node} does not answer with a usable firmware: the system has no radio on it. Flash it in the radio firmware section to use it.', {device: u.device, node: u.device_node})} <a href="/system/updates#radio-firmware" use:link>{t('Radio firmware')}</a></div>
     {/each}
-    {#if radio.modules.length === 0}
+    {#if boardPending}
+        <!-- openccu-lite B-272: an HB-RF-ETH configured under LAN devices whose module is not in the
+             detection yet - just added (the radio hotplug attaches it in seconds) or not answering
+             (the system tries it again by itself); the connections' status is read again meanwhile -->
+        <div class="ol-notice" data-notice="hb-rf-eth-pending" data-board-address={boardPending.address}>
+            <span class="ol-dot starting"></span>
+            {#if boardPending.connected}
+                {t('The HB-RF-ETH at {address} is connected; its radio module is being detected.', {address: boardPending.address})}
+            {:else}
+                {t('The HB-RF-ETH at {address} is configured but does not answer yet. The system tries it again by itself; its module appears here once the board answers.', {address: boardPending.address})}
+            {/if}
+            <a href="/system/lan-devices#hb-rf-eth" use:link>{t('LAN devices')}</a>
+            {#if admin && !boardPending.connected}
+                <button type="button" class="hmm-button" onclick={tryBoard} disabled={boardBusy} data-action="try-board">{t('Try now')}</button>
+            {/if}
+            {#if boardErr}<div class="ol-warn">{boardErr}</div>{/if}
+        </div>
+    {/if}
+    {#if radio.modules.length === 0 && unusedModules.length === 0}
         {#if detecting(health?.units)}
             <!-- task 94: the detection writes /var/hm_mode seconds after the web UI is up (22 s on a Pi 4
                  with an HmIP-RFUSB): until then the box knows no module, and that is not "none" -->
@@ -289,13 +331,41 @@
                     </dl>
                 </div>
             {/each}
+            <!-- openccu-lite B-272: the detected modules no interface process uses - a module on an
+                 HB-RF-ETH added while both processes are pinned to a stick, a second stick -->
+            {#each unusedModules as m (m.serial || m.node)}
+                <div class="ol-card" id={`ol-module-${m.serial || m.node}`} data-module-unused={m.serial || m.node}>
+                    <div class="ol-card-head">
+                        <span class="ol-card-icon"><Icon name="radio" size={14} /></span>
+                        <div class="ol-card-titles"><div class="ol-card-title">{m.hardware || m.device_type}</div><div class="ol-card-sub">{t('Not used')}</div></div>
+                    </div>
+                    <dl class="ol-kv" style="margin-top:10px">
+                        {#if m.hardware}<dt>{t('Device')}</dt><dd data-module-device>{m.hardware}</dd>{/if}
+                        {#if carrierOf(m.device_type)}
+                            {@const c = carrierOf(m.device_type)!}
+                            <dt>{t('Via')}</dt><dd class="hmm-mono ol-module-via" data-module-via title={c.full}>{c.via}</dd>
+                        {/if}
+                        {#if m.serial}<dt>{t('Serial')}</dt><dd class="hmm-mono">{m.serial}</dd>{/if}
+                        {#if m.sgtin}<dt>SGTIN</dt><dd class="hmm-mono">{m.sgtin}</dd>{/if}
+                        {#if m.version}<dt>{t('Firmware')}</dt><dd>{m.version}</dd>{/if}
+                        {#if m.node}<dt>{t('Device node')}</dt><dd class="hmm-mono">{m.node}</dd>{/if}
+                    </dl>
+                    <p class="ol-muted" style="margin:10px 0 0" data-module-unused-why>
+                        {#if m.probe === 'ok'}
+                            {t('No interface process uses this module. It can be chosen for HmIP-RF or BidCos-RF under Connections.')}
+                        {:else}
+                            {t('The module did not answer the detection ({why}).', {why: m.detail || m.probe})}
+                        {/if}
+                    </p>
+                </div>
+            {/each}
         </div>
     {/if}
     <!-- openccu-lite task 222: the BidCoS gateways, the HmIP access points and the LAN devices are a
          page of their own; the way there stands where they were -->
     <p class="ol-muted if-lan" data-lan-link><a href="/system/lan-devices" use:link>{t('BidCoS gateways, the HB-RF-ETH, HmIP access points and other LAN devices: LAN devices')}</a></p>
     <!-- task 129 phase 3: which module each interface process uses -->
-    <RadioConnections {admin} order={(radio.modules ?? []).map((m) => m.protocol)} onchanged={() => void reloadRadio().catch(() => undefined)} />
+    <RadioConnections bind:this={connView} {admin} order={(radio.modules ?? []).map((m) => m.protocol)} onchanged={() => void reloadRadio().catch(() => undefined)} onstatus={(s) => (conn = s)} />
     <!-- the maintainer, 2026-09-19: the clients on this system after the connections; the ones on
          the network are the Remote access page's -->
     <Subscribers {admin} scope="internal" feed={health?.feed} />

@@ -1,3 +1,11 @@
+<script module lang="ts">
+    // openccu-lite B-272: the status names every detected module with its roles, and the HB-RF-ETH
+    // configured under LAN devices - the Interfaces page's cards for the modules no process uses,
+    // and its notice while a board's module is not detected yet
+    export interface ConnModule { serial: string; hardware: string; node?: string; device_type?: string; sgtin?: string; version?: string; probe: string; detail?: string; roles: string[] }
+    export interface ConnBoard { address: string; connected: boolean; detected: boolean; serial?: string }
+</script>
+
 <script lang="ts">
     // Task 129 phase 3 (D-81, D-82, D-98): which local module each interface process uses. Each
     // process has at most one; LAN gateways (rfd), HAPs and DRAPs (hmipserver's routers) can be
@@ -28,14 +36,15 @@
     }
     interface Change { choices: Choices; previous: Choices; started: string; finished?: string; ok: boolean; error?: string; lines: string[] }
     interface Choices { hmip: string; bidcos: string; hmip_path?: string }
-    interface Status { available: boolean; choices: Choices; options: {hmip: Option[]; bidcos: Option[]}; plan?: Plan; mode?: string; hmip_fatal?: {code: string; line: string; adapter?: string; cause?: string}; running: Change | null; last: Change | null }
+    interface Status { available: boolean; choices: Choices; options: {hmip: Option[]; bidcos: Option[]}; plan?: Plan; mode?: string; hmip_fatal?: {code: string; line: string; adapter?: string; cause?: string}; modules?: ConnModule[]; hb_rf_eth?: ConnBoard; running: Change | null; last: Change | null }
     interface Preview { plan: Plan; changed: boolean; restarts: string[]; bidcos_lost: boolean; devices: {address: string; type: string}[]; devices_error?: string }
 
     // onready: called once, after the first load (answered or not) - the page scrolls to an anchor
     // only then, since this section appearing above it would push the anchor out of view
     // order: the protocols of the module cards above, in their order - the two panels follow it, so
     // the BidCos-RF panel stands under the BidCos-RF module; BidCos-RF first when it is not known
-    let {admin = false, order = [], onchanged, onready}: {admin?: boolean; order?: string[]; onchanged?: () => void; onready?: () => void} = $props();
+    // onstatus (B-272): every status read, for the page's module cards and its HB-RF-ETH notice
+    let {admin = false, order = [], onchanged, onready, onstatus}: {admin?: boolean; order?: string[]; onchanged?: () => void; onready?: () => void; onstatus?: (s: {modules?: ConnModule[]; hb_rf_eth?: ConnBoard}) => void} = $props();
     const hmipFirst = $derived(order.includes('HmIP-RF') && (!order.includes('BidCos-RF') || order.indexOf('HmIP-RF') < order.indexOf('BidCos-RF')));
     let readied = false;
 
@@ -107,6 +116,7 @@
             pickHmIP = hmipValue(st.choices);
             pickBidCos = st.choices.bidcos;
         }
+        onstatus?.(st);
         clearTimeout(poll);
         if (st.running) {
             wasRunning = true;
@@ -117,7 +127,24 @@
             pickHmIP = hmipValue(st.choices);
             pickBidCos = st.choices.bidcos;
             onchanged?.();
+        } else if (st.hb_rf_eth && !st.hb_rf_eth.detected) {
+            // B-272: a board added under LAN devices is attached and probed by the radio hotplug some
+            // ten seconds later, and a board that does not answer is tried again by the system: the
+            // status is read again while the page shows, until the board's module is in the detection
+            boardPending = true;
+            pollWhileShown(5000);
+        } else if (boardPending) {
+            boardPending = false;
+            onchanged?.();
         }
+    }
+    let boardPending = false;
+    function pollWhileShown(ms: number) {
+        poll = setTimeout(() => (life.active ? void load() : pollWhileShown(ms)), ms);
+    }
+    /** the page's Try now for a pending board (B-272): read the status again at once */
+    export function reload() {
+        void load();
     }
 
     const dirty = $derived(!!st && (pickHmIP !== hmipValue(st.choices) || pickBidCos !== st.choices.bidcos));
