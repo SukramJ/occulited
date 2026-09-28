@@ -3,8 +3,10 @@ package hmgroups
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hobbyquaker/occulited/internal/hmgroups/hmgroupstest"
 )
@@ -39,7 +41,7 @@ func TestRoundTrip(t *testing.T) {
 		t.Fatalf("list: %v %+v", err, lv)
 	}
 	ev, err := c.Create(ctx)
-	if err != nil || !ev.IsNew || ev.ID != 1 || len(ev.Types) != 2 || len(ev.Assignable) != 2 || ev.Assigned == nil || ev.Leftover == nil {
+	if err != nil || !ev.IsNew || ev.ID != 0 || len(ev.Types) != 2 || len(ev.Assignable) != 2 || ev.Assigned == nil || ev.Leftover == nil {
 		t.Fatalf("create: %v %+v", err, ev)
 	}
 	assignable, leftover, err := c.SuitableMembers(ctx, "HomeMatic.heating")
@@ -57,14 +59,19 @@ func TestRoundTrip(t *testing.T) {
 	if !strings.Contains(f.Calls[len(f.Calls)-1], `"groupName":"Bad%20%E4%F6%FC/1"`) {
 		t.Fatalf("save call: %s", f.Calls[len(f.Calls)-1])
 	}
-	ev, err = c.Edit(ctx, 1)
-	if err != nil || ev.IsNew || ev.Name != "Bad äöü/1" || len(ev.Assigned) != 1 || len(ev.Assignable) != 1 {
+	// the ids went as a string holding the JSON list, as hmipserver reads them (B-269)
+	if !strings.Contains(f.Calls[len(f.Calls)-1], `"assignedDevicesIds":"[\"KEQ9000003\"]"`) {
+		t.Fatalf("save's member ids: %s", f.Calls[len(f.Calls)-1])
+	}
+	ev, err = c.Edit(ctx, 1, "Bad äöü/1 INT0000001")
+	if err != nil || ev.IsNew || ev.Name != "Bad äöü/1" || len(ev.Assigned) != 1 || len(ev.Assignable) != 1 || ev.GroupDeviceName != "Bad äöü/1 INT0000001" {
 		t.Fatalf("edit: %v %+v", err, ev)
 	}
-	// the second device fits a second group; after that it is nobody's assignable
+	// the second device - an HmIP channel address, whose colon hmipserver could not read from an
+	// array - fits a second group; after that it is nobody's assignable
 	res, err = c.Save(ctx, SaveBody{ID: 0, Name: "Two", TypeID: "HomeMatic.heating", MemberIDs: []string{"00010000000A10:1"}, IsNew: true})
-	if err != nil || res.ID != 2 {
-		t.Fatalf("save 2: %v %+v", err, res)
+	if err != nil || res.ID != 2 || len(f.Groups[2].Members) != 1 || f.Groups[2].Members[0] != "00010000000A10:1" {
+		t.Fatalf("save 2: %v %+v %+v", err, res, f.Groups[2])
 	}
 	assignable, leftover, err = c.SuitableMembers(ctx, "HomeMatic.heating")
 	if err != nil || len(assignable) != 0 || len(leftover) != 2 {
@@ -89,9 +96,41 @@ func TestRoundTrip(t *testing.T) {
 	if _, err := c.Delete(ctx, 1); err == nil || !strings.Contains(err.Error(), "code 1") {
 		t.Fatalf("delete again: %v", err)
 	}
-	if _, err := c.Edit(ctx, 7); err == nil || !strings.Contains(err.Error(), "refused") {
+	if _, err := c.Edit(ctx, 7, ""); err == nil || !strings.Contains(err.Error(), "refused") {
 		t.Fatalf("edit unknown: %v", err)
 	}
+}
+
+// B-269: a connection per command - hmipserver closes idle keep-alive connections, and a POST on
+// one it has just closed fails with EOF
+func TestNoKeepAlive(t *testing.T) {
+	f, c := rig(t)
+	ctx := context.Background()
+	for i := 0; i < 3; i++ {
+		if _, err := c.List(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := f.Connections(); n != 3 {
+		t.Fatalf("%d connections for 3 commands", n)
+	}
+}
+
+// B-269: a save that dies in hmipserver's worker is never answered; the client gives up after its
+// timeout, and the group is stored without its members
+func TestSaveNoAnswer(t *testing.T) {
+	f, c := rig(t)
+	c.HTTP = &http.Client{Timeout: 200 * time.Millisecond, Transport: &http.Transport{DisableKeepAlives: true}}
+	f.Set(func(f *hmgroupstest.Fake) { f.SaveDies = 1 })
+	_, err := c.Save(context.Background(), SaveBody{Name: "X", TypeID: "hmip.heating.group", MemberIDs: []string{"00010000000A10:1"}, IsNew: true})
+	if err == nil || !strings.Contains(err.Error(), "Timeout") {
+		t.Fatalf("save: %v", err)
+	}
+	f.Set(func(f *hmgroupstest.Fake) {
+		if g := f.Groups[1]; g == nil || len(g.Members) != 0 {
+			t.Errorf("the fake stores the group first: %+v", g)
+		}
+	})
 }
 
 func TestRefusals(t *testing.T) {

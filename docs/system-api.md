@@ -663,10 +663,29 @@ whose configuration is still pending (hmipserver's `configureDevices`); a client
 | `GET /groups` **`system:read`** | `{groups: [{id, name, type, type_label, device, ref}], devices_to_configure: [Member]}` — `device` is the group device's address (`INT0000001`), `ref` its metadata ref (`VirtualDevices.INT0000001`). A `Member` is `{id, serial, type}`. |
 | `GET /groups/types` **`system:read`** | `{types: [{id, label, assignable: [Member], leftover: [Member]}]}` — the types the editor offers (`HomeMatic.heating` "Heating_Control", `hmip.heating.group` "HmIP-Heizungssteuerung"), each with the devices a new group of it could take now and the ones that fit no group any more. |
 | `GET /groups/{id}` **`system:read`** | `{id, name, type, device, ref, device_name, forbid_single_operation, members: [Member], assignable: [Member], leftover: [Member], types: [{id, label}]}`. `404 unknown-group` for an id the list does not have (hmipserver answers nothing at all for one; the API asks the list first). |
-| `POST /groups` **`system:write`** | `{name, type, members: [id], forbid_single_operation?}` → the group as `GET /groups/{id}` answers it plus `devices_to_configure`. hmipserver's `create` then `save`; the name is 1–64 characters on one line (trimmed), `type` one of `GET /groups/types`, `members` hmipserver's ids. `422 invalid` names the field. |
-| `PUT /groups/{id}` **`system:write`** | `{name?, members?, forbid_single_operation?}` — the name and the members **as a whole** (adding and removing is one save with the new list, as the WebUI did it); a field left out keeps its value. Answers as `POST`. A member that left loses `inHeatingGroup`; the group device's object is renamed. `404 unknown-group`. |
-| `DELETE /groups/{id}` **`system:write`** | `{deleted, former_members: [Member]}`; the former members' `inHeatingGroup` goes false, the group device's object is deleted. `404 unknown-group`. |
+| `POST /groups` **`system:write`** | `{name, type, members: [id], forbid_single_operation?}` → the group as `GET /groups/{id}` answers it plus `devices_to_configure`. hmipserver's `create` then `save`; the name is 1–64 characters on one line (trimmed), `type` one of `GET /groups/types`, `members` hmipserver's ids. `422 invalid` names the field. A create that fails leaves no group behind (below). |
+| `PUT /groups/{id}` **`system:write`** | `{name?, members?, forbid_single_operation?}` — the name and the members **as a whole** (adding and removing is one save with the new list, as the WebUI did it); a field left out keeps its value. Answers as `POST`. A member that left loses `inHeatingGroup`; the group device's object is renamed. `404 unknown-group`. A change that fails half-way is undone (below). |
+| `DELETE /groups/{id}` **`system:write`** | `{deleted, former_members: [Member]}` — `deleted` is the group's id (a number, `{"deleted": 6, …}`); the former members' `inHeatingGroup` goes false, the group device's object is deleted. `404 unknown-group`. |
 | `POST /api/homematic.cgi` **open, loopback only** | hmipserver's session check, `{"method":"Event.poll","params":{"_session_id_":"<sid>"}}`: occulited's own sid → `{"version":"1.1","result":[],"error":null}`, anything else → `{"version":"1.1","result":null,"error":{"name":"JSONRPCError","code":400,"message":"access denied: …"}}`, the CCU's two answers. From anywhere but `127.0.0.1` (the connection's address, or on a connection from the loopback the **last** element of `X-Forwarded-For`, the one lighttpd appends — a client-sent element before it never counts, B-230) it is `404`. Not a CCU JSON-API. |
+
+**When a save fails** (B-269): hmipserver's `save` stores the group — a new one with its id, a changed one with its
+name — before it takes the members, and a save that dies in between is never answered. So after a save that failed
+or went unanswered, the API reads the group back:
+- **create:** a new group of that name that holds all the members asked for is the success the answer missed (`200`
+  as usual); one that does not is deleted again, and the answer is `502 hmipserver` saying so. When that delete
+  fails too, the message names the group that is left.
+- **change:** a group that holds the whole change is the success; one that holds a part of it is saved back to its
+  old name, members and "operate as group only" (`502`, "its old state was restored", or "restoring it failed");
+  an unchanged one is `502` "the group is unchanged".
+
+The member ids travel to hmipserver as a string holding a JSON list, the way the WebUI's library sent them: hmipserver
+reads the field as text and parses it again, and a plain array reached it as `[a, b]` without quotes, which breaks
+at an HmIP channel address's colon — the cause of B-269's `502` after 30 s with an empty group left behind. Each
+command has 30 s (hmipserver answers a save in well under a second; an XML-RPC `init` on `VirtualDevices` can hold
+its event loop for 10 s) and its own connection (hmipserver drops idle keep-alive connections, and a command sent on
+one it has just dropped failed with `EOF`). Reading a group passes hmipserver the group device's name
+`"<name> INT000000N"`, since its `edit` stores the name it gets; a new group gets that name with its real id when
+it is read back after the save.
 
 The store: hmipserver writes `/etc/config/groups.gson` (HMServer.conf's `groupStorageFilePath`) in place, and its
 unit is `ProtectSystem=strict` with the file — not the directory — in `ReadWritePaths`; `occulited radio prep

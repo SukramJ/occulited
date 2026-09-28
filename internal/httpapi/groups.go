@@ -141,10 +141,14 @@ func (a *SystemAPI) groupsGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, ok := groupID(w, r)
-	if !ok || !a.groupKnown(w, r, id) {
+	if !ok {
 		return
 	}
-	ev, err := a.Groups.Client.Edit(r.Context(), id)
+	g, ok := a.groupKnown(w, r, id)
+	if !ok {
+		return
+	}
+	ev, err := a.Groups.Client.Edit(r.Context(), id, deviceName(g.Name, id))
 	if err != nil {
 		groupsErr(w, err)
 		return
@@ -189,6 +193,11 @@ func (b groupBody) check(needType bool) error {
 
 // POST /groups {name, type, members}: a new group - the editor's create, then its save with the
 // members; the answer names the new group and the devices whose configuration is pending.
+//
+// hmipserver's save stores the group before it takes the members (B-269): a save that fails can
+// leave a group behind. The API then reads the list again: a new group of that name with all the
+// members asked for is the success the answer missed; one without them is deleted, so a failed
+// create leaves nothing, or the error names the group that could not be removed.
 func (a *SystemAPI) groupsCreate(w http.ResponseWriter, r *http.Request) {
 	if a.groupsUnavailable(w) {
 		return
@@ -203,6 +212,15 @@ func (a *SystemAPI) groupsCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
+	lv, err := a.Groups.Client.List(ctx)
+	if err != nil {
+		groupsErr(w, err)
+		return
+	}
+	existed := map[string]bool{}
+	for _, g := range lv.Groups {
+		existed[g.ID] = true
+	}
 	ev, err := a.Groups.Client.Create(ctx)
 	if err != nil {
 		groupsErr(w, err)
@@ -217,17 +235,89 @@ func (a *SystemAPI) groupsCreate(w http.ResponseWriter, r *http.Request) {
 		forbid = *b.ForbidSingleOperation
 	}
 	name := strings.TrimSpace(b.Name)
-	res, err := a.Groups.Client.Save(ctx, hmgroups.SaveBody{ID: ev.ID, Name: name, TypeID: b.Type, ForbidSingle: forbid, MemberIDs: b.Members, IsNew: true, GroupDeviceName: name + " " + hmgroups.Serial(ev.ID)})
+	// the new group's id is hmipserver's to give (the editor's is 0): the device name is set
+	// with its real serial by the edit that reads the group back
+	res, err := a.Groups.Client.Save(ctx, hmgroups.SaveBody{ID: ev.ID, Name: name, TypeID: b.Type, ForbidSingle: forbid, MemberIDs: b.Members, IsNew: true, GroupDeviceName: name})
 	if err != nil {
-		groupsErr(w, err)
-		return
+		id, done := a.createFailed(w, r, existed, name, b.Members, err)
+		if !done {
+			return
+		}
+		res.ID = id
 	}
 	a.Groups.afterSave(ctx, res.ID, name, b.Members, nil)
-	a.groupsAnswer(w, r, res.ID)
+	a.groupsAnswer(w, r, res.ID, name)
 }
 
+// createFailed handles a save that did not answer as it should: done with the new group's id when
+// hmipserver did the whole create after all; otherwise the half-made group is deleted and the
+// error answered.
+func (a *SystemAPI) createFailed(w http.ResponseWriter, r *http.Request, existed map[string]bool, name string, want []string, cause error) (int, bool) {
+	ctx := context.WithoutCancel(r.Context())
+	log := a.Groups.log()
+	lv, err := a.Groups.Client.List(ctx)
+	if err != nil {
+		log.Warn("groups: a create failed, and the list to check what it left could not be read", "err", err, "cause", cause)
+		writeJSON(w, http.StatusBadGateway, apiError{Error: "hmipserver", Message: cause.Error() + "; whether a group was stored could not be read: " + err.Error()})
+		return 0, false
+	}
+	var left []int
+	for _, g := range lv.Groups {
+		if existed[g.ID] || g.Name != name {
+			continue
+		}
+		id, _ := strconv.Atoi(g.ID)
+		ev, err := a.Groups.Client.Edit(ctx, id, deviceName(name, id))
+		if err == nil && sameMembers(ev.Assigned, want) {
+			log.Warn("groups: the create's save did not answer, but the group was stored with its members", "group", id, "cause", cause)
+			return id, true
+		}
+		left = append(left, id)
+	}
+	if len(left) == 0 {
+		groupsErr(w, cause)
+		return 0, false
+	}
+	var kept []string
+	for _, id := range left {
+		if _, err := a.Groups.Client.Delete(ctx, id); err != nil {
+			log.Warn("groups: the half-made group could not be deleted", "group", id, "err", err)
+			kept = append(kept, strconv.Itoa(id))
+			continue
+		}
+		log.Warn("groups: a create failed after hmipserver had stored the group; it was deleted again", "group", id, "cause", cause)
+	}
+	msg := cause.Error() + "; hmipserver had stored the group without its members, and it was deleted again"
+	if len(kept) > 0 {
+		msg = cause.Error() + "; hmipserver stored the group without its members, and deleting it failed: group " + strings.Join(kept, ", ") + " is left - delete it"
+	}
+	writeJSON(w, http.StatusBadGateway, apiError{Error: "hmipserver", Message: msg})
+	return 0, false
+}
+
+// sameMembers says whether the group holds exactly the ids.
+func sameMembers(have []hmgroups.Member, want []string) bool {
+	if len(have) != len(want) {
+		return false
+	}
+	set := map[string]bool{}
+	for _, m := range have {
+		set[m.ID] = true
+	}
+	for _, id := range want {
+		if !set[id] {
+			return false
+		}
+	}
+	return true
+}
+
+// deviceName is the group device's name: "<group name> INT000000N", as the WebUI named it.
+func deviceName(name string, id int) string { return name + " " + hmgroups.Serial(id) }
+
 // PUT /groups/{id} {name, members}: the name and the members as a whole - adding and removing
-// members is one save with the new list, as the WebUI did it.
+// members is one save with the new list, as the WebUI did it. A save that fails is read back: the
+// change is kept when hmipserver made all of it, and undone with the old state when it made a part.
 func (a *SystemAPI) groupsUpdate(w http.ResponseWriter, r *http.Request) {
 	if a.groupsUnavailable(w) {
 		return
@@ -241,11 +331,12 @@ func (a *SystemAPI) groupsUpdate(w http.ResponseWriter, r *http.Request) {
 		badBody(w, err)
 		return
 	}
-	if !a.groupKnown(w, r, id) {
+	known, ok := a.groupKnown(w, r, id)
+	if !ok {
 		return
 	}
 	ctx := r.Context()
-	ev, err := a.Groups.Client.Edit(ctx, id)
+	ev, err := a.Groups.Client.Edit(ctx, id, deviceName(known.Name, id))
 	if err != nil {
 		groupsErr(w, err)
 		return
@@ -274,13 +365,49 @@ func (a *SystemAPI) groupsUpdate(w http.ResponseWriter, r *http.Request) {
 	for _, m := range ev.Assigned {
 		before = append(before, m.ID)
 	}
-	res, err := a.Groups.Client.Save(ctx, hmgroups.SaveBody{ID: ev.ID, Name: name, TypeID: b.Type, ForbidSingle: forbid, MemberIDs: b.Members, IsNew: false, GroupDeviceName: name + " " + hmgroups.Serial(ev.ID)})
+	res, err := a.Groups.Client.Save(ctx, hmgroups.SaveBody{ID: ev.ID, Name: name, TypeID: b.Type, ForbidSingle: forbid, MemberIDs: b.Members, IsNew: false, GroupDeviceName: deviceName(name, ev.ID)})
 	if err != nil {
-		groupsErr(w, err)
-		return
+		if !a.updateFailed(w, r, ev, name, forbid, b.Members, err) {
+			return
+		}
+		res.ID = ev.ID
 	}
 	a.Groups.afterSave(ctx, res.ID, name, b.Members, before)
-	a.groupsAnswer(w, r, res.ID)
+	a.groupsAnswer(w, r, res.ID, name)
+}
+
+// updateFailed reads a group back after a save that did not answer: true when hmipserver made
+// the whole change after all; otherwise the old state is saved again, and the error answered.
+func (a *SystemAPI) updateFailed(w http.ResponseWriter, r *http.Request, old hmgroups.EditView, name string, forbid bool, want []string, cause error) bool {
+	ctx := context.WithoutCancel(r.Context())
+	log := a.Groups.log()
+	now, err := a.Groups.Client.Edit(ctx, old.ID, deviceName(name, old.ID))
+	if err != nil {
+		log.Warn("groups: a change failed, and the group could not be read back", "group", old.ID, "err", err, "cause", cause)
+		writeJSON(w, http.StatusBadGateway, apiError{Error: "hmipserver", Message: cause.Error() + "; the group could not be read back: " + err.Error()})
+		return false
+	}
+	if now.Name == name && now.ForbidSingle == forbid && sameMembers(now.Assigned, want) {
+		log.Warn("groups: the change's save did not answer, but the group holds the change", "group", old.ID, "cause", cause)
+		return true
+	}
+	oldIDs := make([]string, 0, len(old.Assigned))
+	for _, m := range old.Assigned {
+		oldIDs = append(oldIDs, m.ID)
+	}
+	if now.Name == old.Name && now.ForbidSingle == old.ForbidSingle && sameMembers(now.Assigned, oldIDs) {
+		writeJSON(w, http.StatusBadGateway, apiError{Error: "hmipserver", Message: cause.Error() + "; the group is unchanged"})
+		return false
+	}
+	_, rerr := a.Groups.Client.Save(ctx, hmgroups.SaveBody{ID: old.ID, Name: old.Name, TypeID: old.Type, ForbidSingle: old.ForbidSingle, MemberIDs: oldIDs, IsNew: false, GroupDeviceName: deviceName(old.Name, old.ID)})
+	if rerr != nil {
+		log.Warn("groups: a change failed half-way, and the old state could not be saved again", "group", old.ID, "err", rerr, "cause", cause)
+		writeJSON(w, http.StatusBadGateway, apiError{Error: "hmipserver", Message: cause.Error() + "; the group was changed in part, and restoring it failed: " + rerr.Error()})
+		return false
+	}
+	log.Warn("groups: a change failed half-way; the old state was saved again", "group", old.ID, "cause", cause)
+	writeJSON(w, http.StatusBadGateway, apiError{Error: "hmipserver", Message: cause.Error() + "; the group was changed in part, and its old state was restored"})
+	return false
 }
 
 // DELETE /groups/{id}: the group goes; its former members lose the group membership.
@@ -289,7 +416,10 @@ func (a *SystemAPI) groupsDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, ok := groupID(w, r)
-	if !ok || !a.groupKnown(w, r, id) {
+	if !ok {
+		return
+	}
+	if _, ok := a.groupKnown(w, r, id); !ok {
 		return
 	}
 	former, err := a.Groups.Client.Delete(r.Context(), id)
@@ -303,8 +433,8 @@ func (a *SystemAPI) groupsDelete(w http.ResponseWriter, r *http.Request) {
 
 // groupsAnswer is what a create or an update ends with: the group as it stands, and the devices
 // whose configuration is pending.
-func (a *SystemAPI) groupsAnswer(w http.ResponseWriter, r *http.Request, id int) {
-	ev, err := a.Groups.Client.Edit(r.Context(), id)
+func (a *SystemAPI) groupsAnswer(w http.ResponseWriter, r *http.Request, id int, name string) {
+	ev, err := a.Groups.Client.Edit(r.Context(), id, deviceName(name, id))
 	if err != nil {
 		groupsErr(w, err)
 		return
@@ -319,23 +449,23 @@ func (a *SystemAPI) groupsAnswer(w http.ResponseWriter, r *http.Request, id int)
 	writeJSON(w, 200, out)
 }
 
-// groupKnown says whether hmipserver lists the group: its edit and delete of an unknown id end
-// in a NullPointerException in its worker and no answer at all (measured 2026-09-22 on the
-// OVA), so the API asks the list first and answers 404 itself.
-func (a *SystemAPI) groupKnown(w http.ResponseWriter, r *http.Request, id int) bool {
+// groupKnown is the group as hmipserver lists it: its edit and delete of an unknown id end in a
+// NullPointerException in its worker and no answer at all (measured 2026-09-22 on the OVA), so
+// the API asks the list first and answers 404 itself.
+func (a *SystemAPI) groupKnown(w http.ResponseWriter, r *http.Request, id int) (hmgroups.Group, bool) {
 	v, err := a.Groups.Client.List(r.Context())
 	if err != nil {
 		groupsErr(w, err)
-		return false
+		return hmgroups.Group{}, false
 	}
 	want := strconv.Itoa(id)
 	for _, g := range v.Groups {
 		if g.ID == want {
-			return true
+			return g, true
 		}
 	}
 	writeJSON(w, http.StatusNotFound, apiError{Error: "unknown-group", Message: fmt.Sprintf("there is no group %d", id)})
-	return false
+	return hmgroups.Group{}, false
 }
 
 func groupID(w http.ResponseWriter, r *http.Request) (int, bool) {

@@ -9,8 +9,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -50,6 +52,12 @@ type Fake struct {
 	Calls []string
 	// Pending are the devices configureDevices reports for a serial.
 	Pending map[string][]Device
+	// SaveDies is the number of saves to come that die in hmipserver's worker after the group
+	// and its name were stored and before its members were: no answer at all, as a member list it
+	// cannot parse does. SaveUnanswered the number that store everything and still do not answer.
+	SaveDies, SaveUnanswered int
+	// Conns counts the connections the server accepted.
+	Conns int
 
 	Server *httptest.Server
 }
@@ -58,8 +66,38 @@ type Fake struct {
 func New(sid string) *Fake {
 	f := &Fake{SID: sid, Groups: map[int]*Group{}, nextID: 1, Pending: map[string][]Device{},
 		Types: [][2]string{{"HomeMatic.heating", "Heating_Control"}, {"hmip.heating.group", "HmIP-Heizungssteuerung"}}}
-	f.Server = httptest.NewServer(http.HandlerFunc(f.serve))
+	f.Server = httptest.NewUnstartedServer(http.HandlerFunc(f.serve))
+	f.Server.Config.ConnState = func(_ net.Conn, st http.ConnState) {
+		if st == http.StateNew {
+			f.mu.Lock()
+			f.Conns++
+			f.mu.Unlock()
+		}
+	}
+	f.Server.Start()
 	return f
+}
+
+// Connections is the number of connections accepted so far.
+func (f *Fake) Connections() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.Conns
+}
+
+// Set changes the fake's state under its lock, while a handler may run.
+func (f *Fake) Set(fn func(f *Fake)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	fn(f)
+}
+
+// die is hmipserver's worker dying in an exception: the request is never answered; the handler
+// waits for the client to give up. The lock is released meanwhile, so other commands go on.
+func (f *Fake) die(r *http.Request) {
+	f.mu.Unlock()
+	<-r.Context().Done()
+	f.mu.Lock()
 }
 
 // Close stops the server.
@@ -110,7 +148,8 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, map[string]any{"groups": groups, "devicesToConfigure": body["devicesToConfigure"]})
 	case "create":
-		g := &Group{ID: f.nextID, Type: f.Types[0][0]}
+		// hmipserver's new group is id 0 until save gives it one
+		g := &Group{ID: 0, Type: f.Types[0][0]}
 		f.envelope(w, true, "", f.page(g, true))
 	case "edit":
 		g, ok := f.Groups[intOf(body["groupId"])]
@@ -118,6 +157,8 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 			f.envelope(w, false, "1", "no such group")
 			return
 		}
+		// edit stores the device name it is given (hmipserver's changeGroupDeviceName)
+		g.DeviceName = str(body["groupDeviceName"])
 		f.envelope(w, true, "", f.page(g, false))
 	case "suitableGroupMembers":
 		assignable, leftover := []map[string]any{}, []map[string]any{}
@@ -143,12 +184,21 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 		g.Name = unescape(str(body["groupName"]))
 		g.Type = str(body["groupTypeId"])
 		g.ForbidSingle, _ = body["forbidSingleOperation"].(bool)
-		g.DeviceName = str(body["groupDeviceName"])
-		g.Members = nil
-		if ids, ok := body["assignedDevicesIds"].([]any); ok {
-			for _, x := range ids {
-				g.Members = append(g.Members, str(x))
+		g.DeviceName = unescape(str(body["groupDeviceName"]))
+		// hmipserver has stored the group now; the members come after
+		ids, ok := memberIDs(body["assignedDevicesIds"])
+		if !ok || f.SaveDies > 0 {
+			if ok {
+				f.SaveDies--
 			}
+			f.die(r)
+			return
+		}
+		g.Members = ids
+		if f.SaveUnanswered > 0 {
+			f.SaveUnanswered--
+			f.die(r)
+			return
 		}
 		f.envelope(w, true, "", fmt.Sprint(id))
 	case "delete":
@@ -254,6 +304,35 @@ func (f *Fake) page(g *Group, isNew bool) string {
 		"assignable": assignable, "assigned": assigned, "leftover": leftover,
 	})
 	return string(b)
+}
+
+// lenientLiteral is an id hmipserver reads when it arrives unquoted inside a list.
+var lenientLiteral = regexp.MustCompile(`^[^\s,:=;#\[\]{}/\\'"]+$`)
+
+// memberIDs reads assignedDevicesIds as hmipserver does (measured on a lab system): the field's
+// text, parsed again as a JSON list. A string is the list itself; an array arrives as "[a, b]"
+// without quotes, which it reads only while every id is a plain word - an HmIP channel address's
+// colon ends it ("Unterminated array" in its log), and the command is never answered.
+func memberIDs(v any) ([]string, bool) {
+	switch x := v.(type) {
+	case string:
+		var ids []string
+		if err := json.Unmarshal([]byte(x), &ids); err != nil {
+			return nil, false
+		}
+		return ids, true
+	case []any:
+		var ids []string
+		for _, e := range x {
+			s, ok := e.(string)
+			if !ok || !lenientLiteral.MatchString(s) {
+				return nil, false
+			}
+			ids = append(ids, s)
+		}
+		return ids, true
+	}
+	return nil, false
 }
 
 func contains(list []string, s string) bool {

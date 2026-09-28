@@ -2,10 +2,12 @@ package httpapi
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hobbyquaker/occulited/internal/auth"
 	"github.com/hobbyquaker/occulited/internal/hmgroups"
@@ -27,7 +29,9 @@ func groupsRig(t *testing.T) (*http.ServeMux, *hmgroupstest.Fake, *meta.Store, *
 			t.Fatal(err)
 		}
 	}
-	a := &SystemAPI{Groups: &GroupsAPI{Client: &hmgroups.Client{Base: f.URL(), Session: s}, Session: s, Meta: ms, Interface: "VirtualDevices"}}
+	// a short timeout: the fake's dying saves are never answered
+	c := &hmgroups.Client{Base: f.URL(), Session: s, HTTP: &http.Client{Timeout: 300 * time.Millisecond, Transport: &http.Transport{DisableKeepAlives: true}}}
+	a := &SystemAPI{Groups: &GroupsAPI{Client: c, Session: s, Meta: ms, Interface: "VirtualDevices", Log: slog.New(slog.DiscardHandler)}}
 	mux := http.NewServeMux()
 	a.Register(mux)
 	return mux, f, ms, s
@@ -92,6 +96,16 @@ func TestGroupsRoutes(t *testing.T) {
 	}
 	if o, err := ms.GetObject("VirtualDevices.INT0000001"); err != nil || o.Name != "Bad INT0000001" {
 		t.Fatalf("group device object: %v %+v", err, o)
+	}
+	// B-269: the member ids went as a string holding the JSON list
+	for _, c := range f.Calls {
+		if strings.HasPrefix(c, "save ") && !strings.Contains(c, `"assignedDevicesIds":"[\"KEQ9000003\"]"`) {
+			t.Fatalf("save's member ids: %s", c)
+		}
+	}
+	// a read keeps hmipserver's device name (its edit stores the name it is given)
+	if st, _ := warnCall(t, mux, "GET", p+"/1", "", "monitor", user); st != 200 || f.Groups[1].DeviceName != "Bad INT0000001" {
+		t.Fatalf("the device name after a read: %d %q", st, f.Groups[1].DeviceName)
 	}
 	// the pending configuration comes with the answer
 	f.Pending["INT0000001"] = []hmgroupstest.Device{{ID: "KEQ9000003", Serial: "KEQ9000003", Type: "HM-Sec-SC"}}
@@ -219,5 +233,88 @@ func TestHomematicCGI(t *testing.T) {
 		if st != 200 || !strings.Contains(b, `"result":null`) || !strings.Contains(b, `"code":400`) || !strings.Contains(b, "access denied") {
 			t.Errorf("%s: %d %s", body, st, b)
 		}
+	}
+}
+
+// B-269: hmipserver's save stores the group before its members; a save that dies there is never
+// answered. A failed create leaves no group behind, a failed change no half of one.
+func TestGroupsSaveFails(t *testing.T) {
+	mux, f, ms, _ := groupsRig(t)
+	const p = "/api/system/v1/groups"
+	create := `{"name":"Loom","type":"hmip.heating.group","members":["00010000000A10:1"]}`
+
+	// the save dies after storing the group: the half-made group is deleted again
+	f.Set(func(f *hmgroupstest.Fake) { f.SaveDies = 1 })
+	st, out := warnCall(t, mux, "POST", p, create, "admin", auth.RoleAdmin)
+	if st != 502 || out["error"] != "hmipserver" || !strings.Contains(out["message"].(string), "deleted again") {
+		t.Fatalf("dying create: %d %v", st, out)
+	}
+	f.Set(func(f *hmgroupstest.Fake) {
+		if len(f.Groups) != 0 {
+			t.Fatalf("a group was left: %+v", f.Groups)
+		}
+	})
+	if inGroup(t, ms, "HmIP-RF.00010000000A10:1") != nil {
+		t.Fatal("a failed create must not flag the member")
+	}
+	if _, err := ms.GetObject("VirtualDevices.INT0000001"); err == nil {
+		t.Fatal("a failed create must not name a group device")
+	}
+
+	// the save did everything and only the answer is missing: that is the success
+	f.Set(func(f *hmgroupstest.Fake) { f.SaveUnanswered = 1 })
+	st, out = warnCall(t, mux, "POST", p, create, "admin", auth.RoleAdmin)
+	if st != 200 || out["id"] != float64(2) || len(out["members"].([]any)) != 1 || out["device"] != "INT0000002" {
+		t.Fatalf("unanswered create: %d %v", st, out)
+	}
+	if inGroup(t, ms, "HmIP-RF.00010000000A10:1") != true {
+		t.Fatal("the member's flag after the unanswered create")
+	}
+
+	// a change whose save dies after the name: the old state is saved again
+	f.Set(func(f *hmgroupstest.Fake) { f.SaveDies = 1 })
+	st, out = warnCall(t, mux, "PUT", p+"/2", `{"name":"Neu","members":["KEQ9000003"]}`, "admin", auth.RoleAdmin)
+	if st != 502 || !strings.Contains(out["message"].(string), "old state was restored") {
+		t.Fatalf("dying change: %d %v", st, out)
+	}
+	f.Set(func(f *hmgroupstest.Fake) {
+		g := f.Groups[2]
+		if g.Name != "Loom" || len(g.Members) != 1 || g.Members[0] != "00010000000A10:1" {
+			t.Fatalf("restored: %+v", g)
+		}
+	})
+	if inGroup(t, ms, "BidCos-RF.KEQ9000003") != nil || inGroup(t, ms, "HmIP-RF.00010000000A10:1") != true {
+		t.Fatal("a failed change must leave the flags")
+	}
+
+	// the save dies with the name unchanged: nothing to restore
+	f.Set(func(f *hmgroupstest.Fake) { f.SaveDies = 1 })
+	st, out = warnCall(t, mux, "PUT", p+"/2", `{"members":["KEQ9000003"]}`, "admin", auth.RoleAdmin)
+	if st != 502 || !strings.Contains(out["message"].(string), "unchanged") {
+		t.Fatalf("dying member change: %d %v", st, out)
+	}
+
+	// the restore dies too: the answer says so
+	f.Set(func(f *hmgroupstest.Fake) { f.SaveDies = 2 })
+	st, out = warnCall(t, mux, "PUT", p+"/2", `{"name":"Neu","members":["KEQ9000003"]}`, "admin", auth.RoleAdmin)
+	if st != 502 || !strings.Contains(out["message"].(string), "restoring it failed") {
+		t.Fatalf("dying restore: %d %v", st, out)
+	}
+
+	// a change that was made and only not answered: the success (the name the failed restore
+	// left is changed again)
+	f.Set(func(f *hmgroupstest.Fake) { f.SaveUnanswered = 1 })
+	st, out = warnCall(t, mux, "PUT", p+"/2", `{"name":"Loom 2","members":["KEQ9000003"]}`, "admin", auth.RoleAdmin)
+	if st != 200 || out["name"] != "Loom 2" || out["members"].([]any)[0].(map[string]any)["id"] != "KEQ9000003" {
+		t.Fatalf("unanswered change: %d %v", st, out)
+	}
+	if inGroup(t, ms, "BidCos-RF.KEQ9000003") != true || inGroup(t, ms, "HmIP-RF.00010000000A10:1") != false {
+		t.Fatal("the flags after the unanswered change")
+	}
+
+	// a create whose save is refused before anything is stored: the plain error, nothing deleted
+	f.Set(func(f *hmgroupstest.Fake) { f.Broken = true })
+	if st, out := warnCall(t, mux, "POST", p, create, "admin", auth.RoleAdmin); st != 502 || strings.Contains(out["message"].(string), "deleted") {
+		t.Fatalf("broken: %d %v", st, out)
 	}
 }

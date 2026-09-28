@@ -65,11 +65,22 @@ type Client struct {
 	HTTP    *http.Client
 }
 
+// Timeout bounds one group command. hmipserver answers a command in well under a second (a save
+// with a member measured 0.14 s on a lab system); what can hold it is its event loop, which an
+// XML-RPC init on the VirtualDevices face blocks for up to 10 s. A command that got no answer
+// within this died in hmipserver's worker: it never answers later.
+const Timeout = 30 * time.Second
+
+// defaultHTTP opens a connection per command: hmipserver closes an idle keep-alive connection
+// without a word, and a POST sent on one that it has just closed fails with EOF, which Go does not
+// retry for a POST (B-269: every second GET /groups/types failed that way on a lab system).
+var defaultHTTP = &http.Client{Timeout: Timeout, Transport: &http.Transport{DisableKeepAlives: true, Proxy: nil}}
+
 func (c *Client) http() *http.Client {
 	if c.HTTP != nil {
 		return c.HTTP
 	}
-	return &http.Client{Timeout: 30 * time.Second}
+	return defaultHTTP
 }
 
 // envelope is every group page's answer.
@@ -253,10 +264,13 @@ func (c *Client) Create(ctx context.Context) (EditView, error) {
 	return v.normalized(), err
 }
 
-// Edit opens the editor of a group.
-func (c *Client) Edit(ctx context.Context, id int) (EditView, error) {
+// Edit opens the editor of a group. hmipserver's edit also stores the groupDeviceName it is
+// given as the group's GROUP_DEVICE_NAME, so the caller passes the name the group device has
+// ("<group name> INT000000N"): an empty one would blank it at every read. Unlike save's, edit's
+// name is taken as it comes, not URL-decoded.
+func (c *Client) Edit(ctx context.Context, id int, deviceName string) (EditView, error) {
 	var v EditView
-	content, err := c.call(ctx, "edit", map[string]any{"groupId": id, "groupDeviceName": ""})
+	content, err := c.call(ctx, "edit", map[string]any{"groupId": id, "groupDeviceName": deviceName})
 	if err != nil {
 		return v, err
 	}
@@ -319,10 +333,21 @@ type SaveResult struct {
 var digitsRe = regexp.MustCompile(`\d+`)
 
 // Save writes a group's name and members; a new group gets its id.
+//
+// The member ids go as a string that holds a JSON list, not as a list (B-269): hmipserver takes
+// the field's text and parses it again. A string gives the list back; a list arrives as "[a, b]"
+// without quotes, which it still reads for BidCos serials but not for an HmIP channel address -
+// the colon ends the word ("Unterminated array" in its log), the group is stored without its
+// members, and the command is never answered (measured on a lab system, 2026-09-28). The WebUI
+// never met this: its script library sent every list inside an object as such a string.
 func (c *Client) Save(ctx context.Context, b SaveBody) (SaveResult, error) {
+	ids, err := json.Marshal(nonNil(b.MemberIDs))
+	if err != nil {
+		return SaveResult{}, err
+	}
 	body := map[string]any{
 		"groupId": b.ID, "groupName": jsEscape(b.Name), "groupTypeId": b.TypeID, "forbidSingleOperation": b.ForbidSingle,
-		"assignedDevicesIds": nonNil(b.MemberIDs), "isNewGroup": b.IsNew, "groupDeviceName": b.GroupDeviceName,
+		"assignedDevicesIds": string(ids), "isNewGroup": b.IsNew, "groupDeviceName": jsEscape(b.GroupDeviceName),
 	}
 	content, err := c.call(ctx, "save", body)
 	if err != nil {
