@@ -9582,6 +9582,9 @@
           "exchange_id": {
             "type": "boolean"
           },
+          "hostname": {
+            "type": "string"
+          },
           "keyserver_mode": {
             "type": "string"
           },
@@ -28434,6 +28437,79 @@
           }
         ],
         "summary": "Removes one module's key snapshot",
+        "tags": [
+          "system/radio"
+        ],
+        "x-occulite-scopes": [
+          "system:write"
+        ]
+      }
+    },
+    "/api/system/v1/radio/hmip/local-key/snapshots/{sgtin}/restore": {
+      "post": {
+        "operationId": "postSystemRadioHmipLocalKeySnapshotsBySgtinRestore",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sgtin",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "confirm": {
+                    "type": "boolean"
+                  },
+                  "hostname": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemLocalKeyStatus"
+                }
+              }
+            },
+            "description": "Accepted"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "bearer": [
+              "system:write"
+            ]
+          },
+          {
+            "cookie": [
+              "system:write"
+            ]
+          }
+        ],
+        "summary": "Puts a previous module's identity back after a fresh start",
         "tags": [
           "system/radio"
         ],

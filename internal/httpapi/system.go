@@ -448,6 +448,7 @@ func (a *SystemAPI) Register(mux *http.ServeMux) {
 	route(mux, auth.ScopeSystemWrite, "DELETE "+p+"/radio/hmip/local-key", a.localKeyDisable)
 	route(mux, auth.ScopeSystemWrite, "POST "+p+"/radio/hmip/local-key/override", a.localKeyOverride)
 	route(mux, auth.ScopeSystemWrite, "DELETE "+p+"/radio/hmip/local-key/snapshots/{sgtin}", a.localKeyDiscard)
+	route(mux, auth.ScopeSystemWrite, "POST "+p+"/radio/hmip/local-key/snapshots/{sgtin}/restore", a.localKeyRestore)
 	// task 155 (D-106): the adapter exchange's diagnosis, the retry and the guided fresh start
 	route(mux, auth.ScopeSystemWrite, "GET "+p+"/radio/hmip/exchange", a.exchangeView)
 	route(mux, auth.ScopeSystemWrite, "POST "+p+"/radio/hmip/exchange/retry", a.exchangeRetry)

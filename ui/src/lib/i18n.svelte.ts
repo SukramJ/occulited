@@ -2305,6 +2305,18 @@ const CATALOGUE: Record<string, {de: string; en?: string}> = {
     'On until the next install mode has ended, at the latest 30 minutes. HmIP-RF restarted for it.': {de: 'An, bis der nächste Anlernmodus vorbei ist, höchstens 30 Minuten. HmIP-RF ist dafür neu gestartet.'},
     'For a device whose key is not at hand: its pairing then asks eQ-3 once. Switching restarts HmIP-RF.': {de: 'Für ein Gerät, dessen Schlüssel nicht zur Hand ist: sein Anlernen fragt dann einmal eQ-3. Das Umschalten startet HmIP-RF neu.'},
     'Kept identities': {de: 'Aufbewahrte Identitäten'},
+    // openccu-lite task 212: the restore of a fresh-start snapshot
+    'Restore…': {de: 'Wiederherstellen …'},
+    Restore: {de: 'Wiederherstellen'},
+    'restorable once this module is in use again': {de: 'wiederherstellbar, sobald dieses Modul wieder in Betrieb ist'},
+    'Restore the identity of {sgtin}?': {de: 'Identität von {sgtin} wiederherstellen?'},
+    "The radio module is in use again. Its HmIP identity from before the fresh start goes back into HmIP-RF's data directory: the network and the devices paired under it are known again, without eQ-3's key server.": {
+        de: 'Das Funkmodul ist wieder in Betrieb. Seine HmIP-Identität von vor dem Neustart geht zurück in das Datenverzeichnis von HmIP-RF: Das Netz und die darunter angelernten Geräte sind wieder bekannt, ohne den Schlüsselserver von eQ-3.',
+    },
+    "Any other module's identity on the system - the one the fresh start made - is moved aside into a kept identity of its own. Devices paired since the fresh start have to be paired again.": {
+        de: 'Die Identität jedes anderen Moduls auf dem System – die, die der Neustart angelegt hat – wird in eine eigene aufbewahrte Identität beiseitegelegt. Seit dem Neustart angelernte Geräte müssen erneut angelernt werden.',
+    },
+    'HmIP-RF is restarting with the restored identity.': {de: 'HmIP-RF startet mit der wiederhergestellten Identität neu.'},
     'this module': {de: 'dieses Modul'},
     "Copies of a module's identity from before a switch to local key mode, with key material; kept until discarded.": {de: 'Kopien der Identität eines Moduls von vor dem Umschalten auf den lokalen Schlüssel, mit Schlüsselmaterial; aufbewahrt, bis sie verworfen werden.'},
     'The administrator exists. Four things worth deciding now; each can be changed later on its page.': {de: 'Der Administrator existiert. Vier Dinge lohnen sich jetzt zu entscheiden; jedes lässt sich später auf seiner Seite ändern.'},

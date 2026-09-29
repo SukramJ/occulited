@@ -145,3 +145,103 @@ func TestExchangeRetryAndFreshStart(t *testing.T) {
 		t.Errorf("snapshots: %+v", k.Snapshots())
 	}
 }
+
+// openccu-lite task 212: the way back without local key mode. The previous module is in use again
+// and its fresh-start snapshot goes back: the files return to the data directory, the refused
+// module's fresh identity moves into a snapshot of its own, the marker goes, HmIP-RF restarts, and
+// the snapshot is consumed. Refused for a switch snapshot, a module not in use, local key mode on.
+func TestRestoreFreshStartSnapshot(t *testing.T) {
+	fake := &fakeHmIPServer{state: "ok"}
+	k, svc, root := lkRig(t, fake.serve(t))
+	data := filepath.Join(root, "etc/config/crRFD/data")
+	for _, ext := range []string{".ap", ".apkx", ".bbkx"} {
+		if err := os.WriteFile(filepath.Join(data, exPrevSGTIN+ext), []byte("OLD-"+ext), 0o664); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// the fresh start with the refused module in use, local key mode off: the previous identity is a snapshot now
+	lkFatal(t, root, radio.CauseRefused)
+	if err := k.FreshStart(false); err != nil {
+		t.Fatal(err)
+	}
+	if st := lkWait(t, k); st.Error != "" || st.Enabled {
+		t.Fatalf("fresh start: %+v", st)
+	}
+	// the refusals: not an SGTIN, no snapshot, the module not in use
+	for _, tc := range []struct{ sgtin, want string }{
+		{"nope", "not an SGTIN"},
+		{"3014F711A00000000000AAAA", "no snapshot of"},
+		{exPrevSGTIN, "is not in use (" + lkSGTIN + " is)"},
+	} {
+		if err := k.RestoreSnapshot(tc.sgtin); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: %v", tc.sgtin, err)
+		}
+	}
+	// a switch snapshot of the module in use is Disable's, not this
+	_ = os.MkdirAll(k.snapshotDir(lkSGTIN), 0o700)
+	_ = os.WriteFile(filepath.Join(k.snapshotDir(lkSGTIN), "snapshot.json"), []byte(`{"sgtin":"`+lkSGTIN+`","at":"2026-09-01T00:00:00Z","files":["`+lkSGTIN+`.ap"]}`), 0o600)
+	if err := k.RestoreSnapshot(lkSGTIN); err == nil || !strings.Contains(err.Error(), "from a switch to local key mode") {
+		t.Errorf("switch snapshot: %v", err)
+	}
+	_ = os.RemoveAll(k.snapshotDir(lkSGTIN))
+
+	// the old module is back: the plan names it
+	plan := filepath.Join(root, "run/occulite/radio/plan.json")
+	b, _ := os.ReadFile(plan)
+	_ = os.WriteFile(plan, []byte(strings.ReplaceAll(string(b), lkSGTIN, exPrevSGTIN)), 0o644)
+	// with local key mode on the way back is Disable's
+	confPath := filepath.Join(root, "etc/config/crRFD/hmip_user.conf")
+	conf, _ := os.ReadFile(confPath)
+	_ = os.WriteFile(confPath, append(append([]byte{}, conf...), []byte("Network.Key=00112233445566778899AABBCCDDEEFF\n")...), 0o664)
+	if err := k.RestoreSnapshot(exPrevSGTIN); err == nil || !strings.Contains(err.Error(), "local key mode is on") {
+		t.Errorf("local key on: %v", err)
+	}
+	_ = os.WriteFile(confPath, conf, 0o664)
+	// the status carries the system's name, which the page has typed as the confirmation
+	_ = os.WriteFile(filepath.Join(root, "etc/config/netconfig"), []byte("HOSTNAME=lite-test\n"), 0o644)
+	if st := k.Status(); st.Hostname != "lite-test" {
+		t.Errorf("the status carries no host name: %+v", st)
+	}
+
+	// hmipserver made the refused module's fresh identity meanwhile, and a marker stands again
+	// (the old module back, the identity of the other one foreign to it)
+	_ = os.WriteFile(filepath.Join(data, lkSGTIN+".ap"), []byte("FRESH-.ap"), 0o664)
+	marker := lkFatal(t, root, radio.CauseRefused)
+	svc.calls = nil
+	if err := k.RestoreSnapshot(exPrevSGTIN); err != nil {
+		t.Fatal(err)
+	}
+	if k.Status().Switching != "restore" && k.Status().Switching != "" {
+		t.Errorf("switching: %q", k.Status().Switching)
+	}
+	st := lkWait(t, k)
+	if st.Error != "" || st.Enabled {
+		t.Fatalf("after the restore: %+v", st)
+	}
+	for _, ext := range []string{".ap", ".apkx", ".bbkx"} {
+		if b := readFile(filepath.Join(data, exPrevSGTIN+ext)); b != "OLD-"+ext {
+			t.Errorf("restored %s: %q", ext, b)
+		}
+	}
+	// the refused module's fresh identity is a fresh-start snapshot of its own now, and gone from the directory
+	if _, err := os.Stat(filepath.Join(data, lkSGTIN+".ap")); !os.IsNotExist(err) {
+		t.Error("the other module's identity is still in the data directory")
+	}
+	snaps := k.Snapshots()
+	if len(snaps) != 1 || snaps[0].SGTIN != lkSGTIN || snaps[0].Kind != SnapshotFreshStart || readFile(filepath.Join(k.snapshotDir(lkSGTIN), lkSGTIN+".ap")) != "FRESH-.ap" {
+		t.Fatalf("snapshots after the restore: %+v", snaps)
+	}
+	if _, err := os.Stat(k.snapshotDir(exPrevSGTIN)); !os.IsNotExist(err) {
+		t.Error("the restored snapshot was not consumed")
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Error("the marker survived the restore")
+	}
+	if !strings.Contains(strings.Join(svc.calls, " "), "hmipserver restart") {
+		t.Errorf("no restart: %v", svc.calls)
+	}
+	// a second time: nothing to restore
+	if err := k.RestoreSnapshot(exPrevSGTIN); err == nil || !strings.Contains(err.Error(), "no snapshot of") {
+		t.Errorf("again: %v", err)
+	}
+}

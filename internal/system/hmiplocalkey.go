@@ -107,7 +107,10 @@ type LocalKeyStatus struct {
 	ExchangeID bool               `json:"exchange_id"`
 	Snapshots  []LocalKeySnapshot `json:"snapshots"`
 	// RevertBlocked says why "back to eQ-3's key server" is not possible now; empty when it is
-	RevertBlocked  string         `json:"revert_blocked,omitempty"`
+	RevertBlocked string `json:"revert_blocked,omitempty"`
+	// Hostname is the system's name, which the restore of a fresh-start snapshot has typed as
+	// its confirmation (openccu-lite task 212)
+	Hostname       string         `json:"hostname,omitempty"`
 	OverrideActive bool           `json:"override_active"`
 	OverrideSince  time.Time      `json:"override_since,omitzero"`
 	Check          *LocalKeyCheck `json:"check,omitempty"`
@@ -261,6 +264,7 @@ func (k *HmIPLocalKey) Status() LocalKeyStatus {
 		KeyServerMode:  key.KeyServerMode,
 		ExchangeID:     radio.ExchangeIDSet(readFile(k.Root.join(hmipAddressConf))),
 		Snapshots:      k.Snapshots(),
+		Hostname:       k.Root.Hostname(),
 		OverrideActive: st.Override,
 		OverrideSince:  st.OverrideSince,
 		Check:          st.Check,

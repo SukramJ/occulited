@@ -99,3 +99,35 @@ func (a *SystemAPI) localKeyDiscard(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, a.HmIPLocalKey.Status())
 }
+
+// localKeyRestore puts a fresh-start snapshot back (openccu-lite task 212): {"confirm": true,
+// "hostname": <the system's name as typed>}, the confirmation the fresh start takes. A wrong name
+// is 400 hostname and nothing happens; what the service refuses is 409; 202 with the status while
+// the files return and HmIP-RF restarts.
+func (a *SystemAPI) localKeyRestore(w http.ResponseWriter, r *http.Request) {
+	if !a.localKeyReady(w) {
+		return
+	}
+	var body struct {
+		Confirm  bool   `json:"confirm"`
+		Hostname string `json:"hostname"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		badBody(w, err)
+		return
+	}
+	if !body.Confirm {
+		writeJSON(w, http.StatusBadRequest, apiError{Error: "confirm", Message: "confirm: true is required"})
+		return
+	}
+	if !sameHostname(body.Hostname, a.Root.Hostname()) {
+		writeJSON(w, http.StatusBadRequest, apiError{Error: "hostname", Message: "the host name typed does not match this system's"})
+		return
+	}
+	if err := a.HmIPLocalKey.RestoreSnapshot(r.PathValue("sgtin")); err != nil {
+		localKeyError(w, err)
+		return
+	}
+	reqLog(r).Warn("local key mode: fresh-start snapshot restored", "sgtin", r.PathValue("sgtin"))
+	writeJSON(w, http.StatusAccepted, a.HmIPLocalKey.Status())
+}

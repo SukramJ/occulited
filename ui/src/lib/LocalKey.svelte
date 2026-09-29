@@ -7,7 +7,8 @@
     // The keys themselves never come back from the box.
     import {onMount} from 'svelte';
     import {api} from './api';
-    import {ask} from './dialog.svelte';
+    import {ask, askText} from './dialog.svelte';
+    import {sameHostname} from './factoryreset';
     import {t} from './i18n.svelte';
     import {scrollToAnchor} from './anchor';
     import Disclosure from './Disclosure.svelte';
@@ -18,7 +19,7 @@
     interface Snapshot { sgtin: string; at: string; files: string[]; kind?: string }
     interface Status {
         available: boolean; sgtin?: string; enabled: boolean; source?: 'entered' | 'generated' | 'manual'; keyserver_mode: string;
-        exchange_id: boolean; snapshots: Snapshot[]; revert_blocked?: string; override_active: boolean; override_since?: string;
+        exchange_id: boolean; snapshots: Snapshot[]; revert_blocked?: string; hostname?: string; override_active: boolean; override_since?: string;
         check?: Check; switching?: string; error?: string;
     }
 
@@ -120,6 +121,39 @@
         });
     }
 
+    // openccu-lite task 212: the way back without local key mode - the previous module is in use
+    // again, and its identity from before the fresh start goes back; the fresh start's confirmation,
+    // the host name typed
+    async function restore(s: Snapshot) {
+        const host = st?.hostname ?? '';
+        const message = [
+            t('The radio module is in use again. Its HmIP identity from before the fresh start goes back into HmIP-RF\'s data directory: the network and the devices paired under it are known again, without eQ-3\'s key server.'),
+            t('Any other module\'s identity on the system - the one the fresh start made - is moved aside into a kept identity of its own. Devices paired since the fresh start have to be paired again.'),
+            t('HmIP-RF restarts at once; the radio is unavailable for about a minute.'),
+            t('Type the host name {host} to confirm.', {host}),
+        ].join('\n\n');
+        const typed = await askText({
+            title: t('Restore the identity of {sgtin}?', {sgtin: s.sgtin}),
+            message,
+            input: {label: t('Host name'), placeholder: host},
+            confirm: t('Restore'),
+            danger: true,
+            focusCancel: true,
+        });
+        if (typed === null) return;
+        if (!sameHostname(typed, host)) {
+            err = t('The name typed is not this system\'s host name; nothing happened.');
+            return;
+        }
+        try {
+            st = await api.post<Status>(`/api/system/v1/radio/hmip/local-key/snapshots/${encodeURIComponent(s.sgtin)}/restore`, {confirm: true, hostname: typed});
+            err = '';
+            await load();
+        } catch (e) {
+            err = (e as Error).message;
+        }
+    }
+
     onMount(() => {
         void load();
         return () => clearTimeout(poll);
@@ -146,7 +180,7 @@
                 <strong>{t('Off')}:</strong> {t("swapping the radio module needs eQ-3's key server once. Pairing a device without its key (from its QR code or under HmIP device keys) needs it too.")}
             {/if}
         </p>
-        {#if busy}<div class="ol-notice"><span class="ol-dot starting"></span>{st.switching === 'off' ? t('Going back to eQ-3\'s key server; HmIP-RF is restarting.') : st.switching === 'override' ? t('HmIP-RF is restarting with the new key-server setting.') : st.switching === 'retry' || st.switching === 'fresh-start' ? t('HmIP-RF is restarting after the radio exchange.') : t('Switching to local key mode; HmIP-RF is restarting.')}</div>{/if}
+        {#if busy}<div class="ol-notice"><span class="ol-dot starting"></span>{st.switching === 'off' ? t('Going back to eQ-3\'s key server; HmIP-RF is restarting.') : st.switching === 'override' ? t('HmIP-RF is restarting with the new key-server setting.') : st.switching === 'retry' || st.switching === 'fresh-start' ? t('HmIP-RF is restarting after the radio exchange.') : st.switching === 'restore' ? t('HmIP-RF is restarting with the restored identity.') : t('Switching to local key mode; HmIP-RF is restarting.')}</div>{/if}
         {#if watching && st.check}
             <p class="ol-muted" data-check="running">{st.check.state === 'waiting' ? t('Waiting for HmIP-RF to answer, then the devices are watched for ten minutes.') : t('Watching the devices after the switch: {n} of {total} not answering so far.', {n: st.check.total - st.check.heard, total: st.check.total})}</p>
         {:else if st.check?.state === 'ok'}
@@ -197,6 +231,13 @@
             <ul class="lk-snapshots">
                 {#each st.snapshots as s (s.sgtin)}
                     <li data-sgtin={s.sgtin} data-kind={s.kind ?? 'switch'}><span class="hmm-mono">{s.sgtin}</span> · {new Date(s.at).toLocaleString()}{s.sgtin === st.sgtin ? ` · ${t('this module')}` : ''}{s.kind === 'fresh-start' ? ` · ${t('the previous module, moved aside by the fresh start')}` : ''}
+                        <!-- task 212: a fresh-start snapshot goes back once its module is in use again; with local
+                             key mode on, "Back to eQ-3's key server" is that way -->
+                        {#if s.kind === 'fresh-start' && !st.enabled && s.sgtin === st.sgtin}
+                            <button type="button" class="hmm-button primary" disabled={busy} onclick={() => restore(s)}>{t('Restore…')}</button>
+                        {:else if s.kind === 'fresh-start' && !st.enabled}
+                            <span class="ol-muted lk-hint">{t('restorable once this module is in use again')}</span>
+                        {/if}
                         <button type="button" class="hmm-button" disabled={busy} onclick={() => discard(s)}>{t('Discard')}</button></li>
                 {/each}
             </ul>
@@ -214,5 +255,6 @@
     .lk-snapshots { padding-left: 18px; }
     .lk-snapshots li { margin: 4px 0; }
     .lk-snapshots button { margin-left: 8px; }
+    .lk-hint { margin-left: 8px; font-size: 0.92em; }
     [data-notice="local-key-check"] button { margin-left: 8px; }
 </style>

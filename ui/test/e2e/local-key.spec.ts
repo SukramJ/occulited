@@ -134,3 +134,53 @@ test('a user sees no local key section and does not ask for it', async ({page}) 
     await expect(page.locator('h2#local-key')).toHaveCount(0);
     expect(calls).not.toContain('/api/system/v1/radio/hmip/local-key');
 });
+
+// openccu-lite task 212: a fresh-start snapshot goes back without local key mode, once its module
+// is in use again - the fresh start's confirmation, the host name typed
+test('a fresh-start snapshot of the module in use: Restore with the host name typed; another module\'s waits', async ({page, baseURL}) => {
+    await own(page, baseURL, {'stub-lk-fresh': '1'});
+    const posts: string[] = [];
+    page.on('request', (r) => {
+        if (r.method() === 'POST' && r.url().includes('/snapshots/')) posts.push(r.url().split('/api')[1] + ' ' + (r.postData() ?? ''));
+    });
+    await page.goto('/system/keys');
+    const li = page.locator('.lk-snapshots li');
+    await expect(li).toHaveCount(1);
+    await expect(li).toContainText('3014F711A000040000000A02');
+    await expect(li).toContainText('this module');
+    await expect(li).toContainText('the previous module, moved aside by the fresh start');
+    await li.getByRole('button', {name: 'Restore…'}).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toContainText('Restore the identity of 3014F711A000040000000A02?');
+    await expect(dialog).toContainText('the network and the devices paired under it are known again');
+    await expect(dialog).toContainText('Devices paired since the fresh start have to be paired again.');
+    await expect(dialog).toContainText('Type the host name openccu to confirm.');
+    // a wrong name: nothing happens
+    await dialog.getByLabel('Host name').fill('other');
+    await dialog.getByRole('button', {name: 'Restore', exact: true}).click();
+    await expect(dialog).toBeHidden();
+    await expect(page.locator('.ol-warn')).toContainText('The name typed is not this system\'s host name; nothing happened.');
+    expect(posts).toEqual([]);
+    await expect(li).toHaveCount(1);
+    // the right one: the restore posts, the snapshot is consumed, the restart notice shows
+    await li.getByRole('button', {name: 'Restore…'}).click();
+    await page.getByRole('dialog').getByLabel('Host name').fill(' OpenCCU ');
+    await page.getByRole('dialog').getByRole('button', {name: 'Restore', exact: true}).click();
+    await expect.poll(() => posts.length).toBe(1);
+    expect(posts[0]).toBe('/system/v1/radio/hmip/local-key/snapshots/3014F711A000040000000A02/restore {"confirm":true,"hostname":"OpenCCU"}');
+    await expect(page.locator('.ol-notice')).toContainText('HmIP-RF is restarting with the restored identity.');
+    await expect(li).toHaveCount(0);
+});
+
+test('a fresh-start snapshot of another module: no Restore, the hint; in German', async ({page, baseURL}) => {
+    await own(page, baseURL, {'stub-lk-fresh': 'other'});
+    await page.goto('/system/keys');
+    const li = page.locator('.lk-snapshots li');
+    await expect(li).toContainText('3014F711A0001F0000000A04');
+    await expect(li.getByRole('button', {name: 'Restore…'})).toHaveCount(0);
+    await expect(li).toContainText('restorable once this module is in use again');
+    await expect(li.getByRole('button', {name: 'Discard'})).toBeVisible();
+    await page.addInitScript(() => localStorage.setItem('ol.language', 'de'));
+    await page.reload();
+    await expect(page.locator('.lk-snapshots li')).toContainText('wiederherstellbar, sobald dieses Modul wieder in Betrieb ist');
+});

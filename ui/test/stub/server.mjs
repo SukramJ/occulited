@@ -1462,13 +1462,16 @@ const LK_SGTIN = '3014F711A000040000000A02';
 const lkStates = new Map();
 function lkStateOf(jar) {
     const id = jar['stub-lk'] ?? '';
-    if (!lkStates.has(id)) lkStates.set(id, {enabled: false, source: undefined, keyserver_mode: 'KEYSERVER_LOCAL', snapshots: [], override_active: false, check: undefined});
+    // task 212: `stub-lk-fresh=1` - a fresh start moved the previous module's identity aside, and
+    // that module (LK_SGTIN) is in use again; `stub-lk-fresh=other` - it is another module's
+    if (!lkStates.has(id)) lkStates.set(id, {enabled: false, source: undefined, keyserver_mode: 'KEYSERVER_LOCAL', override_active: false, check: undefined,
+        snapshots: jar['stub-lk-fresh'] ? [{sgtin: jar['stub-lk-fresh'] === 'other' ? '3014F711A0001F0000000A04' : LK_SGTIN, at: '2026-09-23T10:00:00Z', files: ['x.ap', 'x.apkx', 'x.bbkx'], kind: 'fresh-start'}] : []});
     return lkStates.get(id);
 }
 function lkView(jar, st) {
     const snap = st.snapshots.find((x) => x.sgtin === LK_SGTIN);
     const revert = !st.enabled ? 'local key mode is off' : snap ? undefined : 'there is no snapshot of this module from before the switch (the key was set by hand)';
-    return {available: true, sgtin: LK_SGTIN, enabled: st.enabled, source: st.enabled ? st.source : undefined, keyserver_mode: st.keyserver_mode, exchange_id: false, snapshots: st.snapshots, revert_blocked: revert, override_active: st.override_active, check: st.check};
+    return {available: true, sgtin: LK_SGTIN, hostname: 'openccu', enabled: st.enabled, source: st.enabled ? st.source : undefined, keyserver_mode: st.keyserver_mode, exchange_id: false, snapshots: st.snapshots, revert_blocked: revert, override_active: st.override_active, check: st.check};
 }
 function lkRoute(req, u, res) {
     const jar = cookieJar(req);
@@ -1476,6 +1479,10 @@ function lkRoute(req, u, res) {
     if (req.method === 'GET') {
         const v = lkView(jar, st);
         if (u.searchParams.get('devices') === '1') v.devices = jar['stub-lk-empty'] === '1' ? 0 : 3;
+        if (st.switching) {
+            v.switching = st.switching;
+            delete st.switching;
+        }
         return sendJSON(res, v);
     }
     let body = '';
@@ -1488,6 +1495,22 @@ function lkRoute(req, u, res) {
         if (req.method === 'DELETE' && snapDel) {
             st.snapshots = st.snapshots.filter((x) => x.sgtin !== decodeURIComponent(snapDel[1]));
             return sendJSON(res, lkView(jar, st));
+        }
+        // task 212: the restore of a fresh-start snapshot - the fresh start's confirmation, the
+        // service's refusals, then the snapshot is consumed and HmIP-RF restarts
+        const snapRestore = /\/snapshots\/([^/]+)\/restore$/.exec(u.pathname);
+        if (req.method === 'POST' && snapRestore) {
+            const sgtin = decodeURIComponent(snapRestore[1]);
+            if (!b.confirm) return sendJSON(res, {error: 'confirm', message: 'confirm: true is required'}, 400);
+            if ((b.hostname ?? '').trim().toLowerCase() !== 'openccu') return sendJSON(res, {error: 'hostname', message: 'the host name typed does not match this system\'s'}, 400);
+            const snap = st.snapshots.find((x) => x.sgtin === sgtin);
+            if (!snap) return fail(`no snapshot of ${sgtin}`);
+            if (snap.kind !== 'fresh-start') return fail(`the snapshot of ${sgtin} is from a switch to local key mode; "Back to eQ-3's key server" restores it`);
+            if (st.enabled) return fail('local key mode is on: "Back to eQ-3\'s key server" is the way back to a kept identity');
+            if (sgtin !== LK_SGTIN) return fail(`the module ${sgtin} is not in use (${LK_SGTIN} is); put it back first`);
+            st.snapshots = st.snapshots.filter((x) => x.sgtin !== sgtin);
+            st.switching = 'restore'; // the page's next status read still sees the work running (one read)
+            return sendJSON(res, {...lkView(jar, st), switching: 'restore'}, 202);
         }
         if (u.pathname.endsWith('/override')) {
             if (!st.enabled) return fail('local key mode is off');

@@ -250,3 +250,81 @@ func (k *HmIPLocalKey) clearFatal() error {
 	}
 	return nil
 }
+
+// RestoreSnapshot puts a fresh-start snapshot back (openccu-lite task 212): the previous module is
+// in the system again and local key mode is off - with it on, Disable is the way back, key lines
+// and all. Its identity files return to hmipserver's data directory, so the network and the
+// devices paired under it are known again without eQ-3's key server; every other module's
+// identity in the directory - the one the fresh start made for the module that was refused -
+// moves into a fresh-start snapshot of its own first, so hmipserver attempts no exchange onto the
+// restored network; a marker of a rejected exchange goes; HmIP-RF restarts. The snapshot is
+// consumed: its files are the identity in use now, and restoring them again later would roll the
+// network back behind the devices paired since. Refused for a snapshot the switch made (Disable's),
+// for a module that is not in use, with local key mode on, and beside a switch, a connection
+// change or a flash.
+func (k *HmIPLocalKey) RestoreSnapshot(sgtin string) error {
+	sgtin = strings.ToUpper(sgtin)
+	if !sgtinRe.MatchString(sgtin) {
+		return ErrLocalKey{"not an SGTIN"}
+	}
+	snap, ok := k.snapshotFor(sgtin)
+	if !ok {
+		return ErrLocalKey{"no snapshot of " + sgtin}
+	}
+	if snap.Kind != SnapshotFreshStart {
+		return ErrLocalKey{"the snapshot of " + sgtin + " is from a switch to local key mode; \"Back to eQ-3's key server\" restores it"}
+	}
+	conf := k.conf()
+	if radio.ReadLocalKey(conf).Enabled() {
+		return ErrLocalKey{"local key mode is on: \"Back to eQ-3's key server\" is the way back to a kept identity"}
+	}
+	sg := k.sgtin()
+	if sg == "" {
+		return ErrLocalKey{"no HmIP module is in use"}
+	}
+	if sg != sgtin {
+		return ErrLocalKey{"the module " + sgtin + " is not in use (" + sg + " is); put it back first"}
+	}
+	if len(snap.Files) == 0 {
+		return ErrLocalKey{"the snapshot of " + sgtin + " holds no identity files"}
+	}
+	others := k.previousIdentities(sgtin)
+	ctx, err := k.begin("restore")
+	if err != nil {
+		return err
+	}
+	go func() {
+		for _, p := range others {
+			if err := k.moveIdentityAside(p, conf); err != nil {
+				k.end(fmt.Errorf("moving the identity of %s aside: %w", p, err))
+				return
+			}
+		}
+		dir := k.snapshotDir(sgtin)
+		for _, f := range snap.Files {
+			b, err := os.ReadFile(filepath.Join(dir, f))
+			if err != nil {
+				k.end(fmt.Errorf("reading the snapshot's %s: %w", f, err))
+				return
+			}
+			// root's for a moment, as Disable's restore: hmipserver's prep gives the directory and
+			// what is in it back to hmipserver at its start (0600, openccu-lite B-253)
+			if err := writeFileAtomic(k.Root.join(filepath.Join(crRFDDataDir, f)), b, 0o600); err != nil {
+				k.end(fmt.Errorf("restoring %s: %w", f, err))
+				return
+			}
+		}
+		if err := k.clearFatal(); err != nil {
+			k.end(err)
+			return
+		}
+		// the files are in place: the snapshot has served
+		if err := os.RemoveAll(dir); err != nil {
+			k.end(fmt.Errorf("removing the restored snapshot: %w", err))
+			return
+		}
+		k.log().Info("fresh-start snapshot restored: the previous module is back", "module", sgtin, "moved_aside", strings.Join(others, ","))
+		k.end(k.restart(ctx))
+	}()
+	return nil
+}
