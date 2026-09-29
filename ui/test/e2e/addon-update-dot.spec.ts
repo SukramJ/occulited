@@ -109,3 +109,22 @@ test('only a rega warning: no dot on the Addons tab, the warning stays on Status
     await tab(page).click();
     await expect(page.getByRole('menuitem', {name: /Manage addons/}).locator('[data-addon-dot]')).toHaveCount(0);
 });
+
+// openccu-lite B-267: after a restore, an addon without its program files is a Status warning per
+// addon - installed before the restore, not started, reinstall it - in German with "Sie", and the
+// link goes to the Addons page's reinstall section
+const PAYLOAD = {id: 'addon-payload', variant: 'mosquitto', severity: 'warning', href: '/addons#reinstall', since: new Date().toISOString(), params: {addons: [{id: 'mosquitto', name: 'Mosquitto', enabled: true}, {id: 'hmm', name: 'Homematic Manager', enabled: true}]}};
+
+test('after a restore: the Status warning names the addons to reinstall', async ({page}) => {
+    await withWarning(page, PAYLOAD);
+    await page.goto('/status');
+    const w = page.locator('[data-warnings] [data-notice="addon-payload"]');
+    await expect(w).toContainText('Addons installed before the restore, now without their program files: Mosquitto, Homematic Manager. They are not started; reinstall them on the Addons page.');
+});
+
+test('after a restore, in German: the Status warning with "Sie"', async ({page}) => {
+    await page.addInitScript(() => localStorage.setItem('ol.language', 'de'));
+    await withWarning(page, PAYLOAD);
+    await page.goto('/status');
+    await expect(page.locator('[data-warnings] [data-notice="addon-payload"]')).toContainText('Vor der Wiederherstellung installierte Addons, denen jetzt ihre Programmdateien fehlen: Mosquitto, Homematic Manager. Sie werden nicht gestartet; installieren Sie sie auf der Addons-Seite neu.');
+});

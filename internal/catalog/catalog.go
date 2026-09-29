@@ -884,13 +884,26 @@ func (s *Service) Item(ctx context.Context, id string) *Item {
 // Nothing is fetched (B-240): the catalogue comes from the cache and the bundled copy, so the
 // start of the service and a policy write never wait on the network.
 func (s *Service) Manifest(id string) *manifest.Manifest {
+	m, _ := s.ManifestAt(id)
+	return m
+}
+
+// ManifestAt is Manifest with the release tag the fetched manifest was read at: "" for an adapter
+// and for one read at the default branch (a repository without releases, or a latest release that
+// lacks the file), which speak for whatever version is installed. A tag says the manifest describes
+// that release only (occulited B-27): a package without a manifest of another version - an older
+// one installed from a file - is not described by it.
+func (s *Service) ManifestAt(id string) (*manifest.Manifest, string) {
 	if it := s.Item(context.Background(), id); it != nil {
-		return it.Manifest
+		if it.Adapter {
+			return it.Manifest, ""
+		}
+		return it.Manifest, it.Tag
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.loadLocked()
-	return s.adapters[id]
+	return s.adapters[id], ""
 }
 
 type ghRelease struct {
@@ -1125,18 +1138,50 @@ func (s *Service) setPhase(phase, msg string) {
 	s.mu.Unlock()
 }
 
+// ErrInstallRunning refuses a second catalogue install while one runs.
+var ErrInstallRunning = errors.New("an install is already running")
+
 // Install resolves, downloads, verifies and installs one catalogue addon from its manifest's
 // release source; one at a time. The installer applies the package's own manifest; the
 // catalogue's stands in for a package without one (system.SystemdAddons.FallbackManifest).
 func (s *Service) Install(ctx context.Context, id string) (*Progress, error) {
+	if err := s.begin(id); err != nil {
+		return nil, err
+	}
+	return s.run(ctx, id)
+}
+
+// Start is Install in the background: the one install slot is taken for id before it returns -
+// ErrInstallRunning when an install runs - and done receives the install's error once it ends
+// (nil on success). A caller that answers "started" does so only for an install that runs
+// (B-25: three starts in the same second each answered 202, and two of them did nothing).
+func (s *Service) Start(ctx context.Context, id string) (<-chan error, error) {
+	if err := s.begin(id); err != nil {
+		return nil, err
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.run(ctx, id)
+		done <- err
+	}()
+	return done, nil
+}
+
+// begin takes the install slot for id: the progress of a new run, from now on what Progress
+// answers and what a second begin is refused by.
+func (s *Service) begin(id string) error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.progress != nil && s.progress.Finished == nil {
-		s.mu.Unlock()
-		return nil, errors.New("an install is already running")
+		return ErrInstallRunning
 	}
 	s.progress = &Progress{AddonID: id, Phase: "resolving", Started: time.Now()}
 	s.phaseAt = time.Now()
-	s.mu.Unlock()
+	return nil
+}
+
+// run is the install whose slot begin took.
+func (s *Service) run(ctx context.Context, id string) (*Progress, error) {
 	fail := func(err error) (*Progress, error) {
 		now := time.Now()
 		s.mu.Lock()

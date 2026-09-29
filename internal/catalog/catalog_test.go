@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -241,6 +242,17 @@ func TestRefreshAndCache(t *testing.T) {
 	if s.Item(t.Context(), "mosquitto") == nil || s.Item(t.Context(), "nope") != nil || s.Manifest("openccu-loom") == nil {
 		t.Error("Item and Manifest by id")
 	}
+	// B-27: the tag a fetched manifest was read at goes with it; an adapter and one read at the
+	// default branch speak for any version
+	if m, tag := s.ManifestAt("mosquitto"); m == nil || tag != "v2.1.2" {
+		t.Errorf("ManifestAt(mosquitto) = %v, %q", m, tag)
+	}
+	if m, tag := s.ManifestAt("openccu-loom"); m == nil || tag != "" {
+		t.Errorf("ManifestAt(openccu-loom) = %v, %q", m, tag)
+	}
+	if m, tag := s.ManifestAt("pre"); m == nil || tag != "" {
+		t.Errorf("ManifestAt(pre) = %v, %q", m, tag)
+	}
 	// a new process answers from the cache without any fetch
 	gh, raw := ghCalls.Load(), rawCalls.Load()
 	s2 := newService()
@@ -433,5 +445,68 @@ func TestProgressPercent(t *testing.T) {
 	s.progress.Phase = "done"
 	if got := s.percentLocked(t0); got != 100 {
 		t.Errorf("done: %d", got)
+	}
+}
+
+// B-25: Start takes the install slot before it returns, so a second start while the first
+// downloads is refused at once - never accepted and dropped - and the slot is free again once
+// the first has ended.
+func TestStartOneAtATime(t *testing.T) {
+	pkg := []byte(strings.Repeat("addon-bytes", 100))
+	release := make(chan struct{})
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/homematic-community/ccu-addon-mosquitto/releases":
+			_, _ = w.Write([]byte(`[{"tag_name":"2.1.2","draft":false,"prerelease":false,"assets":[{"name":"mosquitto-x86_64-2.1.2.tar.gz","size":1100,"browser_download_url":"` + srv.URL + `/pkg"}]}]`))
+		case "/pkg":
+			<-release
+			_, _ = w.Write(pkg)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	dir := t.TempDir()
+	cat := writeFile(t, dir, "catalog.json", `{"format": 1, "addons": [{"git": "https://github.com/homematic-community/ccu-addon-mosquitto", "manifest": "catalog/manifests/mosquitto.json"}]}`)
+	writeFile(t, dir, "manifests/mosquitto.json", `{"format": 1, "id": "mosquitto", "name": "Mosquitto", "requires": {"architectures": ["x86_64"]},
+		"release": {"github": "homematic-community/ccu-addon-mosquitto", "asset": "mosquitto-{arch}-{version}.tar.gz"}}`)
+	inst := &fakeInstaller{}
+	s := New([]string{cat}, "x86_64", inst)
+	s.GitHubAPI = srv.URL
+	s.BundledManifests = filepath.Join(dir, "manifests")
+
+	done, err := s.Start(t.Context(), "mosquitto")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := s.Progress(); p == nil || p.AddonID != "mosquitto" || p.Finished != nil {
+		t.Fatalf("the slot is taken when Start returns: %+v", p)
+	}
+	for _, id := range []string{"hmm", "redmatic", "mosquitto"} {
+		if d, err := s.Start(t.Context(), id); !errors.Is(err, ErrInstallRunning) || d != nil {
+			t.Errorf("a second start (%s) while one runs: %v", id, err)
+		}
+	}
+	if _, err := s.Install(t.Context(), "hmm"); !errors.Is(err, ErrInstallRunning) {
+		t.Errorf("Install beside a Start: %v", err)
+	}
+	if p := s.Progress(); p.AddonID != "mosquitto" {
+		t.Errorf("a refused start must not touch the running one's progress: %+v", p)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("the first install: %v", err)
+	}
+	if p := s.Progress(); p.Phase != "done" || string(inst.got) != string(pkg) {
+		t.Fatalf("after the first: %+v", p)
+	}
+	// the slot is free again; a failing run reports its error on done
+	done, err = s.Start(t.Context(), "nope")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err == nil || !strings.Contains(err.Error(), "unknown addon") {
+		t.Errorf("the failed run's error: %v", err)
 	}
 }

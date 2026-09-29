@@ -418,6 +418,8 @@ export interface Addon {
     payload_missing?: boolean;
     payload_missing_dirs?: string[];
     reinstall_dismissed?: boolean;
+    /** B-267: the unit did not start - its program check (ExecCondition=) found the program missing */
+    skipped?: boolean;
     /** 30.1: ran once and ended */
     oneshot?: boolean;
     result?: string;

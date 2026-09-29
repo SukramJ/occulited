@@ -357,10 +357,11 @@ func open(path string) bool {
 	switch path {
 	case "/api/meta/v1/version", "/api/system/v1/health", "/api/auth/v1/state", "/api/auth/v1/login", "/api/auth/v1/setup",
 		"/api/auth/v1/oidc", "/api/auth/v1/oidc/start", "/api/auth/v1/oidc/callback",
-		"/api/auth/v1/ticket/redeem", // the ticket is the credential
-		"/api/system/v1/addonctl",    // 28.8: its own token, checked by the handler
-		"/api/homematic.cgi",         // task 180: hmipserver's session check, answered for the loopback only
-		"/api/system/v1/sbom":        // task 179: the Licences page, also from the login screen
+		"/api/auth/v1/ticket/redeem",          // the ticket is the credential
+		"/api/system/v1/addonctl",             // 28.8: its own token, checked by the handler
+		"/api/system/v1/addons/install/local", // openccu-lite B-274: the install token, checked by the handler
+		"/api/homematic.cgi",                  // task 180: hmipserver's session check, answered for the loopback only
+		"/api/system/v1/sbom":                 // task 179: the Licences page, also from the login screen
 		return true
 	}
 	return false

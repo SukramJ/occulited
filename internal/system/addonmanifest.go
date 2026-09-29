@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strings"
+	"time"
 
 	"github.com/hobbyquaker/occulited/internal/manifest"
 )
@@ -20,7 +22,9 @@ import (
 // kept root-owned beside the policy as <id>.manifest.json, and the copy inside the addon's own
 // directory is never read again - a confined addon owns that directory (D-69). A package without
 // a manifest takes the catalogue's word for the id (an adapter manifest, or the one fetched for the
-// Addons page) when there is one, and the box default otherwise, as before.
+// Addons page, when it speaks for the installed version) when there is one; otherwise the stored
+// copy of an earlier install goes (B-27) and the policy keeps its runtime block without the API
+// scopes, as for an addon installed before D-119.
 
 // AddonManifestSuffix names the stored copy beside the policy, AddonPolicyDir/<id>.manifest.json.
 const AddonManifestSuffix = ".manifest.json"
@@ -152,22 +156,75 @@ func (a *SystemdAddons) ApplyManifest(ctx context.Context, id string, m *manifes
 }
 
 // fallbackManifest is the catalogue's word for an addon without a manifest of its own: nil
-// without a catalogue or an entry.
-func (a *SystemdAddons) fallbackManifest(id string) *manifest.Manifest {
+// without a catalogue or an entry, and nil when the catalogue read it at a release tag that is not
+// the installed version (B-27): the latest release's manifest does not describe an older package
+// installed from a file - its ui.session_header would open a page without ?sid= that cannot read
+// the header. An adapter manifest, and one read at the default branch, speak for any version.
+func (a *SystemdAddons) fallbackManifest(ctx context.Context, id string) *manifest.Manifest {
 	if a.FallbackManifest == nil {
 		return nil
 	}
-	m := a.FallbackManifest(id)
+	m, tag := a.FallbackManifest(id)
 	if m == nil || m.ID != id {
+		return nil
+	}
+	if tag != "" && !sameVersion(tag, a.installedVersion(ctx, id)) {
 		return nil
 	}
 	return m
 }
 
+// installedVersion is the Version line of the addon's rc.d info, "" when it says none.
+func (a *SystemdAddons) installedVersion(ctx context.Context, id string) string {
+	if !addonIDRe.MatchString(id) {
+		return ""
+	}
+	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	raw, _ := a.Scripts.addonScriptOutput(cctx, id, a.Scripts.Root.join("/usr/local/etc/config/rc.d/"+id), "info")
+	return parseInfo(id, string(raw)).Version
+}
+
+// sameVersion says whether a release tag names an installed version: a leading "v" and the case
+// ignored; an empty version is never the same.
+func sameVersion(tag, version string) bool {
+	tag, version = strings.TrimPrefix(strings.TrimSpace(tag), "v"), strings.TrimPrefix(strings.TrimSpace(version), "v")
+	return version != "" && strings.EqualFold(tag, version)
+}
+
+// forgetManifest drops what an earlier install's manifest declared for an addon whose new package
+// brings none and that the catalogue does not describe (B-27): the stored copy - its ui block
+// (session_header, settings_url, own_updater), requires and release - and the policy's api_scopes,
+// a grant nothing in the package backs. The rest of the runtime block stays in the policy, where an
+// addon without a manifest keeps it: the directories, groups, ports and start order are facts
+// about the addon that an older version has as well, and taking them away would stop it. The mode
+// is not changed (AdoptInstalledAddons' reason). Says whether there was a copy.
+func (a *SystemdAddons) forgetManifest(id string) bool {
+	root := a.Scripts.Root
+	if !addonIDRe.MatchString(id) {
+		return false
+	}
+	if _, err := os.Lstat(root.join(AddonPolicyDir + "/" + id + AddonManifestSuffix)); err != nil {
+		return false
+	}
+	root.removeAddonManifest(id)
+	policyMu.Lock()
+	defer policyMu.Unlock()
+	if p := root.ReadAddonPolicy(id); p != nil && p.Runtime != nil && p.Runtime.APIScopes != nil {
+		p.Runtime.APIScopes = nil
+		if err := root.writeAddonPolicy(p); err != nil {
+			slog.Warn("addon manifest: the policy's API scopes could not be dropped", "addon", id, "err", err)
+		}
+	}
+	return true
+}
+
 // applyInstalledManifest is Install's step between the installer and the units: the package's
 // manifest goes to the addon it names when the installer created or changed that addon's rc.d
-// entry; every other fresh or updated addon without a stored manifest takes the catalogue's word
-// when there is one. What was applied is noted in the result. Returns the ids that got a policy.
+// entry; every other fresh or updated addon takes the catalogue's word when there is one, and
+// otherwise loses the stored copy an earlier install left (B-27: "rewritten by every install and
+// update" - a package without a manifest declares nothing). What was applied is noted in the
+// result. Returns the ids that got a policy.
 func (a *SystemdAddons) applyInstalledManifest(ctx context.Context, m *manifest.Manifest, fresh, touched []string, res *InstallResult) []string {
 	var applied []string
 	candidates := append(append([]string{}, fresh...), touched...)
@@ -185,11 +242,21 @@ func (a *SystemdAddons) applyInstalledManifest(ctx context.Context, m *manifest.
 	}
 	root := a.Scripts.Root
 	for _, id := range candidates {
-		if slices.Contains(applied, id) || root.ReadAddonManifest(id) != nil {
+		// the package's own manifest for the id, refused above, is not stood in for
+		if slices.Contains(applied, id) || (m != nil && m.ID == id) {
 			continue
 		}
-		fb := a.fallbackManifest(id)
+		// B-27: a package without a manifest replaced what the stored copy described; one whose
+		// manifest names another addon leaves the copies of the others as they are
+		bare := m == nil
+		if !bare && root.ReadAddonManifest(id) != nil {
+			continue
+		}
+		fb := a.fallbackManifest(ctx, id)
 		if fb == nil {
+			if bare && a.forgetManifest(id) {
+				res.Output += fmt.Sprintf("\n[manifest] %s: the package carries no %s; the stored declaration of the earlier install was removed", id, manifest.FileName)
+			}
 			continue
 		}
 		if err := a.ApplyManifest(ctx, id, fb, SourceCatalog); err != nil {
@@ -224,7 +291,7 @@ func (a *SystemdAddons) RefreshManifestRuntimes() []string {
 	for id, p := range root.AddonPolicies() {
 		m := root.ReadAddonManifest(id)
 		if m == nil {
-			if m = a.fallbackManifest(id); m == nil {
+			if m = a.fallbackManifest(context.Background(), id); m == nil {
 				continue
 			}
 			if err := root.writeAddonManifest(id, m); err != nil {

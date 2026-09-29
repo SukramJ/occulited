@@ -3,11 +3,14 @@ package httpapi
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -99,49 +102,10 @@ func (j *installJobs) get(id string) (InstallJob, bool) {
 // install detached; 202 with the job. ?wait=true answers when the job ends instead (a script's
 // convenience - the install runs detached either way, so a cut connection costs only the answer).
 func (a *SystemAPI) install(w http.ResponseWriter, r *http.Request) {
-	if a.Manager == nil {
-		writeJSON(w, http.StatusNotImplemented, apiError{Error: "unsupported", Message: "no addon manager"})
+	job := a.acceptInstall(w, r)
+	if job == nil {
 		return
 	}
-	// refused before the upload is stored: install_addon has one archive path, and the catalogue
-	// installs through the same installer
-	if a.installs.running() || a.catalogInstalling() {
-		writeJSON(w, http.StatusConflict, apiError{Error: "install-running", Message: errInstallRunning.Error()})
-		return
-	}
-	var src io.Reader = r.Body
-	if ct := r.Header.Get("Content-Type"); len(ct) >= 9 && ct[:9] == "multipart" {
-		mr, err := r.MultipartReader()
-		if err != nil {
-			badBody(w, err)
-			return
-		}
-		for {
-			part, err := mr.NextPart()
-			if err != nil {
-				badBody(w, io.ErrUnexpectedEOF)
-				return
-			}
-			if part.FormName() == "file" {
-				src = part
-				break
-			}
-		}
-	}
-	b := make([]byte, 6)
-	_, _ = rand.Read(b)
-	staged, err := system.StageAddonArchive(a.Root, "upload-"+hex.EncodeToString(b)+".tar.gz", src)
-	if err != nil {
-		writeJSON(w, http.StatusUnprocessableEntity, apiError{Error: "install-failed", Message: err.Error()})
-		return
-	}
-	job, err := a.installs.begin(staged.Size)
-	if err != nil {
-		staged.Remove()
-		writeJSON(w, http.StatusConflict, apiError{Error: "install-running", Message: err.Error()})
-		return
-	}
-	go a.runInstall(job, staged)
 	if r.URL.Query().Get("wait") == "true" {
 		select {
 		case <-job.done:
@@ -158,6 +122,109 @@ func (a *SystemAPI) install(w http.ResponseWriter, r *http.Request) {
 	}
 	out, _ := a.installs.get(job.ID)
 	writeJSON(w, http.StatusAccepted, out)
+}
+
+// acceptInstall stores the uploaded archive and starts its install as a job; nil after it has
+// answered the request with the reason there is none.
+func (a *SystemAPI) acceptInstall(w http.ResponseWriter, r *http.Request) *InstallJob {
+	if a.Manager == nil {
+		writeJSON(w, http.StatusNotImplemented, apiError{Error: "unsupported", Message: "no addon manager"})
+		return nil
+	}
+	// refused before the upload is stored: install_addon has one archive path, and the catalogue
+	// installs through the same installer
+	if a.installs.running() || a.catalogInstalling() {
+		writeJSON(w, http.StatusConflict, apiError{Error: "install-running", Message: errInstallRunning.Error()})
+		return nil
+	}
+	var src io.Reader = r.Body
+	if ct := r.Header.Get("Content-Type"); len(ct) >= 9 && ct[:9] == "multipart" {
+		mr, err := r.MultipartReader()
+		if err != nil {
+			badBody(w, err)
+			return nil
+		}
+		for {
+			part, err := mr.NextPart()
+			if err != nil {
+				badBody(w, io.ErrUnexpectedEOF)
+				return nil
+			}
+			if part.FormName() == "file" {
+				src = part
+				break
+			}
+		}
+	}
+	b := make([]byte, 6)
+	_, _ = rand.Read(b)
+	staged, err := system.StageAddonArchive(a.Root, "upload-"+hex.EncodeToString(b)+".tar.gz", src)
+	if err != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, apiError{Error: "install-failed", Message: err.Error()})
+		return nil
+	}
+	// asked again now that the upload is stored, under the lock the catalogue's start takes
+	// too: a catalogue install may have begun while the archive arrived
+	a.installGate.Lock()
+	var job *InstallJob
+	if a.catalogInstalling() {
+		err = errInstallRunning
+	} else {
+		job, err = a.installs.begin(staged.Size)
+	}
+	a.installGate.Unlock()
+	if err != nil {
+		staged.Remove()
+		writeJSON(w, http.StatusConflict, apiError{Error: "install-running", Message: err.Error()})
+		return nil
+	}
+	go a.runInstall(job, staged)
+	return job
+}
+
+// InstallExitHeader carries the installer's exit code on POST /addons/install/local's answer.
+const InstallExitHeader = "X-Occulite-Addon-Exit"
+
+// installLocal answers POST /addons/install/local (openccu-lite B-274): the fork's /bin/install_addon,
+// called outside occulited - on the command line, by an addon's own updater - hands its archive
+// here, so the install is the same job as an upload's (the manifest, the policy, the unit stopped
+// and started by systemd) instead of an update script's `rc.d/<id> start` leaving the addon running
+// as its caller, root and unconfined. The credential is the install token, root's alone
+// (system.InstallTokenFile); only from this system. The answer is for a shell: the output as plain
+// text, the installer's exit code in X-Occulite-Addon-Exit (1 when the installer did not run), and
+// the status of POST /addons/install?wait=true.
+func (a *SystemAPI) installLocal(w http.ResponseWriter, r *http.Request) {
+	h := r.Header.Get("Authorization")
+	tok, ok := strings.CutPrefix(h, "Bearer ")
+	if a.InstallToken == "" || !ok || !loopbackOnly(r) || subtle.ConstantTimeCompare([]byte(strings.TrimSpace(tok)), []byte(a.InstallToken)) != 1 {
+		writeJSON(w, http.StatusUnauthorized, apiError{Error: "unauthenticated", Message: "the install token is required"})
+		return
+	}
+	job := a.acceptInstall(w, r)
+	if job == nil {
+		return
+	}
+	select {
+	case <-job.done:
+	case <-r.Context().Done():
+		return
+	}
+	out, _ := a.installs.get(job.ID)
+	text, exit := out.Error, 1
+	if out.Result != nil {
+		text, exit = out.Result.Output, out.Result.Exit
+	}
+	status := http.StatusOK
+	if out.State != "done" {
+		status = http.StatusUnprocessableEntity
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set(InstallExitHeader, strconv.Itoa(exit))
+	w.WriteHeader(status)
+	if text != "" && !strings.HasSuffix(text, "\n") {
+		text += "\n"
+	}
+	_, _ = io.WriteString(w, text)
 }
 
 // runInstall is the job: on a context of its own, which no request ends.

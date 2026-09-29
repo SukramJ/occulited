@@ -506,7 +506,7 @@
     {#if toReinstall.length > 0}
         <!-- task 146 (D-106): the addons a restore brought back without their program files -->
         <section class="ol-notice ad-reinstall" id="reinstall" data-section="reinstall" aria-labelledby="reinstall-title">
-            <h2 id="reinstall-title">{t('Addons to reinstall after the restore')}<Help>{t("A CCU backup keeps an addon's settings and data but not its program files (the directories marked .nobackup). After a restore these addons are back without them and their units fail. Reinstalling from the catalogue puts the program back; the settings stay.")}</Help></h2>
+            <h2 id="reinstall-title">{t('Addons to reinstall after the restore')}<Help>{t("A backup keeps an addon's settings and data but not its program files (the directories marked .nobackup), as on a CCU. After a restore these addons are back without them: the system does not start them, and nothing reinstalls them by itself. Reinstalling from the catalogue puts the program back; the settings stay.")}</Help></h2>
             {#if !catalogue.checked}
                 <p class="ol-muted">{t('Check for updates first, so the catalogue knows which of them it can reinstall.')}</p>
             {/if}
@@ -515,7 +515,9 @@
                     {@const e = reinstallEntry(a)}
                     <li data-reinstall={a.id}>
                         <span class="ad-reinstall-name"><strong>{a.name || a.id}</strong>{#if a.version}<span class="ol-muted"> {a.version}</span>{/if}</span>
-                        <span class="ol-muted ad-reinstall-dirs">{t('missing: {dirs}', {dirs: (a.payload_missing_dirs ?? []).join(', ')})}</span>
+                        <!-- B-267: what happened and what to do, then what is missing -->
+                        <span class="ad-reinstall-what" data-reinstall-note>{t('Installed before the restore; reinstall it.')}</span>
+                        {#if a.payload_missing_dirs?.length}<span class="ol-muted ad-reinstall-dirs">{t('missing: {dirs}', {dirs: a.payload_missing_dirs.join(', ')})}</span>{/if}
                         {#if e}
                             {#if admin}<button class="hmm-button primary" onclick={() => reinstall(a)} disabled={installBusy || busy !== ''} data-action="reinstall">{t('Reinstall {version}', {version: e.latest?.version ?? ''})}</button>{/if}
                         {:else}
@@ -750,6 +752,7 @@
     .ad-reinstall-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
     .ad-reinstall-name { min-width: 12em; }
     .ad-reinstall-dirs { flex: 1 1 12em; font-size: 0.9em; }
+    .ad-reinstall-what { flex: 1 1 14em; }
     .ad-reinstall-hand { font-style: italic; }
     .ad-reinstall .ol-actions { margin-top: 10px; }
     .ad-filter { min-width: 12em; max-width: 100%; }

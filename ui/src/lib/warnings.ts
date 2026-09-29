@@ -97,8 +97,9 @@ export function warningText(w: Warning, words: Words): string {
             ].filter(Boolean).join(' ');
         }
         case 'addon-payload':
-            // task 146: a restore brought these addons back without their program files
-            return t('Addons without their program files (a backup carries no .nobackup directory; after a restore): {list}. Reinstall them from the catalogue on the Addons page.', {list: names(addons)});
+            // task 146: a restore brought these addons back without their program files; B-267: their units
+            // are skipped, not failed
+            return t('Addons installed before the restore, now without their program files: {list}. They are not started; reinstall them on the Addons page.', {list: names(addons)});
         case 'addon-ended':
             // B-158: an addon that keeps a program running, and none of it runs
             return t('Addons whose program has ended: {list}. The Addons page starts them again; the log says why they ended.', {list: names(addons)});

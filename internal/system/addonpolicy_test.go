@@ -10,7 +10,7 @@ import (
 func TestAddonPolicy(t *testing.T) {
 	r := rootWith(t, map[string]string{
 		"etc/passwd":                                 "root:x:0:0::/:/bin/sh\n",
-		"etc/group":                                  "root:x:0:\n",
+		"etc/group":                                  "root:x:0:\ndialout:x:20:\n",
 		"usr/local/addons/mosq/.keep":                "",
 		"usr/local/etc/config/rc.d/mosq":             "#!/bin/sh\n",
 		"usr/local/etc/config/addon-policy/old.json": `{"id":"old","mode":"confined","uid":30003,"user":"addon-old"}`,
@@ -46,7 +46,7 @@ func TestAddonPolicy(t *testing.T) {
 	if b, _ := os.ReadFile(r.join("/etc/passwd")); string(b) != "root:x:0:0::/:/bin/sh\naddon-mosq:x:30004:30004::/usr/local/addons/mosq:/bin/false\n" {
 		t.Errorf("passwd:\n%s", b)
 	}
-	if b, _ := os.ReadFile(r.join("/etc/group")); string(b) != "root:x:0:\naddon-mosq:x:30004:\n" {
+	if b, _ := os.ReadFile(r.join("/etc/group")); string(b) != "root:x:0:\ndialout:x:20:\naddon-mosq:x:30004:\n" {
 		t.Errorf("group:\n%s", b)
 	}
 	if !strings.Contains(joined, "chown -R 30004:30004 "+r.join("/usr/local/etc/config/addons/mosq")) {
@@ -109,19 +109,19 @@ func TestAddonPolicy(t *testing.T) {
 // D-46: a confined addon joins the certs group when the box has it, and only then
 func TestDropInRootMayMount(t *testing.T) {
 	p := &AddonPolicy{ID: "mounter", Mode: "root", Runtime: &AddonRuntime{Root: true, Capabilities: []string{CapSysAdmin}}}
-	got := renderDropIn(p, true)
+	got := renderDropIn(p, allGroups)
 	if strings.Contains(got, "[Service]") || !strings.Contains(got, "# mode=root\n# may mount") {
 		t.Errorf("an entry declaring CAP_SYS_ADMIN keeps the full set:\n%s", got)
 	}
 	// without the declaration, and with no block at all: the bounding set loses it
 	for _, p := range []*AddonPolicy{{ID: "x", Mode: "root"}, {ID: "x", Mode: "root", Runtime: &AddonRuntime{Capabilities: []string{"CAP_NET_ADMIN"}}}} {
-		if got := renderDropIn(p, true); !strings.HasSuffix(got, "# mode=root\n[Service]\nCapabilityBoundingSet=~CAP_SYS_ADMIN\n") {
+		if got := renderDropIn(p, allGroups); !strings.HasSuffix(got, "# mode=root\n[Service]\nCapabilityBoundingSet=~CAP_SYS_ADMIN\n") {
 			t.Errorf("root drop-in:\n%s", got)
 		}
 	}
 	// a confined addon's set is what it declares - among the capabilities that are not
 	// root-equivalent (B-251)
-	if got := renderDropIn(&AddonPolicy{ID: "x", Mode: "confined", UID: 30005, User: "addon-x", Runtime: &AddonRuntime{Capabilities: []string{"CAP_NET_BIND_SERVICE"}}}, false); !strings.Contains(got, "AmbientCapabilities=CAP_NET_BIND_SERVICE\nCapabilityBoundingSet=CAP_NET_BIND_SERVICE\n") {
+	if got := renderDropIn(&AddonPolicy{ID: "x", Mode: "confined", UID: 30005, User: "addon-x", Runtime: &AddonRuntime{Capabilities: []string{"CAP_NET_BIND_SERVICE"}}}, noCertsGroup); !strings.Contains(got, "AmbientCapabilities=CAP_NET_BIND_SERVICE\nCapabilityBoundingSet=CAP_NET_BIND_SERVICE\n") {
 		t.Errorf("confined:\n%s", got)
 	}
 }
@@ -134,7 +134,7 @@ func TestDropInDenylist(t *testing.T) {
 		Capabilities: []string{"CAP_SYS_ADMIN", "CAP_NET_BIND_SERVICE", "CAP_DAC_READ_SEARCH"},
 		Groups:       []string{"occulite", "dialout", "root"},
 	}}
-	got := renderDropIn(p, false)
+	got := renderDropIn(p, noCertsGroup)
 	// the denied names must not appear in the rendered directives (the header comment mentions
 	// "occulited", so check the lines, not the whole string)
 	for _, line := range strings.Split(got, "\n") {
@@ -154,21 +154,47 @@ func TestDropInDenylist(t *testing.T) {
 		t.Errorf("the harmless group was lost:\n%s", got)
 	}
 	// a confined addon that declares only denied capabilities ends with an empty bounding set
-	only := renderDropIn(&AddonPolicy{ID: "x", Mode: "confined", UID: 30006, User: "addon-x", Runtime: &AddonRuntime{Capabilities: []string{"CAP_SYS_MODULE"}}}, false)
+	only := renderDropIn(&AddonPolicy{ID: "x", Mode: "confined", UID: 30006, User: "addon-x", Runtime: &AddonRuntime{Capabilities: []string{"CAP_SYS_MODULE"}}}, noCertsGroup)
 	if !strings.Contains(only, "CapabilityBoundingSet=\n") || strings.Contains(only, "AmbientCapabilities=") {
 		t.Errorf("a confined addon with only denied caps must get an empty set:\n%s", only)
 	}
 }
 
+// allGroups and noCertsGroup stand in for Root.HasGroup: a system that knows every group, and one
+// that knows every group but certs.
+func allGroups(string) bool      { return true }
+func noCertsGroup(g string) bool { return g != CertsGroup }
+
+// B-259: a declared group the system does not know is left out of the drop-in (systemd would
+// refuse the whole unit), the known ones stay; usbstorage is rendered only where the image has it.
+func TestDropInUnknownGroup(t *testing.T) {
+	p := &AddonPolicy{ID: "mosq", Mode: "confined", UID: 30004, User: "addon-mosq", Runtime: &AddonRuntime{Groups: []string{USBStorageGroup, "dialout"}, Paths: []string{"/media"}}}
+	if got := renderDropIn(p, allGroups); !strings.Contains(got, "SupplementaryGroups=usbstorage dialout certs\n") || !strings.Contains(got, " -/media\n") {
+		t.Errorf("a system with the group:\n%s", got)
+	}
+	older := func(g string) bool { return g == "dialout" || g == CertsGroup }
+	got := renderDropIn(p, older)
+	if !strings.Contains(got, "SupplementaryGroups=dialout certs\n") || strings.Contains(got, USBStorageGroup) {
+		t.Errorf("a system without usbstorage:\n%s", got)
+	}
+	if got := renderDropIn(p, func(string) bool { return false }); strings.Contains(got, "SupplementaryGroups=") {
+		t.Errorf("a system without any of the groups:\n%s", got)
+	}
+	// a root addon's drop-in names no group, known or not
+	if got := renderDropIn(&AddonPolicy{ID: "x", Mode: "root", Runtime: &AddonRuntime{Groups: []string{"nosuchgroup"}}}, allGroups); strings.Contains(got, "SupplementaryGroups") {
+		t.Errorf("root:\n%s", got)
+	}
+}
+
 func TestDropInCertsGroup(t *testing.T) {
 	p := &AddonPolicy{ID: "mosq", Mode: "confined", UID: 30004, User: "addon-mosq", Runtime: &AddonRuntime{Groups: []string{"dialout"}}}
-	if got := renderDropIn(p, true); !strings.Contains(got, "SupplementaryGroups=dialout certs\n") {
+	if got := renderDropIn(p, allGroups); !strings.Contains(got, "SupplementaryGroups=dialout certs\n") {
 		t.Errorf("with the group:\n%s", got)
 	}
-	if got := renderDropIn(p, false); !strings.Contains(got, "SupplementaryGroups=dialout\n") || strings.Contains(got, "certs") {
+	if got := renderDropIn(p, noCertsGroup); !strings.Contains(got, "SupplementaryGroups=dialout\n") || strings.Contains(got, "certs") {
 		t.Errorf("without the group:\n%s", got)
 	}
-	if got := renderDropIn(&AddonPolicy{ID: "x", Mode: "confined", UID: 30005, User: "addon-x"}, true); !strings.Contains(got, "SupplementaryGroups=certs\n") {
+	if got := renderDropIn(&AddonPolicy{ID: "x", Mode: "confined", UID: 30005, User: "addon-x"}, allGroups); !strings.Contains(got, "SupplementaryGroups=certs\n") {
 		t.Errorf("no runtime block:\n%s", got)
 	}
 	r := fakeRoot(t)

@@ -381,7 +381,19 @@ func (r Root) groupEntry(name string) ([]string, bool) {
 // image must not fail every confined addon.
 const CertsGroup = "certs"
 
-func renderDropIn(p *AddonPolicy, certsGroup bool) string {
+// USBStorageGroup is the group that reads and writes USB sticks with FAT, exFAT or NTFS
+// (openccu-lite B-259): those filesystems carry no owner of their own, so the image mounts them
+// root:usbstorage with umask 0007. occulited is a member; an addon joins by declaring the group in
+// its manifest's runtime.groups (and "/media" in its paths to write). Not automatic, unlike
+// certs: a stick may hold the system's backups.
+const USBStorageGroup = "usbstorage"
+
+// renderDropIn renders the policy's fragment. hasGroup says whether the system knows a group: a
+// declared group it does not know is left out (and logged), since systemd refuses to start a unit
+// whose supplementary group is unknown - an addon that declares a group a newer image brings (the
+// USB sticks' usbstorage, B-259) must still start on an older one.
+func renderDropIn(p *AddonPolicy, hasGroup func(string) bool) string {
+	certsGroup := hasGroup(CertsGroup)
 	var b strings.Builder
 	// the header is part of what the unit editor shows as the effective unit, so it names no
 	// decision id (task 52)
@@ -414,6 +426,10 @@ func renderDropIn(p *AddonPolicy, certsGroup bool) string {
 	for _, g := range rt.Groups {
 		if manifest.DeniedConfinedGroup(g) {
 			slog.Warn("addon policy: a root-equivalent group is refused for a confined addon and not rendered", "id", p.ID, "group", g)
+			continue
+		}
+		if !hasGroup(g) {
+			slog.Warn("addon policy: a declared group is unknown on this system and not rendered", "id", p.ID, "group", g)
 			continue
 		}
 		groups = append(groups, g)
@@ -548,7 +564,7 @@ func (a *SystemdAddons) SetPolicy(ctx context.Context, id, mode, source string, 
 	if err := root.writeAddonPolicy(p); err != nil {
 		return nil, err
 	}
-	if err := writeFileAtomic(filepath.Join(root.join(AddonPolicyDir), id+".conf"), []byte(renderDropIn(p, root.HasGroup(CertsGroup))), 0o644); err != nil {
+	if err := writeFileAtomic(filepath.Join(root.join(AddonPolicyDir), id+".conf"), []byte(renderDropIn(p, root.HasGroup)), 0o644); err != nil {
 		return nil, err
 	}
 	// task 94: the start order follows the declaration - the stored manifest, else the stored
@@ -613,10 +629,9 @@ var policyMu sync.Mutex
 // an upgrade gets the new grants without anyone touching its policy. Returns the ids whose drop-in changed.
 func (a *SystemdAddons) RefreshPolicyDropIns(ctx context.Context) []string {
 	root := a.Scripts.Root
-	certs := root.HasGroup(CertsGroup)
 	var changed []string
 	for id, p := range root.AddonPolicies() {
-		want := renderDropIn(p, certs)
+		want := renderDropIn(p, root.HasGroup)
 		path := filepath.Join(root.join(AddonPolicyDir), id+".conf")
 		if readFile(path) == want {
 			continue

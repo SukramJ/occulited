@@ -545,9 +545,17 @@ func (a *SystemAPI) ownershipWarning(context.Context) ([]warnings.Warning, bool)
 	if len(found) == 0 {
 		return nil, true
 	}
-	list := make([]warnAddon, len(found))
-	for i, f := range found {
-		list[i] = warnAddon{ID: f.ID, Path: f.Path, Count: f.Count, Enabled: true}
+	list := make([]warnAddon, 0, len(found))
+	for _, f := range found {
+		// B-267: an addon a restore left without its program is the reinstall warning's; its
+		// files are root's because its unit (and the ownership step in it) did not start
+		if a.AddonPayload != nil && a.AddonPayload.ProgramMissing(f.ID) {
+			continue
+		}
+		list = append(list, warnAddon{ID: f.ID, Path: f.Path, Count: f.Count, Enabled: true})
+	}
+	if len(list) == 0 {
+		return nil, true
 	}
 	return []warnings.Warning{addonListWarning("addon-ownership", warnings.SeverityWarning, "/services", list)}, true
 }

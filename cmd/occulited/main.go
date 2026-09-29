@@ -386,6 +386,7 @@ func run(opts daemonOptions) error {
 	scripts := system.AddonScripts{Root: root, HTTP: trustStore.HTTPClient(trust.StoreOcculited, 0)} // task 231: an addon's own update URL
 	var lister httpapi.AddonLister = scripts
 	var addonCtl httpapi.AddonController // 28.8: nil off systemd
+	var installToken string              // openccu-lite B-274: POST /addons/install/local's credential
 	// B-2: an addon's update check goes to occulited's own CGI route with a credential - the
 	// daemon's own, minted for this process (task 66: the local token reads names alone now)
 	if tok, err := users.MintEphemeral("occulited:update-check", auth.Scopes{auth.ScopeSystemRead}); err == nil {
@@ -451,6 +452,14 @@ func run(opts daemonOptions) error {
 			log.Warn("addon control tokens", "problems", problems)
 		}
 		addonCtl = sa.Tokens
+		// openccu-lite B-274: /bin/install_addon outside occulited hands its archive to the install
+		if *rootDir == "/" {
+			if tok, err := system.WriteInstallToken(root); err != nil {
+				log.Warn("install token: not written, /bin/install_addon installs on its own", "err", err)
+			} else {
+				installToken = tok
+			}
+		}
 		j := system.JournalLog{Root: root} // B-116: the kernel's lines on the wall clock by their boot's start
 		journal, logReader = &j, j
 		log.Info("init: systemd detected - services through systemctl, log through journald")
@@ -600,7 +609,7 @@ func run(opts daemonOptions) error {
 		// D-119: a package without a manifest takes the catalogue's word - an adapter manifest, or
 		// the manifest fetched for the page
 		if catSvc != nil {
-			sa.FallbackManifest = catSvc.Manifest
+			sa.FallbackManifest = catSvc.ManifestAt
 		}
 		// a policy follows its stored manifest, and an installed addon without one adopts the
 		// catalogue's adapter when there is one; the drop-in below is rendered from that
@@ -855,7 +864,7 @@ func run(opts daemonOptions) error {
 	}, OnSystemUpdateToggle: func(on bool) error {
 		cfg.SystemUpdate.Enabled = on
 		return config.Save(*cfgPath, cfg)
-	}, WebBase: "http://" + cfg.Listen, MetaRecovered: loaded.RecoveredFromBackup, NetTx: netTx, IPv6: ipv6Tx, Run: run, RunStdin: runStdin, Firewall: fwm, Health: sampler, Updates: updates, FirstBoot: firstBoot, ChangeKey: changeKey, SetLogLevel: setLogLevel, InitInterface: initInterface, AddonCtl: addonCtl, Feed: feed, Cert: certSvc, RadioFirmware: radioFW, RadioConnections: radioConn, HmIPLocalKey: localKey, HmIPDeviceKeys: deviceKeys, ImportRecord: importRecord, NamesImport: metaAPI.ImportNamesFromSBK, ConfirmTicket: users.RedeemConfirmed, FirewallRules: fwRules, HTTPS: httpsCfg, ClassicRPC: &system.ClassicRPCConfig{Root: root, Run: run, Systemd: root.HasSystemd()}, WiFi: wifiService(root, root.HasSystemd()), Power: &system.Power{Root: root, Systemd: root.HasSystemd(), Run: run}, RadioInterfaces: radioIfs, Storage: storage, Clock: &system.ClockCheck{Root: root}, BootTiming: bootTiming, Version: version}
+	}, WebBase: "http://" + cfg.Listen, MetaRecovered: loaded.RecoveredFromBackup, NetTx: netTx, IPv6: ipv6Tx, Run: run, RunStdin: runStdin, Firewall: fwm, Health: sampler, Updates: updates, FirstBoot: firstBoot, ChangeKey: changeKey, SetLogLevel: setLogLevel, InitInterface: initInterface, AddonCtl: addonCtl, InstallToken: installToken, Feed: feed, Cert: certSvc, RadioFirmware: radioFW, RadioConnections: radioConn, HmIPLocalKey: localKey, HmIPDeviceKeys: deviceKeys, ImportRecord: importRecord, NamesImport: metaAPI.ImportNamesFromSBK, ConfirmTicket: users.RedeemConfirmed, FirewallRules: fwRules, HTTPS: httpsCfg, ClassicRPC: &system.ClassicRPCConfig{Root: root, Run: run, Systemd: root.HasSystemd()}, WiFi: wifiService(root, root.HasSystemd()), Power: &system.Power{Root: root, Systemd: root.HasSystemd(), Run: run}, RadioInterfaces: radioIfs, Storage: storage, Clock: &system.ClockCheck{Root: root}, BootTiming: bootTiming, Version: version}
 	sysAPI.BackupCrypt = backupStore
 	sysAPI.DataStore = &dataStore{path: *cfgPath, stateDir: cfg.StateDir, m: dataStoreMgr, h: dpHistory, root: root}
 	// openccu-lite task 86: the backup targets - the USB directory, NFS, SMB, SFTP

@@ -210,7 +210,7 @@ func TestSystemdAddonsFreshUnitStateAfterStart(t *testing.T) {
 // their daemons were alive in their units' cgroups.
 func TestOverlayUnitState(t *testing.T) {
 	list := []Addon{{ID: "redmatic", Running: false}, {ID: "quiet", Running: true, PID: 9}, {ID: "nounit", Running: true, PID: 7}}
-	units := []Service{{ID: "addon-redmatic", Running: true, PID: 4711}, {ID: "addon-quiet", Running: false}}
+	units := []Service{{ID: "addon-redmatic", Running: true, PID: 4711}, {ID: "addon-quiet", Running: false, Skipped: true}}
 	got := map[string]Addon{}
 	for _, a := range overlayUnitState(list, units) {
 		got[a.ID] = a
@@ -218,8 +218,11 @@ func TestOverlayUnitState(t *testing.T) {
 	if !got["redmatic"].Running || got["redmatic"].PID != 4711 {
 		t.Errorf("redmatic: %+v, want running with pid 4711", got["redmatic"])
 	}
-	if got["quiet"].Running || got["quiet"].PID != 0 {
-		t.Errorf("quiet: %+v, want not running", got["quiet"])
+	if got["quiet"].Running || got["quiet"].PID != 0 || !got["quiet"].Skipped {
+		t.Errorf("quiet: %+v, want not running, skipped (B-267: its program check said no)", got["quiet"])
+	}
+	if got["redmatic"].Skipped {
+		t.Errorf("redmatic skipped: %+v", got["redmatic"])
 	}
 	if !got["nounit"].Running || got["nounit"].PID != 7 {
 		t.Errorf("an addon without a unit keeps the pid-file answer: %+v", got["nounit"])

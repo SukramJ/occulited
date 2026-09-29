@@ -75,7 +75,9 @@ type TimerLister interface {
 type Catalog interface {
 	Fetch(ctx context.Context, force bool) (*catalog.View, error)
 	Refresh(ctx context.Context) error
-	Install(ctx context.Context, id string) (*catalog.Progress, error)
+	// Start takes the one install slot for the addon and installs it in the background; done
+	// receives the result. catalog.ErrInstallRunning while an install runs (B-25).
+	Start(ctx context.Context, id string) (done <-chan error, err error)
 	Progress() *catalog.Progress
 }
 
@@ -176,6 +178,9 @@ type SystemAPI struct {
 	Updates *addonupdates.Service
 	// installs are the upload installs, run detached from their request (B-4)
 	installs installJobs
+	// installGate makes the upload's and the catalogue's "none runs - start" one step each, so
+	// the two never both start (B-25)
+	installGate sync.Mutex
 	// FirstBoot is the result of the regadom import at first boot (D-35); nil = none happened.
 	FirstBoot *FirstBootImport
 	// Journal is set on a systemd box: the live log stream and the journal's extra filters.
@@ -188,6 +193,9 @@ type SystemAPI struct {
 	ChangeKey func(ctx context.Context, key string) error
 	// AddonCtl answers which addon an addonctl token belongs to (28.8); nil = the route answers 501.
 	AddonCtl AddonController
+	// InstallToken is the credential of POST /addons/install/local (openccu-lite B-274, the fork's
+	// /bin/install_addon): system.InstallTokenFile's secret; "" = the route answers 401.
+	InstallToken string
 	// SetLogLevel applies a level to rfd (BidCos-RF) or hs485d (BidCos-Wired) live over XML-RPC
 	// (task 27.8); nil = the file only, the daemons pick it up at their next start.
 	SetLogLevel func(ctx context.Context, iface string, level int) error
@@ -359,6 +367,7 @@ func (a *SystemAPI) Register(mux *http.ServeMux) {
 	route(mux, auth.ScopeSystemRead, "GET "+p+"/addons/{id}/policy", a.addonPolicy)
 	route(mux, auth.ScopeAddonsWrite, "PUT "+p+"/addons/{id}/policy", a.addonPolicyPut)
 	route(mux, auth.ScopeAddonsWrite, "POST "+p+"/addons/install", a.install)
+	route(mux, scopeOpen, "POST "+p+"/addons/install/local", a.installLocal)   // openccu-lite B-274: its own token
 	route(mux, auth.ScopeSystemRead, "GET "+p+"/addons/install", a.installJob) // B-4: the job
 	route(mux, auth.ScopeAddonsWrite, "POST "+p+"/addons/{id}/uninstall", a.uninstall)
 	route(mux, auth.ScopeSystemRead, "GET "+p+"/addons/{id}/update", a.update)
@@ -881,10 +890,14 @@ func (a *SystemAPI) MarkPayloadMissing(list []system.Addon) {
 	}
 	ids := make([]string, len(list))
 	versions := make(map[string]string, len(list))
+	skipped := map[string]bool{} // B-267: the unit's program check said no
 	for i, ad := range list {
 		ids[i], versions[ad.ID] = ad.ID, ad.Version
+		if ad.Skipped {
+			skipped[ad.ID] = true
+		}
 	}
-	st := a.AddonPayload.Check(ids, versions)
+	st := a.AddonPayload.Check(ids, versions, skipped)
 	for i := range list {
 		if s := st[list[i].ID]; s.Missing {
 			list[i].PayloadMissing, list[i].PayloadMissingDirs, list[i].ReinstallDismissed = true, s.Dirs, s.Dismissed
@@ -1850,13 +1863,33 @@ func (a *SystemAPI) catalogInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
+	// the check and the start under one lock with the upload's, so neither slips in between
+	a.installGate.Lock()
 	if a.installs.running() { // an uploaded archive is being installed (B-4)
+		a.installGate.Unlock()
 		writeJSON(w, http.StatusConflict, apiError{Error: "install-running", Message: errInstallRunning.Error()})
 		return
 	}
-	// runs detached: the page polls /catalog/progress; a RedMatic download is a hundred megabytes
+	// runs detached: the page polls /catalog/progress; a RedMatic download is a hundred megabytes.
+	// The slot is taken before the answer (B-25): a second start while one runs is a 409, never
+	// a 202 for an install that does not happen.
+	done, err := a.Catalog.Start(context.Background(), id)
+	a.installGate.Unlock()
+	if err != nil {
+		if errors.Is(err, catalog.ErrInstallRunning) {
+			running := ""
+			if p := a.Catalog.Progress(); p != nil {
+				running = p.AddonID
+			}
+			reqLog(r).Info("catalog: install refused, another one runs", "addon", id, "running", running)
+			writeJSON(w, http.StatusConflict, apiError{Error: "install-running", Message: err.Error()})
+			return
+		}
+		writeErr(w, err)
+		return
+	}
 	go func() {
-		if _, err := a.Catalog.Install(context.Background(), id); err != nil || a.Updates == nil {
+		if err := <-done; err != nil || a.Updates == nil {
 			return
 		}
 		// the addon's own update check ran before this install, and the Status page counts what

@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hobbyquaker/occulited/internal/manifest"
 )
@@ -171,11 +172,11 @@ func TestInstallManifestMismatchBrokenAndFallback(t *testing.T) {
 	}
 
 	r, a = manifestBox(t, "jp")
-	a.FallbackManifest = func(id string) *manifest.Manifest {
+	a.FallbackManifest = func(id string) (*manifest.Manifest, string) {
 		if id == "jp" {
-			return manifestFor("jp", &AddonRuntime{Root: true})
+			return manifestFor("jp", &AddonRuntime{Root: true}), ""
 		}
-		return nil
+		return nil, ""
 	}
 	res, err = a.Install(context.Background(), packageWith(t, ""))
 	if err != nil {
@@ -189,7 +190,7 @@ func TestInstallManifestMismatchBrokenAndFallback(t *testing.T) {
 	}
 	// the fallback's id must be the addon's
 	r, a = manifestBox(t, "x")
-	a.FallbackManifest = func(string) *manifest.Manifest { return manifestFor("y", nil) }
+	a.FallbackManifest = func(string) (*manifest.Manifest, string) { return manifestFor("y", nil), "" }
 	if _, err := a.Install(context.Background(), packageWith(t, "")); err != nil {
 		t.Fatal(err)
 	}
@@ -233,5 +234,142 @@ func TestRegaFromManifest(t *testing.T) {
 		if dep, _ := r.RegaDependence(id); dep != want {
 			t.Errorf("%s: dependent %v, want %v", id, dep, want)
 		}
+	}
+}
+
+// versionedBox is manifestBox whose installed rc.d script answers info with the given version.
+func versionedBox(t *testing.T, id, version string) (Root, *SystemdAddons) {
+	t.Helper()
+	r, a := manifestBox(t, id)
+	rc := r.join("/usr/local/etc/config/rc.d/" + id)
+	script := "#!/bin/sh\\n[ \\\"\\$1\\\" = info ] && echo 'Version: " + version + "'\\nexit 0\\n"
+	if err := os.WriteFile(r.join("/bin/install_addon"), []byte("#!/bin/sh\nprintf \""+script+"\" > "+rc+"\nchmod +x "+rc+"\nrm -f "+r.join("/usr/local/tmp/new_addon.tar.gz")+"\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	a.DefaultMode = "root" // info runs as root, without the helper
+	return r, a
+}
+
+// aged sets the rc.d entry's mtime an hour back, so that the next fake install's rewrite of the
+// same bytes is seen as a change (a coarse file system clock could otherwise give the same time).
+func aged(t *testing.T, r Root, id string) {
+	t.Helper()
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(r.join("/usr/local/etc/config/rc.d/"+id), old, old); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// B-27: a package without a manifest over one with a manifest takes the stored copy away - its
+// ui.session_header would otherwise keep ?sid= off a page that cannot read the header - and the
+// API scopes with it; the policy keeps the rest of its runtime block and its mode.
+func TestInstallWithoutManifestDropsTheEarlierCopy(t *testing.T) {
+	r, a := versionedBox(t, "mosq", "2.1.2+3")
+	body := `{"format": 1, "id": "mosq", "name": "Mosquitto", "ui": {"session_header": true},
+		"runtime": {"ports": [1883], "data_dirs": ["/usr/local/mosqdata"], "api_scopes": ["meta:read"]}}`
+	if _, err := a.Install(context.Background(), packageWith(t, body)); err != nil {
+		t.Fatal(err)
+	}
+	if m := r.ReadAddonManifest("mosq"); m == nil || !m.UI.SessionHeader {
+		t.Fatalf("the first install's copy: %+v", m)
+	}
+	aged(t, r, "mosq")
+	res, err := a.Install(context.Background(), packageWith(t, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Output, "[manifest] mosq: the package carries no openccu-lite.json; the stored declaration of the earlier install was removed") {
+		t.Errorf("output:\n%s", res.Output)
+	}
+	if m := r.ReadAddonManifest("mosq"); m != nil {
+		t.Fatalf("the earlier install's copy survived: %+v", m)
+	}
+	p := r.ReadAddonPolicy("mosq")
+	if p == nil || p.Mode != "root" || p.Runtime == nil || !p.Runtime.Declares(1883) || len(p.Runtime.DataDirs) != 1 || p.Runtime.APIScopes != nil {
+		t.Fatalf("policy: %+v runtime %+v", p, p.Runtime)
+	}
+	// a third install without a manifest has nothing to remove and says nothing
+	aged(t, r, "mosq")
+	res, err = a.Install(context.Background(), packageWith(t, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(res.Output, "[manifest]") {
+		t.Errorf("output:\n%s", res.Output)
+	}
+}
+
+// B-27: the catalogue's manifest read at a release tag stands in only for that version; one read
+// at the default branch, or an adapter, for any. Without a fitting one the copy goes.
+func TestInstallWithoutManifestFallbackByVersion(t *testing.T) {
+	withCopy := `{"format": 1, "id": "mosq", "name": "Mosquitto", "ui": {"session_header": true}}`
+	for _, tc := range []struct {
+		name, tag, installed string
+		applied              bool
+	}{
+		{"the latest release's manifest, an older package", "v2.1.2+4", "2.1.2+3", false},
+		{"the same release", "v2.1.2+3", "2.1.2+3", true},
+		{"the same release, no v", "2.1.2+3", "2.1.2+3", true},
+		{"the default branch or an adapter", "", "2.1.2+3", true},
+		{"a package that names no version", "v2.1.2+3", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, a := versionedBox(t, "mosq", tc.installed)
+			if _, err := a.Install(context.Background(), packageWith(t, withCopy)); err != nil {
+				t.Fatal(err)
+			}
+			a.FallbackManifest = func(id string) (*manifest.Manifest, string) {
+				m := manifestFor(id, &AddonRuntime{Ports: []int{1883}})
+				m.UI.SettingsURL = "/addons/mosq/catalogue.cgi"
+				return m, tc.tag
+			}
+			aged(t, r, "mosq")
+			res, err := a.Install(context.Background(), packageWith(t, ""))
+			if err != nil {
+				t.Fatal(err)
+			}
+			m := r.ReadAddonManifest("mosq")
+			if tc.applied {
+				if m == nil || m.UI.SessionHeader || m.UI.SettingsURL != "/addons/mosq/catalogue.cgi" || !strings.Contains(res.Output, "the catalogue's declaration applied") {
+					t.Fatalf("the catalogue's manifest was not applied: %+v\n%s", m, res.Output)
+				}
+			} else if m != nil || !strings.Contains(res.Output, "the stored declaration of the earlier install was removed") {
+				t.Fatalf("stored copy %+v\n%s", m, res.Output)
+			}
+		})
+	}
+}
+
+// B-27: a package whose manifest names another addon leaves the stored copies of the addons it
+// touched as they are - only a package without any manifest replaced what one described.
+func TestInstallForeignManifestKeepsOtherCopies(t *testing.T) {
+	r, a := manifestBox(t, "mosq")
+	writeManifest(t, r, "mosq", &AddonRuntime{Ports: []int{1883}})
+	if _, err := a.Install(context.Background(), packageWith(t, `{"format": 1, "id": "other", "name": "O"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if m := r.ReadAddonManifest("mosq"); m == nil {
+		t.Fatal("the copy of an addon the package's manifest does not name was removed")
+	}
+}
+
+// B-27: at start an addon without a stored copy adopts the catalogue's manifest only when it speaks
+// for the installed version - else the latest release's would come back after every boot.
+func TestRefreshManifestRuntimesFallbackByVersion(t *testing.T) {
+	r, a := versionedBox(t, "mosq", "2.1.2+3")
+	if _, err := a.Install(context.Background(), packageWith(t, "")); err != nil {
+		t.Fatal(err)
+	}
+	a.FallbackManifest = func(id string) (*manifest.Manifest, string) {
+		return manifestFor(id, &AddonRuntime{Ports: []int{1883}}), "v2.1.2+4"
+	}
+	if ids := a.RefreshManifestRuntimes(); len(ids) != 0 || r.ReadAddonManifest("mosq") != nil {
+		t.Fatalf("the latest release's manifest was adopted for 2.1.2+3: %v", ids)
+	}
+	a.FallbackManifest = func(id string) (*manifest.Manifest, string) {
+		return manifestFor(id, &AddonRuntime{Ports: []int{1883}}), "v2.1.2+3"
+	}
+	if ids := a.RefreshManifestRuntimes(); len(ids) != 1 || r.ReadAddonManifest("mosq") == nil {
+		t.Fatalf("the installed release's manifest was not adopted: %v", ids)
 	}
 }

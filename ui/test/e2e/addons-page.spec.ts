@@ -108,7 +108,8 @@ test('after a restore: the reinstall section, Reinstall from the catalogue, by h
         const body = await res.json();
         body.addons = body.addons.map((a: {id: string}) =>
             a.id === 'redmatic' ? {...a, running: false, payload_missing: true, payload_missing_dirs: ['bin', 'lib', 'www']} : a.id === 'hm2mqtt' ? {...a, payload_missing: true, payload_missing_dirs: ['bin'], reinstall_dismissed: true} : a);
-        body.addons.push({id: 'foo', name: 'Foo', version: '1.2', operations: [], running: false, enabled: true, payload_missing: true, payload_missing_dirs: ['app']});
+        // B-267: an addon whose unit the program check skipped, with no directory this daemon could name
+        body.addons.push({id: 'foo', name: 'Foo', version: '1.2', operations: [], running: false, enabled: true, skipped: true, payload_missing: true});
         await r.fulfill({response: res, json: body});
     });
     await page.route('**/api/system/v1/catalog/redmatic/install', (r) => {
@@ -127,9 +128,13 @@ test('after a restore: the reinstall section, Reinstall from the catalogue, by h
     const red = section.locator('[data-reinstall="redmatic"]');
     await expect(red).toContainText('RedMatic');
     await expect(red).toContainText('missing: bin, lib, www');
+    // B-267: every row says what happened and what to do
+    await expect(red.locator('[data-reinstall-note]')).toHaveText('Installed before the restore; reinstall it.');
     await expect(red.locator('[data-action="reinstall"]')).toHaveText('Reinstall 9.4.1');
     const foo = section.locator('[data-reinstall="foo"]');
     await expect(foo).toContainText('not in the catalogue — install it by hand');
+    await expect(foo.locator('[data-reinstall-note]')).toHaveText('Installed before the restore; reinstall it.');
+    await expect(foo.locator('.ad-reinstall-dirs')).toHaveCount(0);
     await expect(foo.locator('[data-action="reinstall"]')).toHaveCount(0);
     // one reinstallable: no Reinstall all
     await expect(section.locator('[data-action="reinstall-all"]')).toHaveCount(0);
@@ -168,5 +173,9 @@ test('after a restore, in German; no section when nothing is missing', async ({p
     await expect(section.getByRole('heading', {name: 'Nach der Wiederherstellung neu zu installierende Addons'})).toBeVisible();
     await expect(section.locator('li')).toHaveCount(2);
     await expect(section.locator('[data-action="reinstall-all"]')).toHaveText('Alle neu installieren (2)');
+    // B-267: the line per addon, with "Sie", and the reinstall button
+    const red = section.locator('[data-reinstall="redmatic"]');
+    await expect(red.locator('[data-reinstall-note]')).toHaveText('Vor der Wiederherstellung installiert; installieren Sie es neu.');
+    await expect(red.locator('[data-action="reinstall"]')).toHaveText(/neu installieren$/);
     await page.unrouteAll({behavior: 'wait'}); // B-12: as above
 });

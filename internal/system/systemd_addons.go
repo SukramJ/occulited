@@ -41,9 +41,10 @@ type SystemdAddons struct {
 	// opened ports (D-47); nil = the file is left alone.
 	Firewall *FirewallManager
 	// FallbackManifest is the catalogue's word for an addon whose package carries no manifest of
-	// its own (D-119): its adapter manifest, or the manifest fetched for the Addons page; nil for
-	// none, and nil without a catalogue.
-	FallbackManifest func(id string) *manifest.Manifest
+	// its own (D-119): its adapter manifest, or the manifest fetched for the Addons page, with the
+	// release tag it was read at ("" for an adapter or the default branch: any version; B-27); nil
+	// for none, and nil without a catalogue.
+	FallbackManifest func(id string) (*manifest.Manifest, string)
 	// EarlyStart is the user's early-start switch for an addon (task 119): the global one and the
 	// addon's own, both on by default. nil = on for every addon.
 	EarlyStart func(id string) bool
@@ -634,7 +635,7 @@ func overlayUnitState(list []Addon, units []Service) []Addon {
 			list[i].Running, list[i].PID = u.Running, u.PID
 			list[i].OneShot, list[i].Result, list[i].Stray = u.OneShot, u.Result, u.Stray
 			list[i].Ended, list[i].EndedAt, list[i].EndedLog = u.Ended, u.EndedAt, u.EndedLog
-			list[i].Failed = u.Failed
+			list[i].Failed, list[i].Skipped = u.Failed, u.Skipped
 		}
 	}
 	return list

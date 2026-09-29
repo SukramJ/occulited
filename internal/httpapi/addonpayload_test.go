@@ -92,6 +92,28 @@ func TestAddonsPayloadMissingAndDismiss(t *testing.T) {
 	}
 }
 
+// openccu-lite B-267: an addon whose unit the fork's program check skipped after a restore is
+// missing its program even where this daemon cannot look into the tagged directories: GET /addons
+// marks it, the Status warning names it, and it is not also an ended addon.
+func TestAddonsPayloadMissingUnitSkipped(t *testing.T) {
+	g := newBootRig(t, false)
+	g.api.Addons = payloadLister{list: []system.Addon{
+		{ID: "mosquitto", Name: "Mosquitto", Version: "2.1.2", Enabled: true, Skipped: true},
+		{ID: "hmm", Name: "Homematic Manager", Version: "3.0.0", Enabled: true, Running: true},
+	}}
+	g.api.AddonPayload = &system.PayloadRecord{Root: g.root, Path: filepath.Join(g.state, system.PayloadFile)}
+	_, out := g.do(t, "GET", "/addons", "")
+	list := out["addons"].([]any)
+	m, h := list[0].(map[string]any), list[1].(map[string]any)
+	if m["payload_missing"] != true || m["skipped"] != true || h["payload_missing"] != nil {
+		t.Fatalf("%v / %v", m, h)
+	}
+	ws, _ := g.api.addonWarnings(context.Background())
+	if len(ws) != 1 || ws[0].ID != "addon-payload" || ws[0].Variant != "mosquitto" {
+		t.Fatalf("warnings: %+v", ws)
+	}
+}
+
 // openccu-lite B-158: an addon whose daemon ended is a Status warning pointing at the Addons page.
 func TestAddonEndedWarning(t *testing.T) {
 	a := &SystemAPI{Root: fakeRoot(t), Addons: payloadLister{list: []system.Addon{{ID: "mosquitto", Name: "Mosquitto", Enabled: true, Ended: true}, {ID: "hmm", Name: "Homematic Manager", Enabled: true, Running: true}}}}

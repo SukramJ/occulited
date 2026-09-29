@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 )
 
@@ -14,11 +15,13 @@ import (
 // --exclude-tag=.nobackup: the contents of every directory carrying that tag are left out, the
 // directory and the tag itself are kept. That is where an addon keeps its program (bin/, www/,
 // app/, lib/), so after a restore the addon is back by its rc.d entry, its hm_addons.cfg line,
-// its settings and data - and every tagged directory holds nothing but its tag, its unit fails,
+// its settings and data - and every tagged directory holds nothing but its tag, its unit failed,
 // and nothing said why. That empty tagged directory is the signal: an addon whose tagged
 // directories all hold only the tag has lost its program files and needs reinstalling; the page
-// lists it with a Reinstall button when the catalogue knows it. A second signal, for an addon
-// without tags, is the addon-rc wrapper's <id>.script link pointing at a file that is not there.
+// lists it with a Reinstall button when the catalogue knows it. A second signal is the addon-rc
+// wrapper's <id>.script link pointing at a file that is not there, a third the addon's unit
+// skipped by the fork's program check (openccu-lite B-267: ExecCondition=lite-addon-payload keeps
+// such a unit from starting and failing; nothing reinstalls it automatically).
 // The one thing kept on disk is the dismissals (PayloadFile in the state directory).
 
 // PayloadFile is the dismissals' file in the state directory.
@@ -92,14 +95,34 @@ func (p *PayloadRecord) save(f payloadFile) error {
 	return nil
 }
 
-// taggedDirs lists the directories under the addon's directory that carry a .nobackup tag,
-// relative to it and sorted, and those among them that hold nothing besides the tag.
-func (p *PayloadRecord) taggedDirs(id string) (tagged []string, emptied []string) {
+// programDir: a tagged directory that holds the addon's program - not a cache or state (tmp/,
+// cache/, anything under var/). RedMatic tags tmp/ and var/npm-cache/ even when its settings ask
+// for its program in the backup, and those are empty on a working system (openccu-lite B-267).
+func programDir(rel string) bool {
+	switch {
+	case rel == "tmp", rel == "cache", rel == "var", strings.HasPrefix(rel, "var/"),
+		strings.HasSuffix(rel, "/tmp"), strings.HasSuffix(rel, "/cache"):
+		return false
+	}
+	return true
+}
+
+// taggedDirs lists the program directories under the addon's directory that carry a .nobackup
+// tag, relative to it and sorted: those it can read, those among them that hold nothing besides
+// the tag, and the ones it cannot list (a confined addon's tree is 0751: the tag is seen through
+// the x bit, the contents are not).
+func (p *PayloadRecord) taggedDirs(id string) (tagged, emptied, unread []string) {
 	base := p.Root.join("/usr/local/addons/" + id)
 	var walk func(dir string, depth int)
 	walk = func(dir string, depth int) {
+		rel, _ := filepath.Rel(base, dir)
 		entries, err := os.ReadDir(dir)
 		if err != nil {
+			if depth > 0 && programDir(rel) {
+				if fi, serr := os.Lstat(filepath.Join(dir, ".nobackup")); serr == nil && fi.Mode().IsRegular() {
+					unread = append(unread, rel)
+				}
+			}
 			return
 		}
 		hasTag := false
@@ -109,10 +132,11 @@ func (p *PayloadRecord) taggedDirs(id string) (tagged []string, emptied []string
 			}
 		}
 		if hasTag {
-			rel, _ := filepath.Rel(base, dir)
-			tagged = append(tagged, rel)
-			if len(entries) == 1 {
-				emptied = append(emptied, rel)
+			if programDir(rel) {
+				tagged = append(tagged, rel)
+				if len(entries) == 1 {
+					emptied = append(emptied, rel)
+				}
 			}
 			return // what is below a tagged directory is its payload, not another tag
 		}
@@ -125,7 +149,8 @@ func (p *PayloadRecord) taggedDirs(id string) (tagged []string, emptied []string
 	walk(base, 0)
 	sort.Strings(tagged)
 	sort.Strings(emptied)
-	return tagged, emptied
+	sort.Strings(unread)
+	return tagged, emptied, unread
 }
 
 // danglingScript: the addon-rc wrapper's <id>.script is a link whose target is gone; the target
@@ -136,18 +161,31 @@ func (p *PayloadRecord) danglingScript(id string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	if _, err := os.Stat(link); err == nil || !errors.Is(err, os.ErrNotExist) {
+	// an absolute target is read inside the root (the same path on the system itself)
+	var resolved string
+	if filepath.IsAbs(target) {
+		resolved = p.Root.join(target)
+	} else {
+		resolved = filepath.Join(filepath.Dir(link), target)
+	}
+	if _, err := os.Stat(resolved); err == nil || !errors.Is(err, os.ErrNotExist) {
 		return "", false
 	}
 	return target, true
 }
 
 // Check says which of the installed addons (ids from rc.d; versions from the listing, for the
-// dismissals) miss their program files: every tagged directory holds only its tag - or, with no
-// tag at all, the wrapper's script link dangles. A dismissal holds only while the addon is
-// missing at the version it was dismissed at; it is dropped when the payload is back, and for
-// an addon no longer installed.
-func (p *PayloadRecord) Check(ids []string, versions map[string]string) map[string]PayloadState {
+// dismissals) miss their program files. Three signals, any of them (openccu-lite B-267):
+//   - skipped[id]: the addon's unit did not start because the fork's program check
+//     (ExecCondition=lite-addon-payload, run as root) found the program missing - the one that
+//     sees every directory;
+//   - the wrapper's <id>.script link dangles (RedMatic and Mosquitto link it into their bin/);
+//   - every tagged program directory this daemon can read holds only its tag (tmp/, cache/ and
+//     var/ do not count).
+//
+// A dismissal holds only while the addon is missing at the version it was dismissed at; it is
+// dropped when the payload is back, and for an addon no longer installed.
+func (p *PayloadRecord) Check(ids []string, versions map[string]string, skipped map[string]bool) map[string]PayloadState {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	f := p.load()
@@ -157,13 +195,15 @@ func (p *PayloadRecord) Check(ids []string, versions map[string]string) map[stri
 	for _, id := range ids {
 		installed[id] = true
 		st := PayloadState{}
-		tagged, emptied := p.taggedDirs(id)
-		if len(tagged) > 0 {
-			if len(emptied) == len(tagged) {
-				st.Missing, st.Dirs = true, emptied
+		tagged, emptied, unread := p.taggedDirs(id)
+		target, dangling := p.danglingScript(id)
+		if skipped[id] || dangling || (len(tagged) > 0 && len(emptied) == len(tagged)) {
+			st.Missing = true
+			st.Dirs = append(append([]string{}, emptied...), unread...)
+			sort.Strings(st.Dirs)
+			if len(st.Dirs) == 0 && dangling {
+				st.Dirs = []string{target}
 			}
-		} else if target, ok := p.danglingScript(id); ok {
-			st.Missing, st.Dirs = true, []string{target}
 		}
 		if v, ok := f.Dismissed[id]; ok {
 			if st.Missing && v == versions[id] {
@@ -187,6 +227,17 @@ func (p *PayloadRecord) Check(ids []string, versions map[string]string) map[stri
 		}
 	}
 	return out
+}
+
+// ProgramMissing is Check's file-system answer for one addon, without the unit's signal and
+// without touching the dismissals: the wrapper's script link dangles, or every tagged program
+// directory this daemon can list holds only its tag. The ownership warning uses it (B-267): an
+// addon a restore left without its program is not started, so its ownership step has not run
+// either, and the reinstall - not "Fix ownership" - is what it needs.
+func (p *PayloadRecord) ProgramMissing(id string) bool {
+	tagged, emptied, _ := p.taggedDirs(id)
+	_, dangling := p.danglingScript(id)
+	return dangling || (len(tagged) > 0 && len(emptied) == len(tagged))
 }
 
 // Dismiss hides the reinstall hint for the addon at this version; the next Check drops it once

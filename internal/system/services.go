@@ -279,7 +279,11 @@ type Addon struct {
 	// Failed as on Service (B-65): the addon's unit is in systemd's failed state (task 248: the
 	// Addons dot's red)
 	Failed bool `json:"failed,omitempty"`
-	PID    int  `json:"pid,omitempty"`
+	// Skipped as on Service: the addon's unit did not start because its ExecCondition= said no -
+	// the fork's program check (openccu-lite B-267): a restore brought the addon back without the
+	// program files it keeps in .nobackup directories. Not a failure; PayloadMissing says why.
+	Skipped bool `json:"skipped,omitempty"`
+	PID     int  `json:"pid,omitempty"`
 	// Settings comes from hm_addons.cfg when the addon registered a settings page there.
 	Settings *AddonSettings `json:"settings,omitempty"`
 	// Enabled: the rc.d script is executable. RegaDependent addons are disabled after an update

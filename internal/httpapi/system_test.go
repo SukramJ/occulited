@@ -366,18 +366,55 @@ func TestSystemUpdateRoutes(t *testing.T) {
 }
 
 // fakeCatalog is a catalogue whose view is already known, the state the box is in after the
-// user's check.
+// user's check. Its installs hold the one slot as the real one does, until release is closed
+// (nil: they end at once).
 type fakeCatalog struct {
 	view      *catalog.View
 	refreshes int
+	release   chan struct{}
+
+	mu      sync.Mutex
+	running *catalog.Progress
+	started []string
 }
 
 func (f *fakeCatalog) Fetch(context.Context, bool) (*catalog.View, error) { return f.view, nil }
 func (f *fakeCatalog) Refresh(context.Context) error                      { f.refreshes++; return nil }
-func (f *fakeCatalog) Install(context.Context, string) (*catalog.Progress, error) {
-	return nil, nil
+func (f *fakeCatalog) Start(_ context.Context, id string) (<-chan error, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.running != nil && f.running.Finished == nil {
+		return nil, catalog.ErrInstallRunning
+	}
+	p := &catalog.Progress{AddonID: id, Phase: "resolving"}
+	f.running, f.started = p, append(f.started, id)
+	done := make(chan error, 1)
+	go func() {
+		if f.release != nil {
+			<-f.release
+		}
+		f.mu.Lock()
+		now := time.Now()
+		p.Phase, p.Finished = "done", &now
+		f.mu.Unlock()
+		done <- nil
+	}()
+	return done, nil
 }
-func (f *fakeCatalog) Progress() *catalog.Progress { return nil }
+func (f *fakeCatalog) Progress() *catalog.Progress {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.running == nil {
+		return nil
+	}
+	p := *f.running
+	return &p
+}
+func (f *fakeCatalog) Started() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.started...)
+}
 
 // item is a catalogue item whose manifest names id.
 func item(id string, latest *catalog.Latest) catalog.Item {
@@ -449,6 +486,66 @@ func (m blockingManager) Install(ctx context.Context, r io.Reader) (*system.Inst
 	time.Sleep(20 * time.Millisecond) // time for a cancellation to arrive
 	m.got <- fmt.Sprintf("%s|%v|%T", b, ctx.Err(), r)
 	return &system.InstallResult{Exit: 0, Meaning: "installed"}, nil
+}
+
+// B-25: three catalogue installs started in the same moment answered 202 each, and only the
+// first ran - the others were refused inside the detached run, silently. Now the slot is taken
+// before the answer: one 202, the rest 409 install-running, an upload beside it 409 too, and the
+// next start after the first has ended is accepted again.
+func TestCatalogInstallOneAtATime(t *testing.T) {
+	r := fakeRoot(t)
+	m := blockingManager{release: make(chan struct{}), got: make(chan string, 1)}
+	cat := &fakeCatalog{view: &catalog.View{}, release: make(chan struct{})}
+	mux := http.NewServeMux()
+	(&SystemAPI{Root: r, Services: scriptBox{system.AddonScripts{Root: r}}, Log: testLog, Addons: scriptBox{system.AddonScripts{Root: r}}, Manager: m, Catalog: cat}).Register(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	ids := []string{"hmm", "mosquitto", "redmatic"}
+	codes := make(chan int, len(ids))
+	var wg sync.WaitGroup
+	for _, id := range ids {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			st, _, _ := do(t, srv, "POST", "/api/system/v1/catalog/"+id+"/install", "", nil)
+			codes <- st
+		}()
+	}
+	wg.Wait()
+	close(codes)
+	count := map[int]int{}
+	for c := range codes {
+		count[c]++
+	}
+	if count[202] != 1 || count[409] != 2 {
+		t.Fatalf("three starts at once: %v, want one 202 and two 409", count)
+	}
+	if got := cat.Started(); len(got) != 1 {
+		t.Fatalf("installs started: %v", got)
+	}
+	if st, out, _ := do(t, srv, "POST", "/api/system/v1/catalog/hmm/install", "", nil); st != 409 || out["error"] != "install-running" {
+		t.Errorf("a start while one runs: %d %v", st, out)
+	}
+	if st, out, _ := do(t, srv, "POST", "/api/system/v1/addons/install", strings.Repeat("a", 128), nil); st != 409 || out["error"] != "install-running" {
+		t.Errorf("an upload while a catalogue install runs: %d %v", st, out)
+	}
+	close(cat.release)
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		if p := cat.Progress(); p != nil && p.Finished != nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the first install did not end")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if st, _, _ := do(t, srv, "POST", "/api/system/v1/catalog/redmatic/install", "", nil); st != 202 {
+		t.Errorf("the next start after the first ended: %d", st)
+	}
+	if got := cat.Started(); len(got) != 2 {
+		t.Errorf("installs started: %v", got)
+	}
 }
 
 // B-4: lighttpd's graceful reload during an install ends the proxied request; the install -
@@ -1416,5 +1513,70 @@ func TestFirewallCountersRoute(t *testing.T) {
 	loads := len(fp.loads)
 	if st, _, _ := do(t, srv, "POST", "/api/system/v1/firewall/counters/reset", "", nil); st != 200 || len(fp.loads) != loads+1 {
 		t.Fatalf("reset: %d, loads %d", st, len(fp.loads))
+	}
+}
+
+// openccu-lite B-274: /bin/install_addon outside occulited hands its archive to POST
+// /addons/install/local with the install token - the same job as an upload, answered for a shell:
+// the output as text, the installer's exit code in a header. Without the token, with another one,
+// or from another system (lighttpd's forwarded address) the route refuses.
+func TestInstallLocalRoute(t *testing.T) {
+	r := fakeRoot(t)
+	svc := scriptBox{system.AddonScripts{Root: r}}
+	_ = os.MkdirAll(filepath.Join(string(r), "bin"), 0o755)
+	_ = os.WriteFile(filepath.Join(string(r), "bin/install_addon"), []byte("#!/bin/sh\n[ -f "+filepath.Join(string(r), "usr/local/tmp/new_addon.tar.gz")+" ] || exit 101\nrm -f "+filepath.Join(string(r), "usr/local/tmp/new_addon.tar.gz")+"\necho installed\nexit 10\n"), 0o755)
+	mux := http.NewServeMux()
+	(&SystemAPI{Root: r, Services: svc, Log: testLog, Addons: svc, Manager: svc, Nav: svc, InstallToken: "the-token"}).Register(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	archive := strings.Repeat("z", 300)
+	post := func(hdr map[string]string) (*http.Response, string) {
+		t.Helper()
+		req, _ := http.NewRequest("POST", srv.URL+"/api/system/v1/addons/install/local", strings.NewReader(archive))
+		for k, v := range hdr {
+			req.Header.Set(k, v)
+		}
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		b, _ := io.ReadAll(res.Body)
+		return res, string(b)
+	}
+	for name, hdr := range map[string]map[string]string{
+		"no token":            nil,
+		"another token":       {"Authorization": "Bearer nope"},
+		"from another system": {"Authorization": "Bearer the-token", "X-Forwarded-For": "192.0.2.7"},
+	} {
+		if res, _ := post(hdr); res.StatusCode != 401 {
+			t.Errorf("%s: %d", name, res.StatusCode)
+		}
+	}
+	res, body := post(map[string]string{"Authorization": "Bearer the-token"})
+	if res.StatusCode != 200 || res.Header.Get(InstallExitHeader) != "10" || !strings.HasPrefix(res.Header.Get("Content-Type"), "text/plain") || body != "installed\n" {
+		t.Fatalf("install: %d exit %q %q", res.StatusCode, res.Header.Get(InstallExitHeader), body)
+	}
+	// the same job list as the uploads
+	if st, job, _ := do(t, srv, "GET", "/api/system/v1/addons/install", "", nil); st != 200 || job["state"] != "done" {
+		t.Fatalf("the job: %d %v", st, job)
+	}
+	// an installer that fails is its exit code, with a 422
+	_ = os.WriteFile(filepath.Join(string(r), "bin/install_addon"), []byte("#!/bin/sh\necho broken\nexit 104\n"), 0o755)
+	res, body = post(map[string]string{"Authorization": "Bearer the-token"})
+	if res.StatusCode != 422 || res.Header.Get(InstallExitHeader) != "104" || body != "broken\n" {
+		t.Fatalf("failed install: %d exit %q %q", res.StatusCode, res.Header.Get(InstallExitHeader), body)
+	}
+	// no token configured: the route is closed
+	mux2 := http.NewServeMux()
+	(&SystemAPI{Root: r, Services: svc, Log: testLog, Addons: svc, Manager: svc, Nav: svc}).Register(mux2)
+	srv2 := httptest.NewServer(mux2)
+	t.Cleanup(srv2.Close)
+	req, _ := http.NewRequest("POST", srv2.URL+"/api/system/v1/addons/install/local", strings.NewReader(archive))
+	req.Header.Set("Authorization", "Bearer ")
+	if res, err := http.DefaultClient.Do(req); err != nil || res.StatusCode != 401 {
+		t.Fatalf("without a token configured: %v %v", err, res)
+	} else {
+		res.Body.Close()
 	}
 }

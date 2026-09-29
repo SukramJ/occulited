@@ -212,7 +212,7 @@ func TestDeclarationMergesTheManifest(t *testing.T) {
 // stored manifest adopts the catalogue's adapter when there is one, and the drop-in is rendered
 // from the refreshed block
 func TestRefreshManifestRuntimes(t *testing.T) {
-	r := rootWith(t, map[string]string{"etc/group": "certs:x:8101:\n", "etc/passwd": "root:x:0:0::/:/bin/sh\n"})
+	r := rootWith(t, map[string]string{"etc/group": "certs:x:8101:\ndialout:x:20:\n", "etc/passwd": "root:x:0:0::/:/bin/sh\n"})
 	var calls []string
 	a := NewSystemdAddons(r, SystemdServices{Root: r, Run: fakeSystemctl(t, &calls)})
 	if _, err := a.SetPolicy(t.Context(), "mosq", "confined", "catalog", nil); err != nil {
@@ -230,11 +230,11 @@ func TestRefreshManifestRuntimes(t *testing.T) {
 	writeManifest(t, r, "mine", &AddonRuntime{Ports: []int{9999}})
 	writeManifest(t, r, "stale", &AddonRuntime{Ports: []int{1}})
 	// the catalogue's adapter for an addon that was installed without one
-	a.FallbackManifest = func(id string) *manifest.Manifest {
+	a.FallbackManifest = func(id string) (*manifest.Manifest, string) {
 		if id == "legacy" {
-			return manifestFor("legacy", &AddonRuntime{Root: true, Needs: &[]string{}})
+			return manifestFor("legacy", &AddonRuntime{Root: true, Needs: &[]string{}}), ""
 		}
-		return nil
+		return nil, ""
 	}
 	ids := a.RefreshManifestRuntimes()
 	if strings.Join(ids, ",") != "legacy,mine,mosq,stale" {
