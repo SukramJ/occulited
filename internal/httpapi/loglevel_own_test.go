@@ -38,9 +38,9 @@ func syslogLines(t *testing.T, r system.Root) string {
 	return string(b)
 }
 
-// task 101: GET and PUT /loglevels carry multimacd (a level or null) and occulited ({level,
-// debug_areas}). occulited's change applies live and restarts nothing; multimacd's asks for its
-// restart; a client that leaves either key out keeps what is stored.
+// task 101: GET and PUT /loglevels carry multimacd (task 297: 1 or 2, its own) and occulited
+// ({level, debug_areas}). occulited's change applies live and restarts nothing; multimacd's asks
+// for its restart, rfd's never does; a client that leaves either key out keeps what is stored.
 func TestLogLevelsOwnAndMultimacd(t *testing.T) {
 	r := fakeRoot(t)
 	_ = os.MkdirAll(filepath.Join(string(r), "etc/config"), 0o755)
@@ -52,7 +52,7 @@ func TestLogLevelsOwnAndMultimacd(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	st, out, _ := do(t, srv, "GET", "/api/system/v1/loglevels", "", nil)
-	if st != 200 || out["multimacd"] != nil || fmt.Sprint(out["occulited"]) != "map[debug_areas:[] level:info]" {
+	if st != 200 || out["multimacd"] != 2.0 || fmt.Sprint(out["occulited"]) != "map[debug_areas:[] level:info]" {
 		t.Fatalf("get: %d %v", st, out)
 	}
 
@@ -86,10 +86,15 @@ func TestLogLevelsOwnAndMultimacd(t *testing.T) {
 		t.Errorf("same setting: %d %v", st, out)
 	}
 
-	// null: back to rfd's; the key leaves the file, multimacd restarts (1 -> 5)
-	st, out, _ = do(t, srv, "PUT", "/api/system/v1/loglevels", `{"rfd":5,"hs485d":5,"hmip":"WARN","multimacd":null}`, nil)
-	if st != 200 || out["multimacd"] != nil || fmt.Sprint(out["restart"]) != "[multimacd]" || strings.Contains(syslogLines(t, r), "MULTIMACD") {
-		t.Errorf("null: %d %v\n%s", st, out, syslogLines(t, r))
+	// rfd changes under multimacd's own debug: rfd applies live, multimacd is not restarted
+	st, out, _ = do(t, srv, "PUT", "/api/system/v1/loglevels", `{"rfd":2,"hs485d":5,"hmip":"WARN","multimacd":1}`, nil)
+	if st != 200 || out["multimacd"] != 1.0 || fmt.Sprint(out["restart"]) != "[]" || fmt.Sprint(out["applied"]) != "[rfd]" {
+		t.Errorf("rfd under debug: %d %v", st, out)
+	}
+	// back to info: the key says 2, multimacd restarts
+	st, out, _ = do(t, srv, "PUT", "/api/system/v1/loglevels", `{"rfd":2,"hs485d":5,"hmip":"WARN","multimacd":2}`, nil)
+	if st != 200 || out["multimacd"] != 2.0 || fmt.Sprint(out["restart"]) != "[multimacd]" || !strings.Contains(syslogLines(t, r), "LOGLEVEL_MULTIMACD=2\n") {
+		t.Errorf("info: %d %v\n%s", st, out, syslogLines(t, r))
 	}
 
 	// an invalid occulited level or area is refused before anything is written
@@ -97,7 +102,14 @@ func TestLogLevelsOwnAndMultimacd(t *testing.T) {
 	for _, body := range []string{
 		`{"rfd":2,"hs485d":5,"hmip":"WARN","occulited":{"level":"trace","debug_areas":[]}}`,
 		`{"rfd":2,"hs485d":5,"hmip":"WARN","occulited":{"level":"info","debug_areas":["kernel"]}}`,
+		// multimacd takes only 1 and 2 (task 297): the quieter levels, 0, and null (the old
+		// "same as rfd") are refused
 		`{"rfd":2,"hs485d":5,"hmip":"WARN","multimacd":3}`,
+		`{"rfd":2,"hs485d":5,"hmip":"WARN","multimacd":4}`,
+		`{"rfd":2,"hs485d":5,"hmip":"WARN","multimacd":5}`,
+		`{"rfd":2,"hs485d":5,"hmip":"WARN","multimacd":7}`,
+		`{"rfd":2,"hs485d":5,"hmip":"WARN","multimacd":0}`,
+		`{"rfd":2,"hs485d":5,"hmip":"WARN","multimacd":null}`,
 	} {
 		if st, out, _ := do(t, srv, "PUT", "/api/system/v1/loglevels", body, nil); st != 422 || out["error"] != "invalid" {
 			t.Errorf("%s: %d %v", body, st, out)

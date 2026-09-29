@@ -1,11 +1,11 @@
 import {describe, expect, it} from 'vitest';
 import type {LogLevels} from './api';
-import {levelsKey, multimacdLevel, OCCULITED_AREAS, occulitedDebugOn, toggleArea} from './loglevels';
+import {levelsKey, MULTIMACD_LEVELS, multimacdLevel, OCCULITED_AREAS, occulitedDebugOn, toggleArea} from './loglevels';
 
 const base: LogLevels = {
     rfd: 5,
     hs485d: 5,
-    multimacd: null,
+    multimacd: 2,
     hmip: 'WARN',
     loghost: '',
     lighttpd: {request_handling: false, condition_handling: false, file_not_found: false, access_log: false},
@@ -15,10 +15,12 @@ const base: LogLevels = {
 };
 
 describe('multimacdLevel', () => {
-    it("is rfd's while multimacd has none, its own otherwise", () => {
-        expect(multimacdLevel(base)).toBe(5);
-        expect(multimacdLevel({...base, rfd: 2})).toBe(2);
-        expect(multimacdLevel({...base, rfd: 2, multimacd: 1})).toBe(1);
+    it('is Debug for 1 and Info for everything else, never rfd\'s (task 297)', () => {
+        expect(multimacdLevel(1)).toBe(1);
+        expect(multimacdLevel(2)).toBe(2);
+        // an older system's stored 3-7, none, or the old null: Info, as the system reads it
+        for (const n of [0, 3, 4, 5, 7, null, undefined]) expect(multimacdLevel(n)).toBe(2);
+        expect(MULTIMACD_LEVELS.map((l) => l.v)).toEqual([1, 2]);
     });
 });
 

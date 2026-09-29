@@ -902,7 +902,7 @@ const CATALOGUE: Record<string, {de: string; en?: string}> = {
     'Warning': {de: 'Warnung'},
     'Error': {de: 'Fehler'},
     // task 101: occulited's own level with its debug areas, multimacd's own level and the radio stack
-    'Applied live over the interface. multimacd runs with this level while it has none of its own.': {de: 'Wird live \u00fcber die Schnittstelle gesetzt. multimacd l\u00e4uft mit diesem Level, solange er keinen eigenen hat.'},
+    'Applied live over the interface.': {de: 'Wird live \u00fcber die Schnittstelle gesetzt.'},
     'this service': {de: 'dieser Dienst'},
     "occulited's own lines. Applied at once, without a restart; stored in occulited.json, so it stays after a restart and is part of the backup.": {de: 'Die eigenen Zeilen von occulited. Gilt sofort, ohne Neustart; gespeichert in occulited.json, bleibt also nach einem Neustart erhalten und ist Teil der Sicherung.'},
     'Debug for these areas only': {de: 'Debug nur f\u00fcr diese Bereiche'},
@@ -911,8 +911,10 @@ const CATALOGUE: Record<string, {de: string; en?: string}> = {
     Logins: {de: 'Anmeldungen'},
     'Debug writes many lines. In a RAM journal they push older lines out sooner; with copies to the userfs or a persistent journal they are written to the SD card. Switch it back when you are done.': {de: 'Debug schreibt viele Zeilen. In einem Journal im RAM verdr\u00e4ngen sie \u00e4ltere Zeilen fr\u00fcher; mit Kopien auf das Userfs oder mit einem persistenten Journal landen sie auf der SD-Karte. Nach der Fehlersuche wieder zur\u00fcckstellen.'},
     'radio module': {de: 'Funkmodul'},
-    "Between the radio module and rfd and hmipserver. Without a level of its own it runs with rfd's. It takes a new level only when it starts, and it cannot start again under rfd and hmipserver: the radio stack stops and starts in order.": {de: 'Sitzt zwischen dem Funkmodul und rfd und hmipserver. Ohne eigenen Level l\u00e4uft er mit dem von rfd. Einen neuen Level \u00fcbernimmt er nur beim Start, und unter laufendem rfd und hmipserver kann er nicht neu starten: der Funk-Stack stoppt und startet der Reihe nach.'},
-    'Same as rfd: {level}': {de: 'Wie rfd: {level}'},
+    // task 297: multimacd offers only Info and Debug, and has no fallback to rfd's level any more
+    'Between the radio module and rfd and hmipserver. Info or Debug only: at a quieter level it logs nothing at its start, and the system reads that start to tell whether the radio module answered. It takes a new level only when it starts, and it cannot start again under rfd and hmipserver: the radio stack stops and starts in order.': {
+        de: 'Sitzt zwischen dem Funkmodul und rfd und hmipserver. Nur Info oder Debug: auf einem leiseren Level schreibt er beim Start nichts, und das System liest diesen Start, um zu erkennen, ob das Funkmodul geantwortet hat. Einen neuen Level \u00fcbernimmt er nur beim Start, und unter laufendem rfd und hmipserver kann er nicht neu starten: der Funk-Stack stoppt und startet der Reihe nach.',
+    },
     'Saving asks for a restart of the radio stack: hmipserver, rfd and multimacd stop and start again, and no device can be reached until they are back, a minute or more.': {de: 'Nach dem Speichern ist ein Neustart des Funk-Stacks n\u00f6tig: hmipserver, rfd und multimacd stoppen und starten wieder, und bis sie zur\u00fcck sind, ist kein Ger\u00e4t erreichbar \u2013 eine Minute oder l\u00e4nger.'},
     'Restart the radio stack': {de: 'Funk-Stack neu starten'},
     'The radio stack restarted: hmipserver, rfd and multimacd stopped and started again.': {de: 'Der Funk-Stack wurde neu gestartet: hmipserver, rfd und multimacd wurden gestoppt und wieder gestartet.'},

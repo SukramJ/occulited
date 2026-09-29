@@ -9,11 +9,9 @@ import (
 	"testing"
 )
 
-func intp(n int) *int { return &n }
-
-// task 101: multimacd's own level. A file without LOGLEVEL_MULTIMACD reads as unset (rfd's level,
-// as the init script falls back to it); setting one writes the key, and null takes it out again.
-// multimacd is restarted when the level it starts with changes: its own, or rfd's while unset.
+// task 101, task 297: multimacd's own level, 1 debug or 2 info. A file without LOGLEVEL_MULTIMACD
+// reads as info (2), never as rfd's; every save writes the key; multimacd is restarted only when its
+// own level changes, never for rfd's.
 func TestLogLevelsMultimacd(t *testing.T) {
 	root := t.TempDir()
 	os.MkdirAll(filepath.Join(root, "etc/config"), 0o755)
@@ -24,30 +22,26 @@ func TestLogLevelsMultimacd(t *testing.T) {
 	t.Cleanup(func() { Priv = old })
 	r := Root(root)
 
-	got := r.ReadLogLevels()
-	if got.MultiMACD != nil || got.MultiMACDLevel() != 4 {
-		t.Fatalf("without the key: %+v, level %d", got.MultiMACD, got.MultiMACDLevel())
+	if got := r.ReadLogLevels(); got.MultiMACD != 2 {
+		t.Fatalf("without the key: %d, want 2 (info, not rfd's 4)", got.MultiMACD)
 	}
 	base := LogLevels{RFD: 4, HS485D: 5, HmIP: "WARN"}
 
 	for _, step := range []struct {
 		name      string
 		rfd       int
-		multimacd *int
+		multimacd int
 		restart   string
 		file      string // the LOGLEVEL_ lines of the file, in order
-		readBack  string // "" = nil
 	}{
-		// the same level rfd has: the key is written, but multimacd starts with what it had
-		{"own level equal to rfd's", 4, intp(4), "", "RFD=4 HS485D=5 HMIP=WARN MULTIMACD=4", "4"},
-		{"debug", 4, intp(1), "multimacd", "RFD=4 HS485D=5 HMIP=WARN MULTIMACD=1", "1"},
-		// rfd changes, multimacd has its own: rfd is applied live by the caller, nothing restarts
-		{"rfd changes under an own level", 2, intp(1), "", "RFD=2 HS485D=5 HMIP=WARN MULTIMACD=1", "1"},
-		// back to rfd's: the key goes, multimacd starts with 2 now instead of 1
-		{"same as rfd again", 2, nil, "multimacd", "RFD=2 HS485D=5 HMIP=WARN", ""},
-		// unset, rfd changes: multimacd's level changes with it
-		{"rfd changes while unset", 5, nil, "multimacd", "RFD=5 HS485D=5 HMIP=WARN", ""},
-		{"nothing changes", 5, nil, "", "RFD=5 HS485D=5 HMIP=WARN", ""},
+		// info, as it read: the key is written, nothing restarts
+		{"info as it was", 4, 2, "", "RFD=4 HS485D=5 HMIP=WARN MULTIMACD=2"},
+		{"debug", 4, 1, "multimacd", "RFD=4 HS485D=5 HMIP=WARN MULTIMACD=1"},
+		// rfd changes: rfd is applied live by the caller, multimacd keeps its own
+		{"rfd changes under debug", 2, 1, "", "RFD=2 HS485D=5 HMIP=WARN MULTIMACD=1"},
+		{"back to info", 2, 2, "multimacd", "RFD=2 HS485D=5 HMIP=WARN MULTIMACD=2"},
+		{"rfd changes under info", 5, 2, "", "RFD=5 HS485D=5 HMIP=WARN MULTIMACD=2"},
+		{"rfd to debug under info", 1, 2, "", "RFD=1 HS485D=5 HMIP=WARN MULTIMACD=2"},
 	} {
 		l := base
 		l.RFD, l.MultiMACD = step.rfd, step.multimacd
@@ -71,44 +65,62 @@ func TestLogLevelsMultimacd(t *testing.T) {
 		if !strings.HasPrefix(string(b), "# levels\n") {
 			t.Errorf("%s: the comment went:\n%s", step.name, b)
 		}
-		switch {
-		case step.readBack == "" && got.MultiMACD != nil:
-			t.Errorf("%s: read back %d, want unset", step.name, *got.MultiMACD)
-		case step.readBack != "" && (got.MultiMACD == nil || step.readBack != strconv.Itoa(*got.MultiMACD)):
-			t.Errorf("%s: read back %v, want %s", step.name, got.MultiMACD, step.readBack)
+		if got.MultiMACD != step.multimacd {
+			t.Errorf("%s: read back %d, want %d", step.name, got.MultiMACD, step.multimacd)
 		}
+		env, _ := os.ReadFile(filepath.Join(root, "run/occulite/radio/multimacd.env"))
+		if want := "MULTIMACD_LOGLEVEL=" + strconv.Itoa(step.multimacd) + "\n"; string(env) != want {
+			t.Errorf("%s: multimacd.env %q, want %q", step.name, env, want)
+		}
+	}
+
+	// a stale 5 an older system stored reads as info, and a save that leaves multimacd as the page
+	// showed it writes 2 over it without a restart (the running multimacd was held at 2 already)
+	os.WriteFile(file, []byte("LOGLEVEL_RFD=5\nLOGLEVEL_HS485D=5\nLOGLEVEL_HMIP=WARN\nLOGLEVEL_MULTIMACD=5\n"), 0o644)
+	cur := r.ReadLogLevels()
+	if cur.MultiMACD != 2 {
+		t.Fatalf("stale 5: %d, want 2", cur.MultiMACD)
+	}
+	if _, restart, err := r.SetLogLevels(cur); err != nil || len(restart) != 0 {
+		t.Errorf("stale 5 saved: %v %v", restart, err)
+	}
+	if b, _ := os.ReadFile(file); !strings.Contains(string(b), "LOGLEVEL_MULTIMACD=2\n") || strings.Contains(string(b), "MULTIMACD=5") {
+		t.Errorf("stale 5 not replaced:\n%s", b)
 	}
 }
 
-// What the init script would not take reads as unset here too: the page then says "same as rfd",
-// which is what multimacd runs with.
+// Only 1 is debug; everything else - no key, 2, a 0 or a 3-7 of an older system, words - reads as
+// info. The check takes only 1 and 2.
 func TestLogLevelsMultimacdRead(t *testing.T) {
 	for _, c := range []struct {
 		line string
-		want *int
+		want int
 	}{
-		{"LOGLEVEL_MULTIMACD=1", intp(1)},
-		{"LOGLEVEL_MULTIMACD=\"2\"", intp(2)},
-		{"LOGLEVEL_MULTIMACD=0", intp(0)},
-		{"LOGLEVEL_MULTIMACD=", nil},
-		{"LOGLEVEL_MULTIMACD=debug", nil},
-		{"LOGLEVEL_MULTIMACD=12", nil},
-		{"LOGLEVEL_MULTIMACD=7", nil},
-		{"# LOGLEVEL_MULTIMACD=1", nil},
+		{"LOGLEVEL_MULTIMACD=1", 1},
+		{"LOGLEVEL_MULTIMACD=\"1\"", 1},
+		{"LOGLEVEL_MULTIMACD=\"2\"", 2},
+		{"LOGLEVEL_MULTIMACD=0", 2},
+		{"LOGLEVEL_MULTIMACD=3", 2},
+		{"LOGLEVEL_MULTIMACD=5", 2},
+		{"LOGLEVEL_MULTIMACD=7", 2},
+		{"LOGLEVEL_MULTIMACD=", 2},
+		{"LOGLEVEL_MULTIMACD=debug", 2},
+		{"LOGLEVEL_MULTIMACD=12", 2},
+		{"# LOGLEVEL_MULTIMACD=1", 2},
+		{"", 2},
 	} {
 		root := t.TempDir()
 		os.MkdirAll(filepath.Join(root, "etc/config"), 0o755)
-		os.WriteFile(filepath.Join(root, "etc/config/syslog"), []byte("LOGLEVEL_RFD=5\n"+c.line+"\n"), 0o644)
-		got := Root(root).ReadLogLevels().MultiMACD
-		if (got == nil) != (c.want == nil) || (got != nil && *got != *c.want) {
-			t.Errorf("%q: %v, want %v", c.line, got, c.want)
+		os.WriteFile(filepath.Join(root, "etc/config/syslog"), []byte("LOGLEVEL_RFD=1\n"+c.line+"\n"), 0o644)
+		if got := Root(root).ReadLogLevels().MultiMACD; got != c.want {
+			t.Errorf("%q: %d, want %d", c.line, got, c.want)
 		}
 	}
-	if err := checkLogLevels(LogLevels{RFD: 5, HS485D: 5, HmIP: "WARN", MultiMACD: intp(3)}); err == nil {
-		t.Error("accepted multimacd 3")
-	}
-	if err := checkLogLevels(LogLevels{RFD: 5, HS485D: 5, HmIP: "WARN", MultiMACD: intp(2)}); err != nil {
-		t.Errorf("refused multimacd 2: %v", err)
+	for n := -1; n <= 8; n++ {
+		err := checkLogLevels(LogLevels{RFD: 5, HS485D: 5, HmIP: "WARN", MultiMACD: n})
+		if ok := n == 1 || n == 2; ok != (err == nil) {
+			t.Errorf("multimacd %d: %v", n, err)
+		}
 	}
 }
 

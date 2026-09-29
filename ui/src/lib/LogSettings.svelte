@@ -15,7 +15,7 @@
     import {untrack} from 'svelte';
     import Tabs from './Tabs.svelte';
     import {api, type DataStoreConfig, type HistoryListConfig, type JournalConfig, type JournalStorage, type LogLevels} from './api';
-    import {levelsKey, multimacdLevel, OCCULITED_AREAS, OCCULITED_LEVELS, occulitedDebugOn, toggleArea} from './loglevels';
+    import {levelsKey, MULTIMACD_LEVELS, multimacdLevel, OCCULITED_AREAS, OCCULITED_LEVELS, occulitedDebugOn, toggleArea} from './loglevels';
     import {i18n, t} from './i18n.svelte';
     import Loading from './Loading.svelte';
     import Help from './Help.svelte';
@@ -249,24 +249,20 @@
     const RADIO_STACK = ['multimacd', 'rfd', 'hmipserver'];
     let levels = $state<LogLevels | null>(null);
     let levelsSnap = '';
-    // task 101: the level multimacd starts with as saved - a form that changes it restarts the radio
-    // stack, and the row says so before saving
-    let savedMultimacd = $state(0);
-    const radioRestartAhead = $derived(!!levels && multimacdLevel(levels) !== savedMultimacd);
+    // task 101: multimacd's level as saved - a form that changes it restarts the radio stack, and
+    // the row says so before saving. Task 297: its own level only, rfd's never touches it.
+    let savedMultimacd = $state(2);
+    const radioRestartAhead = $derived(!!levels && levels.multimacd !== savedMultimacd);
     let levelsBusy = $state(false);
     let levelsMsg = $state('');
     let levelsErr = $state('');
     let restartUnits = $state<string[]>([]);
-    function rfdLevelName(n: number): string {
-        const l = RFD_LEVELS.find((x) => x.v === n);
-        return l ? `${t(l.k)} (${n})` : String(n);
-    }
     function loadedLevels(l: LogLevels) {
-        l.multimacd = l.multimacd ?? null;
+        l.multimacd = multimacdLevel(l.multimacd);
         l.occulited = l.occulited ?? {level: 'info', debug_areas: []};
         levels = l;
         levelsSnap = levelsKey(l);
-        savedMultimacd = multimacdLevel(l);
+        savedMultimacd = l.multimacd;
     }
     function setArea(id: string, on: boolean) {
         if (levels) levels.occulited.debug_areas = toggleArea(levels.occulited.debug_areas, id, on);
@@ -382,21 +378,19 @@
                         {/if}
                     </div>
                     <div class="lv-field" data-level="rfd">
-                        <label class="lv-name" for="ol-lv-rfd">rfd <span class="ol-muted">· BidCos-RF</span><Help>{t('Applied live over the interface. multimacd runs with this level while it has none of its own.')}</Help></label>
+                        <label class="lv-name" for="ol-lv-rfd">rfd <span class="ol-muted">· BidCos-RF</span><Help>{t('Applied live over the interface.')}</Help></label>
                         <select id="ol-lv-rfd" class="hmm-select" bind:value={levels.rfd} disabled={levelsBusy}>
                             {#each withStored(RFD_LEVELS, levels.rfd) as l (l.v)}<option value={l.v} disabled={!l.k}>{l.k ? `${t(l.k)} (${l.v})` : t('{n} · stored, not one of the levels', {n: l.v})}</option>{/each}
                         </select>
                         {#if levels.rfd === 1}<p class="ol-muted lv-note" data-note="rfd-debug">{RFD_DEBUG_NOTE()}</p>{/if}
                         {#if offScale(RFD_LEVELS, levels.rfd)}<p class="ol-warn lv-note" data-note="rfd-stale">{STALE_NOTE()}</p>{/if}
                     </div>
-                    <!-- task 101: multimacd's own level, or rfd's; a change restarts the radio stack -->
+                    <!-- task 101: multimacd's own level; task 297: Debug or Info only, never rfd's. A change restarts the radio stack -->
                     <div class="lv-field" data-level="multimacd">
-                        <label class="lv-name" for="ol-lv-multimacd">multimacd <span class="ol-muted">· {t('radio module')}</span><Help>{t("Between the radio module and rfd and hmipserver. Without a level of its own it runs with rfd's. It takes a new level only when it starts, and it cannot start again under rfd and hmipserver: the radio stack stops and starts in order.")}</Help></label>
+                        <label class="lv-name" for="ol-lv-multimacd">multimacd <span class="ol-muted">· {t('radio module')}</span><Help>{t('Between the radio module and rfd and hmipserver. Info or Debug only: at a quieter level it logs nothing at its start, and the system reads that start to tell whether the radio module answered. It takes a new level only when it starts, and it cannot start again under rfd and hmipserver: the radio stack stops and starts in order.')}</Help></label>
                         <select id="ol-lv-multimacd" class="hmm-select" bind:value={levels.multimacd} disabled={levelsBusy}>
-                            <option value={null}>{t('Same as rfd: {level}', {level: rfdLevelName(levels.rfd)})}</option>
-                            {#each withStored(RFD_LEVELS, levels.multimacd) as l (l.v)}<option value={l.v} disabled={!l.k}>{l.k ? `${t(l.k)} (${l.v})` : t('{n} · stored, not one of the levels', {n: l.v})}</option>{/each}
+                            {#each MULTIMACD_LEVELS as l (l.v)}<option value={l.v}>{`${t(l.k)} (${l.v})`}</option>{/each}
                         </select>
-                        {#if offScale(RFD_LEVELS, levels.multimacd)}<p class="ol-warn lv-note" data-note="multimacd-stale">{STALE_NOTE()}</p>{/if}
                         {#if radioRestartAhead}
                             <p class="ol-warn lv-note" data-note="radio-restart">{t('Saving asks for a restart of the radio stack: hmipserver, rfd and multimacd stop and start again, and no device can be reached until they are back, a minute or more.')}</p>
                         {/if}

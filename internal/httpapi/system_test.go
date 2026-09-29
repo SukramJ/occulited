@@ -885,7 +885,8 @@ func TestLogLevelsRoutes(t *testing.T) {
 	if st != 200 || out["rfd"] != 5.0 || out["hmip"] != "ERROR" || out["loghost"] != "" {
 		t.Fatalf("get: %d %v", st, out)
 	}
-	// rfd goes live; hs485d's live call fails and lands in restart; hmip and LOGHOST mean hmipserver
+	// rfd goes live and leaves multimacd's own level alone (task 297); hs485d's live call fails and
+	// lands in restart; hmip and LOGHOST mean hmipserver
 	st, out, _ = do(t, srv, "PUT", "/api/system/v1/loglevels", `{"rfd":2,"hs485d":4,"hmip":"info","loghost":"log.example.net","lighttpd":{"request_handling":true}}`, nil)
 	if st != 200 {
 		t.Fatalf("put: %d %v", st, out)
@@ -893,14 +894,14 @@ func TestLogLevelsRoutes(t *testing.T) {
 	if fmt.Sprint(live) != "[BidCos-RF=2 BidCos-Wired=4]" {
 		t.Errorf("live calls %v", live)
 	}
-	if fmt.Sprint(out["applied"]) != "[rfd]" || fmt.Sprint(out["restart"]) != "[multimacd hmipserver occu-syslog-forward lighttpd hs485d]" {
+	if fmt.Sprint(out["applied"]) != "[rfd]" || fmt.Sprint(out["restart"]) != "[hmipserver occu-syslog-forward lighttpd hs485d]" {
 		t.Errorf("applied %v restart %v", out["applied"], out["restart"])
 	}
 	if out["errors"].(map[string]any)["hs485d"] != "connection refused" {
 		t.Errorf("errors %v", out["errors"])
 	}
 	b, _ := os.ReadFile(filepath.Join(string(r), "etc/config/syslog"))
-	if string(b) != "LOGLEVEL_RFD=2\nLOGLEVEL_HS485D=4\nLOGLEVEL_REGA=2\nLOGLEVEL_HMIP=INFO\nLOGHOST=log.example.net\n" {
+	if string(b) != "LOGLEVEL_RFD=2\nLOGLEVEL_HS485D=4\nLOGLEVEL_REGA=2\nLOGLEVEL_HMIP=INFO\nLOGHOST=log.example.net\nLOGLEVEL_MULTIMACD=2\n" {
 		t.Errorf("file:\n%s", b)
 	}
 	if st, out, _ := do(t, srv, "PUT", "/api/system/v1/loglevels", `{"rfd":3,"hs485d":5,"hmip":"ERROR"}`, nil); st != 422 || out["error"] != "invalid" {

@@ -236,8 +236,13 @@ func TestLogLevels(t *testing.T) {
 	if l.RFD != "2" || l.Multimacd != "2" || l.HS485D != "5" || l.HmIP != "DEBUG" {
 		t.Fatalf("%+v", l)
 	}
+	// a stale 3 reads as info, 1 stays debug (task 297; TestMultimacdLevel has the rest)
 	l = logLevels(map[string]string{"LOGLEVEL_MULTIMACD": "3", "LOGLEVEL_RFD": "x"})
-	if l.RFD != "5" || l.Multimacd != "3" {
+	if l.RFD != "5" || l.Multimacd != "2" {
+		t.Fatalf("%+v", l)
+	}
+	l = logLevels(map[string]string{"LOGLEVEL_MULTIMACD": "1", "LOGLEVEL_RFD": "x"})
+	if l.RFD != "5" || l.Multimacd != "1" {
 		t.Fatalf("%+v", l)
 	}
 	if heapMB(3884000, 0) != 896 || heapMB(946000, 0) != 128 || heapMB(0, 2*1024*1024*1024) != 512 {

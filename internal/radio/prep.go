@@ -243,7 +243,15 @@ func Ready(ctx context.Context, d Detector, daemon string, mainPID int, logf fun
 		}
 		nodeGroup(d, "mmd-bidcos", "/dev/mmd_bidcos")
 		nodeGroup(d, "mmd-hmip", "/dev/mmd_hmip")
-		logf("ready multimacd: started, the multiplexer endpoints are there")
+		// openccu-lite B-275: the endpoints say nothing about the module; multimacd's own lines do
+		switch verdict, line := multimacdStarted(ctx, d, mainPID); verdict {
+		case multimacdStartVersion:
+			logf("ready multimacd: started, the module answered (%s), the multiplexer endpoints are there", line)
+		case multimacdStartFailed:
+			return fmt.Errorf("multimacd got no version from the radio module (%q): rfd and hmipserver could not use it, so the start fails and the unit restarts it", line)
+		default:
+			logf("ready multimacd: started, the multiplexer endpoints are there; no version line from multimacd within %s (log level above %s?), the module not checked", multimacdStartWait, MultimacdMaxLevel)
+		}
 	case "rfd":
 		if !waitFor(d, 40*time.Second, func() bool { return status("rfd.status") }) {
 			return fmt.Errorf("rfd did not report itself started")
@@ -259,7 +267,7 @@ func Ready(ctx context.Context, d Detector, daemon string, mainPID int, logf fun
 				return true
 			}
 			if polls++; polls%3 == 0 {
-				if code, line, cause := hmipFatal(hmipserverOutput(ctx, d, mainPID)); code != "" {
+				if code, line, cause := hmipFatal(daemonOutput(ctx, d, mainPID)); code != "" {
 					fatal = HmIPFatal{Code: code, Line: line, Cause: cause, At: d.now()}
 					return true
 				}

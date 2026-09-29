@@ -63,7 +63,9 @@ func TestShadowDetectAndCheck(t *testing.T) {
 	write("var/etc/rfd.conf", f.VarRFDConf)
 	write("etc/config/rfd.conf", f.RFDConf)
 	write("etc/config/InterfacesList.xml", in.TemplateInterfacesList)
-	write("proc/4242/cmdline", "/bin/multimacd\x00-f\x00/var/etc/multimacd.conf\x00-l\x005\x00")
+	// multimacd at level 2, not rfd's 5: the plan holds it there (openccu-lite B-275), and a box
+	// whose chain started it at 5 is a reported difference by design
+	write("proc/4242/cmdline", "/bin/multimacd\x00-f\x00/var/etc/multimacd.conf\x00-l\x002\x00")
 	write("proc/4243/cmdline", "/bin/rfd\x00-f\x00/var/etc/rfd.conf\x00-l\x005\x00")
 	write("proc/4244/cmdline", strings.ReplaceAll(strings.Replace(f.Commands["hmipserver"], "java ", "/opt/java/bin/java ", 1), " ", "\x00")+"\x00")
 	states := map[string]struct {

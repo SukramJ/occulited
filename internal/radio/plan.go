@@ -99,7 +99,8 @@ type HBRFLED struct {
 }
 
 // LogLevels are the daemons' log levels from /etc/config/syslog: rfd's and hs485d's numbers,
-// multimacd's own or rfd's, hmipserver's log4j2 name.
+// multimacd's own - 1 or 2, never rfd's (task 297; held by MultimacdLevel as well) - and
+// hmipserver's log4j2 name.
 type LogLevels struct {
 	RFD       string `json:"rfd"`
 	Multimacd string `json:"multimacd"`
@@ -109,7 +110,6 @@ type LogLevels struct {
 
 var (
 	digitsRe  = regexp.MustCompile(`^[0-9]+$`)
-	levelRe   = regexp.MustCompile(`^[0-6]$`)
 	gatewayRe = regexp.MustCompile(`(?m)^Type = (HMLGW2|Lan Interface)`)
 	// deviation 6: any section number counts (upstream's ^\[Interface .\] matched one character)
 	sectionRe = regexp.MustCompile(`(?m)^\[Interface [0-9]+\]`)
@@ -490,11 +490,13 @@ func logLevels(syslog map[string]string) LogLevels {
 	if v := syslog["LOGLEVEL_HS485D"]; digitsRe.MatchString(v) {
 		l.HS485D = v
 	}
-	if v := syslog["LOGLEVEL_MULTIMACD"]; levelRe.MatchString(v) {
-		l.Multimacd = v
-	} else {
-		l.Multimacd = l.RFD
+	// multimacd's own level, never rfd's (openccu-lite task 297): 1 debug, anything else - no key,
+	// or a 3-7 an older system stored - info. MultimacdLevel stays as the guard.
+	l.Multimacd = MultimacdMaxLevel
+	if syslog["LOGLEVEL_MULTIMACD"] == "1" {
+		l.Multimacd = "1"
 	}
+	l.Multimacd = MultimacdLevel(l.Multimacd)
 	if v := syslog["LOGLEVEL_HMIP"]; v != "" {
 		l.HmIP = strings.ToUpper(v)
 	}

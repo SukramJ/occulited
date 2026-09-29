@@ -26,7 +26,7 @@ func TestLogHostRestartsOnlyTheForwarder(t *testing.T) {
 	root := t.TempDir()
 	_ = os.MkdirAll(filepath.Join(root, "etc/config"), 0o755)
 	r := Root(root)
-	set, _, err := r.SetLogLevels(LogLevels{RFD: 5, HS485D: 5, HmIP: "WARN"})
+	set, _, err := r.SetLogLevels(LogLevels{RFD: 5, HS485D: 5, MultiMACD: 2, HmIP: "WARN"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +41,7 @@ func TestLogHostRestartsOnlyTheForwarder(t *testing.T) {
 	if got.LogHost != "[fd00::7]:5514" {
 		t.Errorf("read back %q", got.LogHost)
 	}
-	if _, _, err := r.SetLogLevels(LogLevels{RFD: 5, HS485D: 5, HmIP: "WARN", LogHost: "log host"}); err == nil || !strings.Contains(err.Error(), ":port") {
+	if _, _, err := r.SetLogLevels(LogLevels{RFD: 5, HS485D: 5, MultiMACD: 2, HmIP: "WARN", LogHost: "log host"}); err == nil || !strings.Contains(err.Error(), ":port") {
 		t.Errorf("a bad LOGHOST: %v", err)
 	}
 }

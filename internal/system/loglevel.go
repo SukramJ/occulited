@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -38,11 +39,14 @@ import (
 //                 What made rfd look silent to the maintainer is B-161 (the running daemon never
 //                 got the level) and an idle rfd, which writes nothing at any level: three
 //                 listBidcosInterfaces calls produced no line at 1 either.
-//   multimacd     -l N from LOGLEVEL_MULTIMACD, the same scale (task 101). Unset, the init script
-//                 falls back to LOGLEVEL_RFD, which was multimacd's only level before, so a box or
-//                 a restored backup without the key keeps its behaviour. Only a restart applies
-//                 it, and multimacd cannot restart under rfd and hmipserver: the radio stack
-//                 stops and starts in order (RestartRadioStack).
+//   multimacd     -l N from LOGLEVEL_MULTIMACD, the same scale (task 101), but only 1 debug or
+//                 2 info (openccu-lite task 297): at 3 and above multimacd logs nothing at its
+//                 start, and the ready check reads its version line (B-275), so a quieter level
+//                 would only be a lie about what it runs with. It has a level of its own and no
+//                 longer falls back to rfd's; a missing key, or anything but 1 (a 3-7 an older
+//                 system stored), is info. Only a restart applies it, and multimacd cannot
+//                 restart under rfd and hmipserver: the radio stack stops and starts in order
+//                 (RestartRadioStack).
 //   hmipserver    log4j2: S62HMServer copies the template to /var/etc/log4j2.xml at start and
 //                 patches every level= with LOGLEVEL_HMIP (a name: TRACE DEBUG INFO WARN ERROR).
 //                 Restart to apply.
@@ -80,19 +84,11 @@ const lighttpdAccessLine = `accesslog.filename = "|/usr/bin/systemd-cat -t light
 type LogLevels struct {
 	RFD    int `json:"rfd"`    // LOGLEVEL_RFD: 1 debug, 2 info, 4 warning, 5 error
 	HS485D int `json:"hs485d"` // LOGLEVEL_HS485D, same scale
-	// MultiMACD is LOGLEVEL_MULTIMACD, same scale; nil = unset, multimacd runs with rfd's level.
-	MultiMACD *int          `json:"multimacd"`
+	// MultiMACD is LOGLEVEL_MULTIMACD: 1 debug or 2 info (MultimacdLevels), its own and never rfd's.
+	MultiMACD int           `json:"multimacd"`
 	HmIP      string        `json:"hmip"`     // LOGLEVEL_HMIP: TRACE DEBUG INFO WARN ERROR
 	LogHost   string        `json:"loghost"`  // LOGHOST: an external syslog server, empty = none (B-46)
 	Lighttpd  LighttpdDebug `json:"lighttpd"` // the drop-ins' switches
-}
-
-// MultiMACDLevel is the level multimacd starts with: its own, or rfd's when it has none.
-func (l LogLevels) MultiMACDLevel() int {
-	if l.MultiMACD != nil {
-		return *l.MultiMACD
-	}
-	return l.RFD
 }
 
 // LighttpdDebug are lighttpd's debug.* switches, each a line of the debug drop-in when on, and
@@ -104,11 +100,17 @@ type LighttpdDebug struct {
 	AccessLog         bool `json:"access_log"`         // accesslog.filename piped to systemd-cat
 }
 
-// RFDLevels are the values rfd, hs485d and multimacd take; HmIPLevels the names log4j2 takes.
+// RFDLevels are the values rfd and hs485d take, MultimacdLevels multimacd's (task 297: debug and
+// info, the levels at which it logs its start); HmIPLevels the names log4j2 takes.
 var (
-	RFDLevels  = []int{1, 2, 4, 5}
-	HmIPLevels = []string{"TRACE", "DEBUG", "INFO", "WARN", "ERROR"}
+	RFDLevels       = []int{1, 2, 4, 5}
+	MultimacdLevels = []int{1, 2}
+	HmIPLevels      = []string{"TRACE", "DEBUG", "INFO", "WARN", "ERROR"}
 )
+
+// MultimacdDefaultLevel is multimacd's level without a LOGLEVEL_MULTIMACD, or with one that is
+// not debug: info (task 297). radio.logLevels reads the file the same way at boot.
+const MultimacdDefaultLevel = 2
 
 // HmIPDefaultLevel is hmipserver's level on a box whose /etc/config/syslog has no LOGLEVEL_HMIP:
 // WARN since 2026-09-12 (maintainer, task 94). It was ERROR, task 83's lite default, which hid
@@ -117,15 +119,12 @@ var (
 // The fork's init script and log4j2 template fall back to the same level - keep them in step.
 const HmIPDefaultLevel = "WARN"
 
-// multimacdLevelRe is what the fork's S60multimacd takes from LOGLEVEL_MULTIMACD: one of eQ-3's
-// levels, 0 to 6. Anything else there is read as unset, as the script falls back to rfd's then.
-var multimacdLevelRe = regexp.MustCompile(`^[0-6]$`)
-
 // ReadLogLevels reads /etc/config/syslog and the lighttpd drop-in. A missing file or key gives
-// the defaults the init scripts fall back to as well: 5 and 5 for rfd and hs485d, rfd's for
-// multimacd, HmIPDefaultLevel for hmipserver.
+// the defaults the init scripts fall back to as well: 5 and 5 for rfd and hs485d,
+// MultimacdDefaultLevel for multimacd (1 is the only other value it reads), HmIPDefaultLevel for
+// hmipserver.
 func (r Root) ReadLogLevels() LogLevels {
-	l := LogLevels{RFD: 5, HS485D: 5, HmIP: HmIPDefaultLevel}
+	l := LogLevels{RFD: 5, HS485D: 5, MultiMACD: MultimacdDefaultLevel, HmIP: HmIPDefaultLevel}
 	for k, v := range parseSyslogConfig(readFile(r.join(syslogConfig))) {
 		switch k {
 		case "LOGLEVEL_RFD":
@@ -137,9 +136,8 @@ func (r Root) ReadLogLevels() LogLevels {
 				l.HS485D = n
 			}
 		case "LOGLEVEL_MULTIMACD":
-			if multimacdLevelRe.MatchString(v) {
-				n, _ := strconv.Atoi(v)
-				l.MultiMACD = &n
+			if v == "1" {
+				l.MultiMACD = 1
 			}
 		case "LOGLEVEL_HMIP":
 			l.HmIP = strings.ToUpper(v)
@@ -182,30 +180,26 @@ func accessLogPiped(s string) bool {
 }
 
 // SetLogLevels writes /etc/config/syslog and the two lighttpd drop-ins and says which units have to
-// be restarted for the change to show: multimacd when the level it starts with changed (its own,
-// or rfd's while it has none), hmipserver for its level, occu-syslog-forward for LOGHOST, lighttpd
+// be restarted for the change to show: multimacd when its level changed (never for rfd's: task
+// 297), hmipserver for its level, occu-syslog-forward for LOGHOST, lighttpd
 // for its debug switches and its access log. rfd and hs485d are not in the list because the caller
 // applies their level live (Interface.logLevel) - if that fails they are added by the caller.
 // LOGHOST alone does not restart hmipserver: it logs to the journal (task 83), and the forwarder
-// reads the journal (B-96). A nil MultiMACD removes LOGLEVEL_MULTIMACD from the file.
+// reads the journal (B-96). LOGLEVEL_MULTIMACD is always written, so a stale 3-7 of an older
+// system is replaced by what the page shows.
 func (r Root) SetLogLevels(l LogLevels) (LogLevels, []string, error) {
 	if err := checkLogLevels(l); err != nil {
 		return LogLevels{}, nil, err
 	}
 	old := r.ReadLogLevels()
 	set := map[string]string{
-		"LOGLEVEL_RFD":    strconv.Itoa(l.RFD),
-		"LOGLEVEL_HS485D": strconv.Itoa(l.HS485D),
-		"LOGLEVEL_HMIP":   strings.ToUpper(l.HmIP),
-		"LOGHOST":         strings.TrimSpace(l.LogHost),
+		"LOGLEVEL_RFD":       strconv.Itoa(l.RFD),
+		"LOGLEVEL_HS485D":    strconv.Itoa(l.HS485D),
+		"LOGLEVEL_HMIP":      strings.ToUpper(l.HmIP),
+		"LOGHOST":            strings.TrimSpace(l.LogHost),
+		"LOGLEVEL_MULTIMACD": strconv.Itoa(l.MultiMACD),
 	}
-	var unset []string
-	if l.MultiMACD != nil {
-		set["LOGLEVEL_MULTIMACD"] = strconv.Itoa(*l.MultiMACD)
-	} else {
-		unset = append(unset, "LOGLEVEL_MULTIMACD")
-	}
-	if err := writeFileAtomic(r.join(syslogConfig), []byte(renderSyslogConfig(readFile(r.join(syslogConfig)), set, unset...)), 0o644); err != nil {
+	if err := writeFileAtomic(r.join(syslogConfig), []byte(renderSyslogConfig(readFile(r.join(syslogConfig)), set)), 0o644); err != nil {
 		return LogLevels{}, nil, err
 	}
 	// B-161: the units take the level from /run/occulite/radio/<daemon>.env, which the radio run
@@ -220,7 +214,7 @@ func (r Root) SetLogLevels(l LogLevels) (LogLevels, []string, error) {
 		return LogLevels{}, nil, err
 	}
 	var restart []string
-	if old.MultiMACDLevel() != l.MultiMACDLevel() {
+	if old.MultiMACD != l.MultiMACD {
 		restart = append(restart, "multimacd")
 	}
 	if old.HmIP != strings.ToUpper(l.HmIP) {
@@ -238,7 +232,7 @@ func (r Root) SetLogLevels(l LogLevels) (LogLevels, []string, error) {
 // writeLevelEnv rewrites the environment files the units read for their level (B-161). The names
 // and the content are radio.LogLevelEnvFiles', so the boot's render and this one cannot drift.
 func (r Root) writeLevelEnv(l LogLevels) {
-	for name, content := range radio.LogLevelEnvFiles(strconv.Itoa(l.RFD), strconv.Itoa(l.HS485D), strconv.Itoa(l.MultiMACDLevel())) {
+	for name, content := range radio.LogLevelEnvFiles(strconv.Itoa(l.RFD), strconv.Itoa(l.HS485D), strconv.Itoa(l.MultiMACD)) {
 		path := r.join(filepath.Join(radio.RunDir, name+".env"))
 		if err := writeFileAtomic(path, []byte(content), 0o644); err != nil {
 			slog.Warn("log levels: the environment file was not written; the level applies at the next boot", "file", path, "err", err)
@@ -247,19 +241,11 @@ func (r Root) writeLevelEnv(l LogLevels) {
 }
 
 func checkLogLevels(l LogLevels) error {
-	ok := func(n int) bool {
-		for _, v := range RFDLevels {
-			if v == n {
-				return true
-			}
-		}
-		return false
-	}
-	if !ok(l.RFD) || !ok(l.HS485D) {
+	if !slices.Contains(RFDLevels, l.RFD) || !slices.Contains(RFDLevels, l.HS485D) {
 		return fmt.Errorf("rfd and hs485d levels are 1 (debug), 2 (info), 4 (warning) or 5 (error)")
 	}
-	if l.MultiMACD != nil && !ok(*l.MultiMACD) {
-		return fmt.Errorf("multimacd's level is 1 (debug), 2 (info), 4 (warning), 5 (error), or null for rfd's")
+	if !slices.Contains(MultimacdLevels, l.MultiMACD) {
+		return fmt.Errorf("multimacd's level is 1 (debug) or 2 (info)")
 	}
 	hm := strings.ToUpper(l.HmIP)
 	found := false

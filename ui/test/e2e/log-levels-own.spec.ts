@@ -2,9 +2,10 @@ import {test, expect, type Page} from '@playwright/test';
 
 // Task 101: the Log settings' levels tab has occulited's own level at the top (with debug for some
 // areas only) and multimacd's own level beside rfd's, which says before saving that the radio stack
-// restarts. The PUT is answered here as the box answers it.
+// restarts. Task 297: multimacd offers only Debug and Info and no longer follows rfd. The PUT is
+// answered here as the box answers it.
 
-type Put = {multimacd: number | null; rfd: number; occulited: {level: string; debug_areas: string[]}};
+type Put = {multimacd: number; rfd: number; occulited: {level: string; debug_areas: string[]}};
 
 async function openLevels(page: Page, puts: Put[], answer: (body: Put) => {restart: string[]; applied: string[]}) {
     await page.route('**/api/system/v1/loglevels', async (route) => {
@@ -18,7 +19,7 @@ async function openLevels(page: Page, puts: Put[], answer: (body: Put) => {resta
     await expect(page.locator('#ol-lv-occulited')).toBeVisible();
 }
 
-test('occulited is the first row, multimacd follows rfd until it has its own level, and a change restarts the radio stack', async ({page}) => {
+test('occulited is the first row, multimacd offers Debug and Info of its own, and a change restarts the radio stack', async ({page}) => {
     const puts: Put[] = [];
     const restarts: string[] = [];
     await page.route('**/api/system/v1/radio/restart', (route) => {
@@ -30,18 +31,21 @@ test('occulited is the first row, multimacd follows rfd until it has its own lev
     // occulited's row comes before every daemon's
     await expect(page.locator('.lv-grid [data-level], .lv-grid > label.lv-field').first()).toHaveAttribute('data-level', 'occulited');
     const mm = page.locator('#ol-lv-multimacd');
-    await expect(mm.locator('option:checked')).toHaveText('Same as rfd: Error (5)');
+    // two choices, Info by default; no "same as rfd", no quieter level
+    await expect(mm.locator('option')).toHaveText(['Debug (1)', 'Info (2)']);
+    await expect(mm.locator('option:checked')).toHaveText('Info (2)');
     const note = page.locator('[data-note="radio-restart"]');
     await expect(note).toBeHidden();
+    // the rfd row no longer speaks of multimacd
+    await expect(page.locator('[data-level="rfd"]')).not.toContainText('multimacd');
 
-    // rfd's level shows in the "same as" choice, and changing rfd while multimacd follows it restarts the stack too
-    await page.locator('#ol-lv-rfd').selectOption('2');
-    await expect(mm.locator('option:checked')).toHaveText('Same as rfd: Info (2)');
-    await expect(note).toBeVisible();
-    await page.locator('#ol-lv-rfd').selectOption('5');
+    // rfd's level does not move multimacd's, and asks for no restart of the radio stack
+    await page.locator('#ol-lv-rfd').selectOption('1');
+    await expect(mm.locator('option:checked')).toHaveText('Info (2)');
     await expect(note).toBeHidden();
+    await page.locator('#ol-lv-rfd').selectOption('5');
 
-    // its own level: the note says so before saving
+    // Debug: the note says so before saving
     await mm.selectOption({label: 'Debug (1)'});
     await expect(note).toBeVisible();
     await expect(note).toContainText('hmipserver, rfd and multimacd stop and start again');
@@ -60,12 +64,37 @@ test('occulited is the first row, multimacd follows rfd until it has its own lev
     expect(restarts).toEqual(['POST']);
     await expect(page.getByText('The radio stack restarted: hmipserver, rfd and multimacd stopped and started again.')).toBeVisible();
 
-    // back to "same as rfd": null in the PUT
-    await mm.selectOption({label: 'Same as rfd: Error (5)'});
+    // back to Info: 2 in the PUT, never null
+    await mm.selectOption({label: 'Info (2)'});
     await expect(note).toBeVisible();
     await page.getByRole('button', {name: 'Save', exact: true}).click();
     await expect.poll(() => puts.length).toBe(2);
-    expect(puts[1]!.multimacd).toBeNull();
+    expect(puts[1]!.multimacd).toBe(2);
+});
+
+// Task 297: an older daemon that still answers null or a stored quieter level shows Info, as the
+// system runs it; a refused level (422) is said on the page, and nothing is taken as saved.
+test("multimacd's stale level shows as Info, and a refusal is shown", async ({page}) => {
+    for (const stale of [null, 5]) {
+        await page.unroute('**/api/system/v1/loglevels');
+        await page.route('**/api/system/v1/loglevels', async (route) => {
+            if (route.request().method() === 'PUT') {
+                return route.fulfill({status: 422, json: {error: 'invalid', message: "multimacd's level is 1 (debug) or 2 (info)"}});
+            }
+            const r = await route.fetch();
+            await route.fulfill({json: {...(await r.json()), multimacd: stale}});
+        });
+        await page.goto('/system/log');
+        await page.getByRole('button', {name: 'Log settings'}).click();
+        const mm = page.locator('#ol-lv-multimacd');
+        await expect(mm.locator('option:checked')).toHaveText('Info (2)');
+        await expect(mm.locator('option')).toHaveCount(2);
+        await expect(page.locator('[data-note="radio-restart"]')).toBeHidden();
+    }
+    await page.locator('#ol-lv-multimacd').selectOption({label: 'Debug (1)'});
+    await page.getByRole('button', {name: 'Save', exact: true}).click();
+    await expect(page.getByText("multimacd's level is 1 (debug) or 2 (info)")).toBeVisible();
+    await expect(page.locator('[data-note="radio-restart"]')).toBeVisible();
 });
 
 test("occulited's level and its debug areas apply live, with the note on debug", async ({page}) => {
@@ -135,7 +164,8 @@ test('the two rows in German fit a phone and a 768 px window', async ({page}) =>
     await page.goto('/system/log');
     await page.getByRole('button', {name: 'Protokoll-Einstellungen'}).click();
     const mm = page.locator('#ol-lv-multimacd');
-    await expect(mm.locator('option:checked')).toHaveText('Wie rfd: Fehler (5)');
+    await expect(mm.locator('option:checked')).toHaveText('Info (2)');
+    await expect(mm.locator('option')).toHaveText(['Debug (1)', 'Info (2)']);
     await expect(page.getByText('Debug nur für diese Bereiche')).toBeVisible();
     await mm.selectOption({label: 'Debug (1)'});
     await expect(page.locator('[data-note="radio-restart"]')).toContainText('Neustart des Funk-Stacks');

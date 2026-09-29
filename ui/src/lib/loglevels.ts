@@ -1,6 +1,6 @@
 /*
  * Task 101: the Log settings' levels tab beyond the four daemons of 27.8 - occulited's own level
- * with its debug areas, and multimacd's level, which falls back to rfd's while it has none.
+ * with its debug areas, and multimacd's own level: Debug or Info (task 297).
  */
 import type {LogLevels} from './api';
 
@@ -19,9 +19,18 @@ export const OCCULITED_AREAS: {id: string; label: string}[] = [
     {id: 'rpc', label: 'lite-rpc'},
 ];
 
-/** The level multimacd starts with: its own, or rfd's while it has none. */
-export function multimacdLevel(l: Pick<LogLevels, 'rfd' | 'multimacd'>): number {
-    return l.multimacd ?? l.rfd;
+/**
+ * Task 297: multimacd's levels. Only Debug and Info: at a quieter level it logs nothing at its start,
+ * and the system reads that start to tell whether the radio module answered (B-275).
+ */
+export const MULTIMACD_LEVELS = [
+    {v: 1, k: 'Debug'},
+    {v: 2, k: 'Info'},
+] as const;
+
+/** multimacd's level as the page shows it: 1 is Debug, anything else (none, an older 3-7) Info - as the system reads it. */
+export function multimacdLevel(n: number | null | undefined): 1 | 2 {
+    return n === 1 ? 1 : 2;
 }
 
 /** An area switched on or off; the list stays in OCCULITED_AREAS' order, each area once. */
@@ -36,7 +45,7 @@ export function levelsKey(l: LogLevels): string {
     return JSON.stringify({
         rfd: l.rfd,
         hs485d: l.hs485d,
-        multimacd: l.multimacd ?? null,
+        multimacd: multimacdLevel(l.multimacd),
         hmip: l.hmip,
         loghost: l.loghost,
         lighttpd: l.lighttpd,

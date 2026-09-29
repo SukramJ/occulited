@@ -223,11 +223,14 @@ func write(ctx context.Context, root string, d Detector, det Detection, in Input
 // the daemons' prep steps run inside their units' mount namespaces, and making the run directory
 // writable there would let one confined daemon write another's environment file, which is read by
 // a unit of another user. The page runs as occulited and writes through the helper instead.
+//
+// multimacd's level is held at MultimacdMaxLevel or more verbose here as well (openccu-lite B-275):
+// the ready check reads its start lines, which quieter levels drop.
 func LogLevelEnvFiles(rfd, hs485d, multimacd string) map[string]string {
 	return map[string]string{
 		"rfd":       "LOGLEVEL_RFD=" + rfd + "\n",
 		"hs485d":    "LOGLEVEL_HS485D=" + hs485d + "\n",
-		"multimacd": "MULTIMACD_LOGLEVEL=" + multimacd + "\n",
+		"multimacd": "MULTIMACD_LOGLEVEL=" + MultimacdLevel(multimacd) + "\n",
 	}
 }
 

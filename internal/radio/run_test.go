@@ -220,7 +220,8 @@ func TestRunWritesTheBox(t *testing.T) {
 	if strings.Join(r.Enabled, " ") != "hmipserver multimacd rfd" {
 		t.Fatalf("enabled: %v", r.Enabled)
 	}
-	if read("run/occulite/radio/rfd.env") != "LOGLEVEL_RFD=4\n" || read("run/occulite/radio/multimacd.env") != "MULTIMACD_LOGLEVEL=4\n" {
+	// multimacd takes rfd's level, held at MultimacdMaxLevel (openccu-lite B-275)
+	if read("run/occulite/radio/rfd.env") != "LOGLEVEL_RFD=4\n" || read("run/occulite/radio/multimacd.env") != "MULTIMACD_LOGLEVEL=2\n" {
 		t.Fatalf("env: %q %q", read("run/occulite/radio/rfd.env"), read("run/occulite/radio/multimacd.env"))
 	}
 	env := ParseKV(read("run/occulite/radio/hmipserver.env"))

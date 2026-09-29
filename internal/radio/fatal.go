@@ -87,8 +87,10 @@ func exchangeCause(before []string) string {
 	return CauseRefused
 }
 
-// hmipserverOutput is what the JVM logged so far: the journal of its main process.
-func hmipserverOutput(ctx context.Context, d Detector, mainPID int) string {
+// daemonOutput is what a daemon logged so far: the journal of its main process. hmipserver's JVM
+// writes to the unit's stdout; multimacd logs through syslog, where journald takes the pid from
+// the socket's credentials - _PID= finds both.
+func daemonOutput(ctx context.Context, d Detector, mainPID int) string {
 	if mainPID <= 0 {
 		return ""
 	}

@@ -2780,8 +2780,9 @@ func (a *SystemAPI) logLevels(w http.ResponseWriter, r *http.Request) {
 }
 
 // logLevelsPut takes the daemons' levels and occulited's. Two keys may be left out by a client
-// that does not know them: without "multimacd" its stored level stays (null is "same as rfd"),
-// without "occulited" occulited's stays. Everything is checked before anything is written.
+// that does not know them: without "multimacd" its stored level stays, without "occulited"
+// occulited's stays. multimacd's is 1 or 2 (task 297): null, the old "same as rfd", reads as 0
+// and is refused with the rest. Everything is checked before anything is written.
 func (a *SystemAPI) logLevelsPut(w http.ResponseWriter, r *http.Request) {
 	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 64<<10))
 	if err != nil {

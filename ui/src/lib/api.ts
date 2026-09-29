@@ -614,11 +614,11 @@ export interface JournalConfig {
 
 /** task 27.8: per-daemon log levels, from /etc/config/syslog and lighttpd's drop-in */
 export interface LogLevels {
-    /** 1 debug, 2 info, 4 warning, 5 error — multimacd runs with this one while it has none of its own */
+    /** 1 debug, 2 info, 4 warning, 5 error */
     rfd: number;
     hs485d: number;
-    /** task 101: LOGLEVEL_MULTIMACD, the same scale; null = unset, multimacd runs with rfd's */
-    multimacd: number | null;
+    /** task 101, task 297: LOGLEVEL_MULTIMACD, multimacd's own - 1 debug or 2 info, never rfd's */
+    multimacd: number;
     /** task 101: occulited's own level, applied live; the areas log at debug while the level is above it */
     occulited: {level: 'debug' | 'info' | 'warn' | 'error'; debug_areas: string[]};
     /** log4j2 name: TRACE DEBUG INFO WARN ERROR */
