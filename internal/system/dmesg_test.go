@@ -297,3 +297,59 @@ func TestJournalKernelWallClock(t *testing.T) {
 		}
 	}
 }
+
+// task 178: the ring buffer's pages. Every line carries a cursor of its stamp and its ordinal
+// among the lines with that stamp; the pages before and after a cursor and the head are
+// contiguous, without a gap or a doubled line, and the page before the first line is empty.
+func TestDmesgPages(t *testing.T) {
+	all := parseDmesg([]byte(dmesgRaw), time.Time{}, "")
+	if all[0].Cursor != "0/0" || all[1].Cursor != "0/1" || all[2].Cursor != "1234567/0" || all[5].Cursor != "0/2" {
+		t.Fatalf("cursors: %+v", all)
+	}
+	d := Dmesg{Root: rootWith(t, map[string]string{"proc/uptime": "100.00 180.00\n"}), Run: func(context.Context, string, ...string) ([]byte, error) {
+		return []byte(dmesgRaw), nil
+	}}
+	read := func(q LogQuery) []string {
+		lines, err := d.Read(q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var c []string
+		for _, l := range lines {
+			c = append(c, l.Cursor)
+		}
+		return c
+	}
+	// the tail, then the page before it, then the page before that: the whole buffer once
+	tail := read(LogQuery{Limit: 2})
+	before := read(LogQuery{Limit: 2, Before: tail[0]})
+	first := read(LogQuery{Limit: 2, Before: before[0]})
+	got := strings.Join(append(append(first, before...), tail...), " ")
+	if got != "0/0 0/1 1234567/0 12500001/0 30000100/0 0/2" {
+		t.Errorf("backwards: %s", got)
+	}
+	if empty := read(LogQuery{Limit: 2, Before: first[0]}); len(empty) != 0 {
+		t.Errorf("before the first line: %v", empty)
+	}
+	// the head, then the pages after it: the same buffer forwards
+	head := read(LogQuery{Limit: 4, Head: true})
+	after := read(LogQuery{Limit: 4, After: head[len(head)-1]})
+	if got := strings.Join(append(head, after...), " "); got != "0/0 0/1 1234567/0 12500001/0 30000100/0 0/2" {
+		t.Errorf("forwards: %s", got)
+	}
+	if empty := read(LogQuery{Limit: 4, After: "0/2"}); len(empty) != 0 {
+		t.Errorf("after the last line: %v", empty)
+	}
+	// a filter applies to the pages as to the tail
+	if got := strings.Join(read(LogQuery{Limit: 10, Severity: "warning", Before: "0/2"}), " "); got != "1234567/0 12500001/0" {
+		t.Errorf("filtered page: %s", got)
+	}
+	// a cursor the buffer no longer holds (it moved on): its stamp still places the page
+	if got := strings.Join(read(LogQuery{Limit: 10, After: "2000000/0"}), " "); got != "12500001/0 30000100/0" {
+		t.Errorf("a cursor gone from the buffer: %s", got)
+	}
+	// not a dmesg cursor at all: an empty page, not an error
+	if got := read(LogQuery{Limit: 10, Before: "s=1;i=2"}); len(got) != 0 {
+		t.Errorf("a journal cursor: %v", got)
+	}
+}

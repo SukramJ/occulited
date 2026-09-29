@@ -80,7 +80,43 @@ func parseDmesg(out []byte, start time.Time, host string) []LogLine {
 		}
 		lines = append(lines, l)
 	}
+	// task 178: a cursor per line for the pages - the stamp and the line's ordinal among the
+	// lines with that stamp, which still names the line once the ring buffer has moved on
+	seen := map[int64]int{}
+	for i := range lines {
+		m := lines[i].MonotonicUS
+		lines[i].Cursor = DmesgCursor(m, seen[m])
+		seen[m]++
+	}
 	return lines
+}
+
+// DmesgCursor is a ring buffer line's cursor: "<monotonic_us>/<k>", k its ordinal among the lines
+// with that stamp.
+func DmesgCursor(monotonicUS int64, k int) string {
+	return strconv.FormatInt(monotonicUS, 10) + "/" + strconv.Itoa(k)
+}
+
+// parseDmesgCursor reads DmesgCursor's form; anything else is (0, 0, false).
+func parseDmesgCursor(c string) (int64, int, bool) {
+	mono, k, ok := strings.Cut(c, "/")
+	if !ok {
+		return 0, 0, false
+	}
+	m, err := strconv.ParseInt(mono, 10, 64)
+	if err != nil || m < 0 {
+		return 0, 0, false
+	}
+	n, err := strconv.Atoi(k)
+	if err != nil || n < 0 {
+		return 0, 0, false
+	}
+	return m, n, true
+}
+
+// cursorLess: a is before b in the ring buffer.
+func cursorLess(aMono int64, aK int, bMono int64, bK int) bool {
+	return aMono < bMono || (aMono == bMono && aK < bK)
 }
 
 // Read returns the newest matching lines, oldest first, at most q.Limit (default 500). The tag,
@@ -100,10 +136,45 @@ func (d Dmesg) Read(q LogQuery) ([]LogLine, error) {
 		return nil, err
 	}
 	match := lineMatcher(q)
+	// task 178: the page - before a cursor, after one, or the buffer's start. The cursor's line
+	// is looked for in the buffer; gone from it (the buffer moved on), its stamp still says which
+	// lines are before and after it. A cursor that is not one of this reader's is an empty page.
+	var cutMono int64
+	var cutK int
+	cut := -1
+	if c := q.Before + q.After; c != "" {
+		var ok bool
+		if cutMono, cutK, ok = parseDmesgCursor(c); !ok {
+			return []LogLine{}, nil
+		}
+		for i, l := range all {
+			if l.Cursor == c {
+				cut = i
+				break
+			}
+		}
+	}
 	lines := []LogLine{}
-	for _, l := range all {
-		if match(l) {
-			lines = append(lines, l)
+	for i, l := range all {
+		if !match(l) {
+			continue
+		}
+		if q.Before != "" || q.After != "" {
+			before := i < cut
+			if cut < 0 {
+				mono, k, _ := parseDmesgCursor(l.Cursor)
+				before = cursorLess(mono, k, cutMono, cutK)
+			}
+			if q.Before != "" && !before {
+				break
+			}
+			if q.After != "" && (before || i == cut) {
+				continue
+			}
+		}
+		lines = append(lines, l)
+		if (q.Head || q.After != "") && len(lines) == q.Limit {
+			break
 		}
 	}
 	if len(lines) > q.Limit {

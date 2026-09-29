@@ -514,6 +514,15 @@ type LogQuery struct {
 	// Area is one of occulited's areas (task 186): OCCULITED_AREA in the journal, a field match
 	// like Run. The caller checks it against logctl.Areas. The kernel's lines have none.
 	Area string
+	// The page (task 178): a read is the newest Limit entries unless one of these says otherwise.
+	// Before is a line's Cursor: the Limit entries older than it (journalctl -r --after-cursor,
+	// turned oldest first again). After is the Limit entries newer than a cursor (--after-cursor
+	// forward; following, the entries since it are replayed before the new ones). Head is the
+	// oldest Limit entries of the boot or the range (journalctl -n +N). One of the three at most;
+	// a dmesg cursor is the line's stamp and its ordinal among equal stamps ("<monotonic_us>/<k>").
+	Before string
+	After  string
+	Head   bool
 }
 
 var severityRank = map[string]int{"debug": 0, "info": 1, "notice": 2, "warning": 3, "warn": 3, "err": 4, "error": 4, "crit": 5, "alert": 6, "emerg": 7}

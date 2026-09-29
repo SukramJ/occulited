@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -785,8 +786,19 @@ func (j JournalLog) args(q LogQuery) []string {
 	// -n 0 matters when following: without it journalctl -f replays its default ten lines - and
 	// Follow's default of 50 replayed the tail the page had just loaded (28.3, the Log filter
 	// "not working": every filter change showed the last lines twice)
-	if q.Limit > 0 || (q.Follow && q.Limit == 0) {
+	if q.Head && !q.Follow && q.Limit > 0 {
+		// task 178: the oldest N of the boot or the range, from the start
+		args = append(args, "-n", "+"+strconv.Itoa(q.Limit))
+	} else if q.Limit > 0 || (q.Follow && q.Limit == 0) {
 		args = append(args, "-n", strconv.Itoa(q.Limit))
+	}
+	// task 178: the page before a cursor is read backwards from it (Read turns it round again);
+	// the page after one forwards, which following takes too - the entries since the cursor are
+	// replayed, so a stream that starts after a page has no gap to it
+	if q.Before != "" && !q.Follow {
+		args = append(args, "-r", "--after-cursor="+q.Before)
+	} else if q.After != "" {
+		args = append(args, "--after-cursor="+q.After)
 	}
 	// journalctl ANDs matches on different fields, so a unit and a tag narrow each other (task
 	// 31: the Log page used to drop the tag once a unit was chosen)
@@ -877,6 +889,9 @@ func (j JournalLog) Read(q LogQuery) ([]LogLine, error) {
 		if l, ok := parseJournalLine(sc.Bytes(), place); ok {
 			lines = append(lines, l)
 		}
+	}
+	if q.Before != "" {
+		slices.Reverse(lines) // read newest first from the cursor; the answer is oldest first
 	}
 	return lines, nil
 }

@@ -25573,6 +25573,12 @@
                             "null"
                           ]
                         },
+                        "newer": {
+                          "type": "boolean"
+                        },
+                        "older": {
+                          "type": "boolean"
+                        },
                         "run_missing": {
                           "type": "boolean"
                         },
@@ -25582,6 +25588,8 @@
                       },
                       "required": [
                         "lines",
+                        "newer",
+                        "older",
                         "source"
                       ],
                       "type": "object"

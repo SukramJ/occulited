@@ -30,8 +30,10 @@ import (
 	"log/slog"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -948,10 +950,47 @@ func (a *SystemAPI) reinstallDismiss(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"ok": true, "id": id, "version": found.Version})
 }
 
+// logPageDefault is /log's page when the query names no limit.
+const logPageDefault = 500
+
+// logCursorRe is what a page's cursor may look like: a journal cursor (s=…;i=…;b=…;m=…;t=…;x=…)
+// or a dmesg one (<monotonic_us>/<k>). It goes to journalctl as an argument, never to a shell;
+// the check keeps the answer's error small when it is not one.
+var logCursorRe = regexp.MustCompile(`^[A-Za-z0-9=;/]{1,255}$`)
+
+// logPage reads the page a /log query asks for (task 178): before or after a cursor, or the head
+// of the boot or the range - one at most - and its size.
+func logPage(v url.Values, q *system.LogQuery) error {
+	q.Before, q.After = v.Get("before"), v.Get("after")
+	q.Head = v.Get("head") == "1" || v.Get("head") == "true"
+	n := 0
+	for _, set := range []bool{q.Before != "", q.After != "", q.Head} {
+		if set {
+			n++
+		}
+	}
+	if n > 1 {
+		return errors.New("before, after and head exclude each other")
+	}
+	for _, c := range []string{q.Before, q.After} {
+		if c != "" && !logCursorRe.MatchString(c) {
+			return errors.New("before and after are a line's cursor")
+		}
+	}
+	return nil
+}
+
 func (a *SystemAPI) log(w http.ResponseWriter, r *http.Request) {
 	v := r.URL.Query()
 	limit, _ := strconv.Atoi(v.Get("limit"))
-	q, err := logQueryChecked(v, limit)
+	if limit <= 0 {
+		limit = logPageDefault
+	}
+	// one more than the page, so the answer can say whether the log goes on past its far end
+	q, err := logQueryChecked(v, limit+1)
+	if err == nil {
+		err = logPage(v, &q)
+	}
 	if err != nil {
 		writeJSON(w, http.StatusUnprocessableEntity, apiError{Error: "invalid", Message: err.Error()})
 		return
@@ -966,7 +1005,24 @@ func (a *SystemAPI) log(w http.ResponseWriter, r *http.Request) {
 	if fallback, src, ok := a.kernelFallback(q, lines); ok {
 		lines, source = fallback, src
 	}
-	answer := map[string]any{"lines": lines, "source": source}
+	// task 178: the pages. forward reads (the head, after a cursor) may run past the page at the
+	// new end, the others at the old end; the extra entry is cut and the flags say what is there
+	forward := q.Head || q.After != ""
+	more := len(lines) > limit
+	if more {
+		if forward {
+			lines = lines[:limit]
+		} else {
+			lines = lines[len(lines)-limit:]
+		}
+	}
+	older, newer := more, false
+	if forward {
+		older, newer = q.After != "", more
+	} else if q.Before != "" {
+		newer = true
+	}
+	answer := map[string]any{"lines": lines, "source": source, "older": older, "newer": newer}
 	// B-223: the journal's copies on a share the system cannot read (a root-squashed NFS export) -
 	// the lines above are the RAM journal alone, and the page says why
 	if source == "journald" && !q.Follow {
@@ -2273,6 +2329,14 @@ func (a *SystemAPI) logStream(w http.ResponseWriter, r *http.Request) {
 		limit, _ = strconv.Atoi(s)
 	}
 	q, err := logQueryChecked(v, limit)
+	if err == nil {
+		// task 178: after a page's last cursor the entries since it are replayed first, so the
+		// stream joins the page without a gap; before and head make no sense here
+		err = logPage(v, &q)
+		if err == nil && (q.Before != "" || q.Head) {
+			err = errors.New("the stream takes after, not before or head")
+		}
+	}
 	if err != nil {
 		writeJSON(w, http.StatusUnprocessableEntity, apiError{Error: "invalid", Message: err.Error()})
 		return

@@ -154,12 +154,18 @@ test('oldest first by default, scrolled to the bottom; newest first on request, 
     await expect(order).toHaveValue('oldest');
     const box = page.locator('.ol-journal');
     await expect.poll(() => box.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThan(2);
+    // task 178: only the rows in view and a margin are in the DOM, so the rendered rows are
+    // compared by their order and their first, not as the whole list
+    const newestFirst = async () => {
+        const t = await times();
+        return t.length > 1 && [...t].sort().reverse().join() === t.join() && t[0] === oldest.at(-1);
+    };
     await order.selectOption('newest');
-    await expect.poll(times).toEqual([...oldest].reverse());
+    await expect.poll(newestFirst).toBe(true);
     await page.reload();
     await expect(page.locator('.ol-line').first()).toBeVisible();
     await expect(page.getByLabel('Order')).toHaveValue('newest');
-    await expect.poll(times).toEqual([...oldest].reverse());
+    await expect.poll(newestFirst).toBe(true);
 });
 
 // task 44: the journal box fills the window below the filter bar. Its bottom edge is the window's
@@ -219,14 +225,16 @@ test('a streamed line appends at the bottom and follows only while the view is a
     // fit in it - wait until the churn has made it overflow by more than the guard's 40 px, or
     // "the top" and "the bottom" are the same place and there is no history to scroll into
     await expect.poll(() => box.evaluate((el) => el.scrollHeight - el.clientHeight)).toBeGreaterThan(60);
-    // scrolled up into the history: two more lines arrive and the view stays put
+    // scrolled up into the history: more lines arrive (the box grows - task 178: a line beyond
+    // the rendered window is a taller spacer, not a row) and the view stays put
+    const height = () => box.evaluate((el) => el.scrollHeight);
     await box.evaluate((el) => el.scrollTo({top: 0}));
-    const n = await page.locator('.ol-line').count();
-    await expect.poll(() => page.locator('.ol-line').count()).toBeGreaterThan(n + 1);
+    const n = await height();
+    await expect.poll(height).toBeGreaterThan(n + 20);
     expect(await box.evaluate((el) => el.scrollTop)).toBe(0);
     // back at the bottom: the view follows again
     await box.evaluate((el) => el.scrollTo({top: el.scrollHeight}));
-    const m = await page.locator('.ol-line').count();
-    await expect.poll(() => page.locator('.ol-line').count()).toBeGreaterThan(m);
+    const m = await height();
+    await expect.poll(height).toBeGreaterThan(m);
     await expect.poll(gap).toBeLessThan(2);
 });

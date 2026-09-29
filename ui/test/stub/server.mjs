@@ -2982,9 +2982,49 @@ const srv = http.createServer((req, res) => {
     // B-59: the log honours the tag and unit filters, as journalctl does (-t and -u are ANDed)
     if (req.method === 'GET' && u.pathname === '/api/system/v1/log') {
         const r = structuredClone(routes['GET /api/system/v1/log']);
+        // task 178: a long boot - the cookie names its entries - served in pages, each line with
+        // a cursor; every seventh line is long enough to wrap, as a real log's are
+        const long = Number((/(^|;\s*)stub-log-pages=(\d+)/.exec(req.headers.cookie ?? '') ?? [])[2] ?? 0);
+        if (long > 0) {
+            const t0 = Date.now() - long * 1000;
+            r.lines = Array.from({length: long}, (_, i) => ({
+                time: new Date(t0 + i * 1000).toISOString(),
+                timestamp: new Date(t0 + i * 1000).toISOString(),
+                severity: ['info', 'info', 'notice', 'warning'][i % 4],
+                tag: ['occulited', 'rfd', 'hmipserver'][i % 3],
+                unit: ['occulited', 'rfd', 'hmipserver'][i % 3],
+                pid: 1000 + (i % 3),
+                message: `Boot line ${i}` + (i % 7 === 0 ? ': a longer message, the kind that wraps at the window\'s edge and so takes two or three rows of the list, not one like the others' : ''),
+            }));
+        }
         // the churned lines belong to the log too, so a reload after a while sees their tags
         if (/(^|;\s*)stub-log-churn=1/.test(req.headers.cookie ?? '')) r.lines.push(...churned);
+        r.lines.forEach((l, i) => (l.cursor = `c${i}`));
         r.lines = r.lines.filter((l) => logMatches(l, u.searchParams));
+        // the page: the tail, before or after a cursor, or the head; and whether the log goes on
+        const limit = Number(u.searchParams.get('limit') || 500);
+        const before = u.searchParams.get('before');
+        const after = u.searchParams.get('after');
+        const at = (c) => r.lines.findIndex((l) => l.cursor === c);
+        r.older = false;
+        r.newer = false;
+        if (u.searchParams.get('head') === '1') {
+            r.newer = r.lines.length > limit;
+            r.lines = r.lines.slice(0, limit);
+        } else if (after) {
+            const i = at(after);
+            r.older = true;
+            r.newer = r.lines.length > i + 1 + limit;
+            r.lines = r.lines.slice(i + 1, i + 1 + limit);
+        } else if (before) {
+            const i = at(before);
+            r.older = i > limit;
+            r.newer = true;
+            r.lines = r.lines.slice(Math.max(0, i - limit), i);
+        } else {
+            r.older = r.lines.length > limit;
+            r.lines = r.lines.slice(-limit);
+        }
         // a slow journal (the cookie names the milliseconds): a filtered query on a Pi's journal
         // takes seconds, and two answers can arrive in the wrong order
         const delay = Number((/(^|;\s*)stub-log-delay=(\d+)/.exec(req.headers.cookie ?? '') ?? [])[2] ?? 0);

@@ -81,7 +81,8 @@ func TestLogKernelAndBootReachTheJournal(t *testing.T) {
 		t.Fatalf("%d %s", st, body)
 	}
 	q := journal.queries()[0]
-	if !q.Kernel || q.Boot != thisBoot || q.Severity != "warning" || q.Limit != 50 {
+	// task 178: one more than the page, so the answer can say whether the log goes on
+	if !q.Kernel || q.Boot != thisBoot || q.Severity != "warning" || q.Limit != 51 {
 		t.Errorf("query: %+v", q)
 	}
 	// the journal view of an earlier boot, and no kernel flag without kernel=1

@@ -1,5 +1,5 @@
 <script lang="ts">
-    import {onMount, untrack} from 'svelte';
+    import {flushSync, onMount, untrack} from 'svelte';
     import {pageLife} from '../lib/pagelife.svelte';
     import {api, type LogLine} from '../lib/api';
     import {t, i18n} from '../lib/i18n.svelte';
@@ -16,6 +16,7 @@
     import {download} from '../lib/download';
     import {OCCULITED_AREAS} from '../lib/loglevels';
     import {bootParam, bootSpanMs, durationLabel, findBoot, isEarlierBoot, kernelParam, lineStamp, logPath, runParam, settingsParam, sourceParam, type BootInfo, type BootList, type LogSettingsTab, type LogSource} from '../lib/logpage';
+    import {countLabel, joinPages, LOG_KEEP, LOG_LOAD_AHEAD, LOG_PAGE, rowAt, rowOffsets, rowWindow} from '../lib/logvirtual';
 
     // Task 93: the viewer shows every message, the system's without the kernel's, or the kernel's
     // alone (a Source among the filters); above it the boot the lines are of, the download, and the
@@ -24,11 +25,12 @@
     // task 177: the query this page last saw while it showed - hidden, it must not follow another page's
     // task 79: the trace lines' fold (longer than TRACE_FOLD characters) and copy
     const TRACE_FOLD = 160;
-    let traceOpen = $state(new Set<number>());
-    function toggleTrace(idx: number) {
+    // by the line itself (task 178): its index moves as pages are added at either end
+    let traceOpen = $state.raw(new Set<LogLine>());
+    function toggleTrace(l: LogLine) {
         const n = new Set(traceOpen);
-        if (n.has(idx)) n.delete(idx);
-        else n.add(idx);
+        if (n.has(l)) n.delete(l);
+        else n.add(l);
         traceOpen = n;
     }
     function copyTrace(text: string) {
@@ -105,8 +107,21 @@
         navigate(logPath({source: routeSource, unit: routeUnit, boot: routeBoot}));
     }
 
-    const MAX_LINES = 2000;
-    let lines = $state<LogLine[] | null>(null);
+    // task 178: the lines are one contiguous run of the log, loaded in pages of LOG_PAGE while
+    // scrolling and kept up to LOG_KEEP; past that the far end is unloaded and loads again on
+    // scroll back. `older` and `newer` say whether the log goes on beyond the run's two ends -
+    // the API's flags, and, when an end was unloaded, that. While `newer` is set the run is
+    // detached from the live end: the stream stays closed until the pages have reached it again.
+    // Raw state: twenty thousand lines are not proxied one by one; the run is replaced whole.
+    let lines = $state.raw<LogLine[] | null>(null);
+    let older = $state(false);
+    let newer = $state(false);
+    let olderUnloaded = $state(false);
+    let newerUnloaded = $state(false);
+    let loadingOlder = $state(false);
+    let loadingNewer = $state(false);
+    // the head is asked for on the next load (the jump to the start of a boot the route moves to)
+    let pendingHead = false;
     // B-59: on a Pi's journal a filtered query takes seconds, and the answer to an earlier,
     // wider filter can land after the newer one and overwrite its lines - the tag showed as
     // chosen while the lines were the unit's alone. Only the newest request's answer counts.
@@ -181,6 +196,7 @@
         reload();
     }
     const shown = $derived(newestFirst ? [...(lines ?? [])].reverse() : (lines ?? []));
+    const count = $derived(countLabel(lines?.length ?? 0, locale));
     // task 104: below 700 px the panel's second row folds behind a Filters toggle that counts the filters
     // set, so the log keeps most of the height; wider, the row is always there
     let wide = $state(typeof matchMedia !== 'function' || matchMedia('(min-width: 701px)').matches);
@@ -227,9 +243,10 @@
         if (since) p.set('since', since);
         if (until) p.set('until', until);
         if (q) p.set('q', q);
-        p.set('limit', '500');
+        p.set('limit', String(LOG_PAGE));
         return p;
     }
+    type LogAnswer = {lines: LogLine[]; source: 'syslog' | 'journald' | 'dmesg'; error?: string; copies_unreadable?: {path: string; error: string}; older?: boolean; newer?: boolean};
 
     // task 64: the download, a menu of the two formats above the viewer. It is what the filters
     // select, not the lines on screen: the same filters without the page's limit, and oldest first
@@ -280,9 +297,135 @@
     function downloadChosen() {
         setTimeout(() => (downloadOpen = false));
     }
+    // ---- task 178: the windowed list ----
+    // Only the rows in view and a margin around it are in the DOM; a spacer above and below
+    // stands for the rest. A row's height is measured by a ResizeObserver once it is rendered
+    // (lines wrap, so no fixed height holds) and remembered by the line; a row not yet measured
+    // counts as the mean of the measured ones. The offsets of every row follow from that, and
+    // they are recomputed whole when a height changes - twenty thousand additions, nothing.
+    let heights = new WeakMap<LogLine, number>();
+    let measuredSum = 0;
+    let measuredCount = 0;
+    let estimate = $state(20);
+    let hv = $state(0); // bumped when a measured height changes: the offsets follow
+    let scrollTop = $state(0);
+    let viewport = $state(600);
+    let edgeTop: HTMLDivElement | undefined = $state();
+    let edgeTopH = $state(0);
+    const offsets = $derived.by(() => {
+        void hv;
+        const est = estimate;
+        return rowOffsets(shown.length, (i) => heights.get(shown[i]!) ?? est);
+    });
+    const win = $derived(rowWindow(offsets, scrollTop - edgeTopH, viewport));
+    const visible = $derived(shown.slice(win.start, win.end));
+    const padTop = $derived(offsets[win.start] ?? 0);
+    const padBottom = $derived((offsets[shown.length] ?? 0) - (offsets[win.end] ?? 0));
+    // the rows' sizes, in batches: the observer's, one callback per frame, and the rows recycled
+    // for other lines as the window moves, read once the DOM has settled (one reflow for all).
+    // A batch takes the view's anchor first, records the heights, and keeps the view in place.
+    const rowOf = new Map<Element, LogLine>();
+    const ro = typeof ResizeObserver === 'function'
+        ? new ResizeObserver((entries) => {
+              applyMeasured(entries.map((e) => [e.target, e.borderBoxSize?.[0]?.blockSize ?? (e.target as HTMLElement).offsetHeight]));
+          })
+        : null;
+    const recycled = new Set<Element>();
+    let recycledDue = false;
+    function measureRecycled() {
+        recycledDue = false;
+        const nodes = [...recycled];
+        recycled.clear();
+        applyMeasured(nodes.map((n) => [n, (n as HTMLElement).offsetHeight]));
+    }
+    function applyMeasured(sizes: [Element, number][]) {
+        const a = anchor();
+        let changed = false;
+        for (const [node, h] of sizes) {
+            const l = rowOf.get(node);
+            if (l && record(l, h)) changed = true;
+        }
+        if (!changed) return;
+        flushSync(() => (hv += 1));
+        restore(a);
+        if (home) scrollHome();
+    }
+    function record(l: LogLine, h: number): boolean {
+        if (!(h > 0)) return false;
+        const was = heights.get(l);
+        if (was === h) return false;
+        if (was === undefined) {
+            measuredSum += h;
+            measuredCount += 1;
+        } else {
+            measuredSum += h - was;
+        }
+        heights.set(l, h);
+        estimate = measuredSum / measuredCount;
+        return true;
+    }
+    // each rendered row: measured while it is in the DOM
+    function measure(node: HTMLElement, l: LogLine) {
+        rowOf.set(node, l);
+        ro?.observe(node);
+        return {
+            update(next: LogLine) {
+                rowOf.set(node, next);
+                recycled.add(node);
+                if (!recycledDue) {
+                    recycledDue = true;
+                    queueMicrotask(measureRecycled);
+                }
+            },
+            destroy() {
+                rowOf.delete(node);
+                recycled.delete(node);
+                ro?.unobserve(node);
+            },
+        };
+    }
+    // the row at the top of the view and where its top sits: what a change must keep in place.
+    // The line is what is remembered, since its index moves with the pages.
+    function anchor(): {line: LogLine; top: number} | null {
+        if (!box || shown.length === 0) return null;
+        const y = box.scrollTop - edgeTopH;
+        const i = Math.min(rowAt(offsets, y), shown.length - 1);
+        return {line: shown[i]!, top: (offsets[i] ?? 0) - y};
+    }
+    function restore(a: {line: LogLine; top: number} | null) {
+        if (!a || !box) return;
+        const i = shown.indexOf(a.line);
+        if (i < 0) return;
+        const want = (offsets[i] ?? 0) - a.top + edgeTopH;
+        if (Math.abs(want - box.scrollTop) > 0.5) {
+            box.scrollTop = want;
+            scrollTop = box.scrollTop;
+        }
+    }
+    // a change of the rows or their heights with the view kept where it was - or at its home
+    // end, when it stood there. The DOM is brought up to date first: a spacer must have its new
+    // height before the scroll position can be set past it.
+    function keep(change: () => void) {
+        const a = anchor();
+        flushSync(change);
+        restore(a);
+        if (home) scrollHome();
+    }
     // the end of the log the reader watches: the bottom when oldest first, the top otherwise
     function scrollHome() {
-        queueMicrotask(() => box?.scrollTo({top: newestFirst ? 0 : box.scrollHeight}));
+        queueMicrotask(() => {
+            if (!box) return;
+            box.scrollTop = newestFirst ? 0 : box.scrollHeight;
+            scrollTop = box.scrollTop;
+        });
+    }
+    // task 178: the other end - the start of the boot after the jump there
+    function scrollStart() {
+        queueMicrotask(() => {
+            if (!box) return;
+            box.scrollTop = newestFirst ? box.scrollHeight : 0;
+            scrollTop = box.scrollTop;
+        });
     }
     // task 40: whether the view is at that end (within 40 px). A reader who has scrolled up into
     // the history must not be yanked back by every arriving line; the view follows again as
@@ -300,50 +443,223 @@
     $effect(() => {
         const el = box;
         if (!el || typeof ResizeObserver !== 'function') return;
+        let width = el.clientWidth;
         const observer = new ResizeObserver(() => {
+            viewport = el.clientHeight;
+            if (el.clientWidth !== width) {
+                // the lines wrap differently now: every remembered height is stale, and the
+                // rows in the DOM are measured again
+                width = el.clientWidth;
+                heights = new WeakMap();
+                measuredSum = 0;
+                measuredCount = 0;
+                keep(() => (hv += 1));
+                applyMeasured([...rowOf.keys()].map((n) => [n, (n as HTMLElement).offsetHeight]));
+            }
             if (home) scrollHome();
         });
         observer.observe(el);
+        viewport = el.clientHeight;
         return () => observer.disconnect();
     });
+    $effect(() => {
+        const el = edgeTop;
+        if (!el || typeof ResizeObserver !== 'function') {
+            edgeTopH = 0;
+            return;
+        }
+        const observer = new ResizeObserver(() => (edgeTopH = el.offsetHeight));
+        observer.observe(el);
+        edgeTopH = el.offsetHeight;
+        return () => observer.disconnect();
+    });
+    function onScroll() {
+        if (!box) return;
+        scrollTop = box.scrollTop;
+        home = atHome();
+        nearEnds();
+    }
+    // the next page loads when the view comes within LOG_LOAD_AHEAD px of an end that has more
+    function nearEnds() {
+        if (!box || !lines || lines.length === 0) return;
+        const top = box.scrollTop;
+        const bottom = box.scrollHeight - box.scrollTop - box.clientHeight;
+        const nearOld = (newestFirst ? bottom : top) < LOG_LOAD_AHEAD;
+        const nearNew = (newestFirst ? top : bottom) < LOG_LOAD_AHEAD;
+        if (nearOld && older && !loadingOlder) void loadOlder();
+        if (nearNew && newer && !loadingNewer) void loadNewer();
+    }
+    // after every change of the run: the view may still be within reach of an end. A microtask
+    // later, since a run replaced whole is scrolled to its home end by one queued before this.
+    $effect(() => {
+        void shown;
+        void older;
+        void newer;
+        queueMicrotask(nearEnds);
+    });
+    // the run replaced whole: the tail (a load), or the head (the jump to the start)
+    function replaceRun(r: LogAnswer, head: boolean) {
+        lines = r.lines;
+        source = r.source ?? 'syslog';
+        takeIn(r.lines);
+        // a log that could not be read (dmesg refused, journalctl failed) says so
+        error = r.error ?? '';
+        copiesUnreadable = r.copies_unreadable ?? null;
+        older = !!r.older;
+        newer = !!r.newer;
+        olderUnloaded = false;
+        newerUnloaded = false;
+        loadingOlder = false;
+        loadingNewer = false;
+        if (head) {
+            home = false;
+            scrollStart();
+        } else {
+            home = true;
+            scrollHome();
+        }
+    }
     async function load() {
         const seq = ++loadSeq;
+        const head = pendingHead;
+        pendingHead = false;
+        const p = params();
+        if (head) p.set('head', '1');
         try {
-            const r = await api.get<{lines: LogLine[]; source: 'syslog' | 'journald' | 'dmesg'; error?: string; copies_unreadable?: {path: string; error: string}}>(`/api/system/v1/log?${params()}`);
+            const r = await api.get<LogAnswer>(`/api/system/v1/log?${p}`);
             if (seq !== loadSeq) return; // a newer filter's answer is in, or on its way
-            lines = r.lines;
-            source = r.source ?? 'syslog';
-            takeIn(r.lines);
-            // a log that could not be read (dmesg refused, journalctl failed) says so
-            error = r.error ?? '';
-            copiesUnreadable = r.copies_unreadable ?? null;
-            scrollHome();
-            if (source === 'journald' && follow && !earlier) openStream();
+            replaceRun(r, head);
+            if (source === 'journald' && follow && !earlier && !newer) openStream();
         } catch (e) {
             if (seq === loadSeq) error = (e as Error).message;
         }
     }
-    // journald: after the initial page the server streams new entries (SSE); busybox and dmesg: poll
+    // task 178: the page before the run's first line, added at the old end
+    async function loadOlder() {
+        const first = lines?.[0];
+        if (!first?.cursor || loadingOlder) return;
+        const seq = loadSeq;
+        loadingOlder = true;
+        const p = params();
+        p.set('before', first.cursor);
+        try {
+            const r = await api.get<LogAnswer>(`/api/system/v1/log?${p}`);
+            if (seq !== loadSeq || !lines || lines[0] !== first) return; // reloaded meanwhile
+            if (r.error) {
+                error = r.error;
+                return;
+            }
+            takeIn(r.lines);
+            const joined = joinPages(lines, r.lines, 'old');
+            keep(() => {
+                lines = joined.lines;
+                older = !!r.older;
+                olderUnloaded = false;
+                if (joined.dropped === 'new') {
+                    newer = true;
+                    newerUnloaded = true;
+                    closeStream();
+                }
+            });
+        } catch (e) {
+            if (seq === loadSeq) error = (e as Error).message;
+        } finally {
+            if (seq === loadSeq) loadingOlder = false;
+        }
+    }
+    // the page after the run's last line, added at the new end; the last one reattaches the run
+    // to the live end, and the stream takes over from its last line
+    async function loadNewer() {
+        const last = lines?.at(-1);
+        if (!last?.cursor || loadingNewer) return;
+        const seq = loadSeq;
+        loadingNewer = true;
+        const p = params();
+        p.set('after', last.cursor);
+        try {
+            const r = await api.get<LogAnswer>(`/api/system/v1/log?${p}`);
+            if (seq !== loadSeq || !lines || lines.at(-1) !== last) return;
+            if (r.error) {
+                error = r.error;
+                return;
+            }
+            takeIn(r.lines);
+            const joined = joinPages(lines, r.lines, 'new');
+            keep(() => {
+                lines = joined.lines;
+                newer = !!r.newer;
+                newerUnloaded = false;
+                if (joined.dropped === 'old') {
+                    older = true;
+                    olderUnloaded = true;
+                }
+            });
+        } catch (e) {
+            if (seq === loadSeq) error = (e as Error).message;
+        } finally {
+            if (seq === loadSeq) loadingNewer = false;
+        }
+    }
+    // the jump to the start: the oldest page of the boot (or of the range), paging towards the
+    // new end from there. With every boot on screen it is this boot's start, so the route moves
+    // to this boot first and the load that follows asks for the head.
+    function jumpToStart() {
+        closeStream();
+        pendingHead = true;
+        if (chosenBoot === '' && !since) {
+            chooseBoot('0');
+            return;
+        }
+        reload();
+    }
+    // back to the newest: the tail, as the page opened
+    function jumpToNewest() {
+        reload();
+    }
+    // journald: after the initial page the server streams new entries (SSE); dmesg: poll. The
+    // stream starts after the run's last line (task 178), so nothing between the page and the
+    // stream is lost; it is batched into the run a few times a second, not line by line.
+    let inbox: LogLine[] = [];
+    let inboxTimer: ReturnType<typeof setTimeout> | null = null;
     function openStream() {
         closeStream();
         const p = params();
         p.set('limit', '0');
+        const last = lines?.at(-1)?.cursor;
+        if (last) p.set('after', last);
         stream = new EventSource(`/api/system/v1/log/stream?${p}`);
         stream.onmessage = (ev) => {
             const l = JSON.parse(ev.data) as LogLine;
             note(l);
-            const home = atHome(); // measured before the line is in the DOM
-            lines = [...(lines ?? []).slice(-(MAX_LINES - 1)), l];
-            if (home) scrollHome();
+            inbox.push(l);
+            if (!inboxTimer) inboxTimer = setTimeout(flushInbox, 40);
         };
         stream.onerror = () => {
             closeStream();
             follow = false;
         };
     }
+    function flushInbox() {
+        inboxTimer = null;
+        if (inbox.length === 0) return;
+        const page = inbox;
+        inbox = [];
+        home = atHome(); // measured before the lines are in the DOM
+        const joined = joinPages(lines ?? [], page, 'new');
+        keep(() => {
+            lines = joined.lines;
+            if (joined.dropped === 'old') {
+                older = true;
+                olderUnloaded = true;
+            }
+        });
+    }
     function closeStream() {
         stream?.close();
         stream = null;
+        if (inboxTimer) clearTimeout(inboxTimer);
+        inboxTimer = null;
+        inbox = [];
     }
     function reload() {
         closeStream();
@@ -355,7 +671,8 @@
         if (linked) openSettings(linked);
         api.get<{services: {id: string}[]}>('/api/system/v1/services').then((r) => (known = r.services.map((s) => s.id))).catch(() => {});
         api.get<BootList>('/api/system/v1/boots').then((r) => (bootList = r)).catch(() => {});
-        const id = setInterval(() => life.active && auto && lines !== null && source !== 'journald' && load(), 5000);
+        // the poll replaces the run with the tail: not while the reader is in the history (task 178)
+        const id = setInterval(() => life.active && auto && lines !== null && source !== 'journald' && home && !newer && load(), 5000);
         // task 177: hidden, the live stream closes; back, the lines load again (and the stream with them)
         const stopHide = $effect.root(() => {
             $effect(() => {
@@ -410,7 +727,7 @@
         reload();
     }
     $effect(() => {
-        if (source !== 'journald' || earlier) {
+        if (source !== 'journald' || earlier || newer) {
             closeStream();
             return;
         }
@@ -604,7 +921,18 @@
         <label><input type="checkbox" bind:checked={auto} /> {t('Auto refresh')}</label>
     {/if}
     <button class="hmm-button" onclick={reload}>{t('Refresh')}</button>
+    <!-- task 178: the jump to the oldest page - of the boot, or of the range when one is set - and,
+         while the run is detached from the live end, back to the newest -->
+    <button type="button" class="hmm-button" data-jump="start" onclick={jumpToStart} disabled={!lines || !!error}>{since ? t('Start of the range') : t('Start of the boot')}</button>
+    {#if newer}
+        <button type="button" class="hmm-button" data-jump="newest" onclick={jumpToNewest}>{t('Newest')}</button>
+    {/if}
     <span class="ol-muted">{source === 'journald' ? 'journald' : source === 'dmesg' ? 'dmesg' : t('syslog (busybox)')}</span>
+    {#if lines && lines.length > 0}
+        <!-- task 178: how many are in the page, and that the rest loads while scrolling - the page never
+             cuts the log silently -->
+        <span class="ol-muted" data-count={lines.length} data-first={lines[0]?.cursor ?? ''}>{t('{n} entries', {n: count})}{#if older || newer}{' · '}{t('more load while scrolling')}{/if}</span>
+    {/if}
     <!-- a route can name a unit on a box whose log is busybox syslog, which has no unit to filter
          on. Say so rather than showing an unfiltered log under a filtered link. -->
     {#if source === 'syslog' && unit}
@@ -639,10 +967,30 @@
 {:else if lines.length === 0}
     <div class="lg-state ol-muted">{t('No lines.')}</div>
 {:else}
-    <div class="ol-log ol-journal lg-box" class:lg-kernel={kernel} bind:this={box} onscroll={() => (home = atHome())}>
-        <!-- unkeyed on purpose: identical lines are legal in a log -->
-        {#each shown as l, idx}
-            <div class={`ol-line sev-${l.severity ?? ''}`} class:lg-trace={l.tag === 'rpc-trace'}>
+    <!-- task 178: the windowed list. The rows in view and a margin are in the DOM between two spacers
+         that stand for the rest; at each end a row says what is there - the start of the boot, a page
+         loading, or entries unloaded to keep the page small. The browser's own scroll anchoring is off:
+         the page keeps the view in place itself when rows are added above it. -->
+    {#snippet edge(end: 'old' | 'new')}
+        {@const more = end === 'old' ? older : newer}
+        {@const loading = end === 'old' ? loadingOlder : loadingNewer}
+        {@const unloaded = end === 'old' ? olderUnloaded : newerUnloaded}
+        {#if end === 'old' && !more}
+            <div class="lg-edge ol-muted" data-edge="start">{since ? t('Start of the time range') : chosenBoot === '' && !kernel ? t('Start of the log') : t('Start of the boot')}</div>
+        {:else if more && loading}
+            <div class="lg-edge ol-muted" data-edge="loading" aria-busy="true">{end === 'old' ? t('Loading older entries…') : t('Loading newer entries…')}</div>
+        {:else if more && unloaded}
+            <div class="lg-edge ol-muted" data-edge="unloaded">{end === 'old' ? t('Older entries were unloaded; they load again while scrolling.') : t('Newer entries were unloaded; they load again while scrolling.')}</div>
+        {:else if more}
+            <div class="lg-edge ol-muted" data-edge="more">{end === 'old' ? t('Older entries load while scrolling.') : t('Newer entries load while scrolling.')}</div>
+        {/if}
+    {/snippet}
+    <div class="ol-log ol-journal lg-box" class:lg-kernel={kernel} bind:this={box} onscroll={onScroll}>
+        <div class="lg-edges" bind:this={edgeTop}>{@render edge(newestFirst ? 'new' : 'old')}</div>
+        <div class="lg-pad" style:height="{padTop}px" aria-hidden="true"></div>
+        <!-- unkeyed on purpose: identical lines are legal in a log, and a row is recycled for the next line -->
+        {#each visible as l}
+            <div class={`ol-line sev-${l.severity ?? ''}`} class:lg-trace={l.tag === 'rpc-trace'} use:measure={l}>
                 <span class="ol-muted ol-ts">{stamp(l)}</span>
                 <span class="ol-lvl">{level(l)}</span>
                 {#if !kernel}
@@ -652,8 +1000,8 @@
                     <!-- task 79: a long trace line (a parameter list, a device list) is one line with a
                          triangle that expands it; every trace line has a copy button -->
                     {@const long = l.message.length > TRACE_FOLD}
-                    {@const open = traceOpen.has(idx)}
-                    {#if long}<button type="button" class="lg-trace-toggle" aria-label={open ? t('Collapse') : t('Expand')} aria-expanded={open} onclick={() => toggleTrace(idx)}>{open ? '▾' : '▸'}</button>{/if}
+                    {@const open = traceOpen.has(l)}
+                    {#if long}<button type="button" class="lg-trace-toggle" aria-label={open ? t('Collapse') : t('Expand')} aria-expanded={open} onclick={() => toggleTrace(l)}>{open ? '▾' : '▸'}</button>{/if}
                     <span class="ol-msg lg-trace-msg" class:lg-trace-folded={long && !open}>{long && !open ? l.message.slice(0, TRACE_FOLD) + '…' : l.message}</span>
                     <button type="button" class="lg-trace-copy" aria-label={t('Copy line')} title={t('Copy line')} onclick={() => copyTrace(l.message)}>⧉</button>
                 {:else}
@@ -661,6 +1009,8 @@
                 {/if}
             </div>
         {/each}
+        <div class="lg-pad" style:height="{padBottom}px" aria-hidden="true"></div>
+        <div class="lg-edges">{@render edge(newestFirst ? 'old' : 'new')}</div>
     </div>
 {/if}
 
@@ -721,10 +1071,13 @@
        padding). A hairline above it where the page meets the log, the log's own surface, and a small
        inner padding so the text does not touch the window's edges. */
     .lg-box {
-        flex: 1 1 auto; min-height: 80px; contain: size; overflow: auto;
+        flex: 1 1 auto; min-height: 80px; contain: size; overflow: auto; overflow-anchor: none;
         margin: 0; border: 0; border-top: 1px solid var(--hmm-border-muted); border-radius: 0; padding: 6px 16px;
         background: var(--hmm-bg);
     }
+    /* task 178: the rows at the two ends of the run, and the spacers for the rows not in the DOM */
+    .lg-edge { padding: 6px 0; font-size: var(--hmm-font-size-small); font-style: italic; }
+    .lg-pad { flex: none; }
     /* task 93: dmesg's stamp keeps its padding, and err and above stand out of the kernel's noise */
     .lg-kernel .ol-ts { white-space: pre; }
     .lg-kernel :global(.ol-line.sev-err), .lg-kernel :global(.ol-line.sev-crit), .lg-kernel :global(.ol-line.sev-alert), .lg-kernel :global(.ol-line.sev-emerg) {
