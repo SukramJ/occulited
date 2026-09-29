@@ -52,6 +52,9 @@ type ImportedRadio struct {
 		KeyIndex          int    `json:"key_index"`
 		TargetKeyReplaced bool   `json:"target_key_replaced"`
 		Module            string `json:"module,omitempty"` // the module carrying BidCos-RF at the import
+		// KeyCheck is the verdict on the backup's passphrase at the import (task 296: KeyCheck*,
+		// "" in a record from before); the passphrase itself is nowhere
+		KeyCheck string `json:"key_check,omitempty"`
 	} `json:"bidcos_rf"`
 }
 
@@ -319,5 +322,5 @@ func (r *ImportRecord) journal(ctx context.Context, since time.Time) []string {
 
 // String is the record's one-line summary for the journal.
 func (rec ImportedRadio) String() string {
-	return fmt.Sprintf("import of %s at %s: hmip %s -> %s (changed %v), bidcos %s/%s (non-default key %v)", rec.File, rec.At.Format(time.RFC3339), rec.HmIP.FromSGTIN, rec.HmIP.ToSGTIN, rec.HmIP.ModuleChanged, rec.BidCosRF.Address, rec.BidCosRF.Serial, rec.BidCosRF.NonDefaultKey)
+	return fmt.Sprintf("import of %s at %s: hmip %s -> %s (changed %v), bidcos %s/%s (non-default key %v, passphrase %s)", rec.File, rec.At.Format(time.RFC3339), rec.HmIP.FromSGTIN, rec.HmIP.ToSGTIN, rec.HmIP.ModuleChanged, rec.BidCosRF.Address, rec.BidCosRF.Serial, rec.BidCosRF.NonDefaultKey, rec.BidCosRF.KeyCheck)
 }

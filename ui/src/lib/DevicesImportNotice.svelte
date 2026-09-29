@@ -9,7 +9,8 @@
      * restart of hmipserver, which attempts the exchange at every start - and the hint for battery
      * devices, which are re-keyed only when they wake up. The BidCos line says whether rfd runs
      * with the imported identity. Task 278: the record also says that a non-default BidCos key
-     * came along. Dismiss removes the record.
+     * came along, and task 296 whether its passphrase was confirmed at the import - the warning
+     * again when it was not. Dismiss removes the record.
      */
     import {api, ApiError} from './api';
     import {t} from './i18n.svelte';
@@ -19,7 +20,8 @@
     interface Record_ {
         at: string; file: string; version?: string;
         hmip: {from_sgtin?: string; to_sgtin?: string; to_module?: string; module_changed: boolean; local_key: boolean; devices: number};
-        bidcos_rf: {address?: string; serial?: string; devices: number; non_default_key: boolean; key_index: number; target_key_replaced: boolean; module?: string};
+        // task 296: key_check - the verdict on the backup's passphrase at the import
+        bidcos_rf: {address?: string; serial?: string; devices: number; non_default_key: boolean; key_index: number; target_key_replaced: boolean; module?: string; key_check?: 'none' | 'match' | 'mismatch' | 'skipped'};
     }
     interface Outcome {
         hmip: {state: 'none' | 'pending' | 'done' | 'rejected' | 'no-module' | 'unknown'; cause?: string; module_now?: string; line?: string};
@@ -104,7 +106,11 @@
             {:else if o.bidcos_rf.error}
                 <p class="ol-muted" data-bidcos="unknown">{t('BidCos-RF: rfd did not answer ({error}).', {error: o.bidcos_rf.error})}</p>
             {/if}
-            {#if r.bidcos_rf.non_default_key}
+            {#if r.bidcos_rf.non_default_key && (r.bidcos_rf.key_check === 'mismatch' || r.bidcos_rf.key_check === 'skipped')}
+                <p class="ol-warn" data-bidcos="key-unconfirmed">{r.bidcos_rf.key_check === 'mismatch'
+                    ? t('The backup\'s non-default BidCos security key came along; the passphrase entered at the import did not match it. Find it before you change the key, re-key or re-pair these devices, or restore onto a system with another key: without it, only a factory reset of every such device and pairing it again helps.')
+                    : t('The backup\'s non-default BidCos security key came along; its passphrase was skipped at the import. Find it before you change the key, re-key or re-pair these devices, or restore onto a system with another key: without it, only a factory reset of every such device and pairing it again helps.')}</p>
+            {:else if r.bidcos_rf.non_default_key}
                 <p data-bidcos="key">{t('The backup\'s non-default BidCos security key came along{replaced}. Keep the other system\'s passphrase safe: it is needed to change the key later, or to pair a device that still holds it.', {replaced: r.bidcos_rf.target_key_replaced ? ' ' + t('and replaced this system\'s own key') : ''})}</p>
             {/if}
         {/if}

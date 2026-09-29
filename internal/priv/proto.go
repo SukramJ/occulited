@@ -1130,6 +1130,19 @@ type Server struct {
 	logListRefused atomic.Bool
 }
 
+// redactArgs is an argument list for the journal: the value after -k is a security key's
+// passphrase (crypttool) and is never written anywhere (openccu-lite task 296).
+func redactArgs(args []string) []string {
+	out := make([]string, len(args))
+	copy(out, args)
+	for i := 1; i < len(out); i++ {
+		if out[i-1] == "-k" {
+			out[i] = "<redacted>"
+		}
+	}
+	return out
+}
+
 func (s *Server) log(format string, a ...any) {
 	if s.Log != nil {
 		s.Log(format, a...)
@@ -1335,7 +1348,7 @@ func (s *Server) do(ctx context.Context, req request) response {
 	switch req.Op {
 	case "run":
 		if !s.Policy.programAllowed(req.Name, req.Args) {
-			s.log("helper: refused run %s %v", req.Name, req.Args)
+			s.log("helper: refused run %s %v", req.Name, redactArgs(req.Args))
 			return refuse("program " + req.Name)
 		}
 		for _, a := range req.Args {

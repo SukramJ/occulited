@@ -58,6 +58,12 @@ type RestoreCheck struct {
 	RunningVersion string `json:"running_version,omitempty"`
 	NeedsKey       bool   `json:"needs_key"` // the backup or the system is protected by a security key
 	HasRega        bool   `json:"has_rega"`  // the archive carries a ReGa database this system cannot use
+	// BackupKey and SystemKey (openccu-lite task 296) say which side has a BidCos security key
+	// other than the factory key, as the script tells them apart; KeyIndex is the backup's
+	// key_index (the API fills it in).
+	BackupKey bool `json:"backup_key"`
+	SystemKey bool `json:"system_key"`
+	KeyIndex  int  `json:"key_index"`
 }
 
 var restoreVersionRe = regexp.MustCompile(`generated on ([^,\s]+), applying to ([^,\s]+)`)
@@ -77,28 +83,34 @@ func (r Root) RemoveBackupFile(path string) error {
 	return Priv.Remove(path)
 }
 
-// CheckBackup runs restoreBackup.sh -c on path and looks inside for a ReGa database. The key
-// prompt of the script reads from stdin; with no key to offer, stdin is empty and the script
-// reports what it found.
-func (r Root) CheckBackup(ctx context.Context, run Runner, path string) RestoreCheck {
+// CheckBackup runs restoreBackup.sh -c on path and looks inside for a ReGa database. The script
+// asks for the security key on its standard input when the backup or the system has one; the check
+// answers with an empty line and -f, so that it goes on past the missing key to the end and says
+// which side is protected (openccu-lite task 296: before, it met EOF at the prompt, or stopped at
+// the first mismatch, and every backup with a key was "rejected"). The passphrase itself is checked
+// by the API (BackupSignature, SystemKeyMatches), never through this output.
+func (r Root) CheckBackup(ctx context.Context, run StdinRunner, path string) RestoreCheck {
 	if run == nil {
-		run = ExecRunner
+		run = ExecStdinRunner
 	}
-	out, err := run(ctx, r.join("/bin/restoreBackup.sh"), "-c", path)
-	c := RestoreCheck{OK: err == nil, Output: strings.TrimSpace(string(out))}
+	out, err := run(ctx, []byte("\n"), r.join("/bin/restoreBackup.sh"), "-c", "-f", path)
+	c := RestoreCheck{OK: err == nil, Output: checkKeyNoteRe.ReplaceAllString(strings.TrimSpace(string(out)), "the passphrase is asked for below.")}
 	if m := restoreVersionRe.FindStringSubmatch(c.Output); m != nil {
 		c.BackupVersion, c.RunningVersion = m[1], m[2]
 	}
 	c.NeedsKey = strings.Contains(c.Output, "backup and/or system protected by security key")
-	if c.NeedsKey && strings.Contains(c.Output, "does NOT match") {
-		c.OK = false
-	}
+	c.BackupKey = strings.Contains(c.Output, "backup protected with a key")
+	c.SystemKey = strings.Contains(c.Output, "system protected with a key")
 	// tar -tzf on the inner archive is cheap enough to answer the ReGa question
 	if list, err := runOutput(ctx, "sh", "-c", "tar -xOf "+shellQuote(path)+" usr_local.tar.gz 2>/dev/null | tar -tzf - 2>/dev/null | grep -c 'etc/config/homematic.regadom$'"); err == nil && strings.TrimSpace(string(list)) != "0" {
 		c.HasRega = true
 	}
 	return c
 }
+
+// checkKeyNoteRe is the script's verdict on the empty key the check gives it - "does NOT match",
+// "forced restore" - which would read as a failed check; the page asks for the passphrase instead.
+var checkKeyNoteRe = regexp.MustCompile(`WARNING: security key does NOT match (?:system key|key in backup), forced restore\.`)
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 

@@ -164,7 +164,9 @@ func moduleChanged(b system.RadioBackup, t restoreTarget) bool {
 // key_replace) - the backup's store replaces it, and there is nothing paired here that it could
 // orphan; then the radio files are put in place, the import is recorded for the boots after it
 // (task 275), and the system reboots - 200 {ok, imported, rebooting} as /restore/apply answers.
-// No passphrase (task 278, option B): the key store comes as it is, and the panel says so.
+// The key store comes as it is (task 278, option B); key is the backup's passphrase when the user
+// gave it (task 296): checked against the backup's signature, the verdict in the answer
+// (key_check) and the record, never a reason to refuse, never kept.
 func (a *SystemAPI) restoreImportDevices(w http.ResponseWriter, r *http.Request) {
 	if s := SessionFrom(r); s == nil || !s.Has(auth.ScopePower) {
 		forbiddenScope(w, auth.ScopePower)
@@ -173,6 +175,7 @@ func (a *SystemAPI) restoreImportDevices(w http.ResponseWriter, r *http.Request)
 	var body struct {
 		File       string `json:"file"`
 		ReplaceKey bool   `json:"replace_key"`
+		Key        string `json:"key"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		badBody(w, err)
@@ -205,6 +208,13 @@ func (a *SystemAPI) restoreImportDevices(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusUnprocessableEntity, apiError{Error: "key_replace", Message: "this system has a security key of its own; confirm that the backup's key store replaces it (replace_key)", Detail: map[string]any{"target": target}})
 		return
 	}
+	// task 296: the passphrase's verdict (the backup's side: this system's key store is replaced)
+	keyCheck := system.KeyCheckNone
+	if sig, err := a.backupSignature(path); err == nil {
+		keyCheck = sig.KeyCheck(body.Key)
+	} else if b.NonDefaultKey() {
+		keyCheck = system.KeyCheckSkipped // no signature to check against: as good as not known
+	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 10*time.Minute)
 	defer cancel()
 	// the names first (task 281): the checked file is gone after the reboot (/usr/local/tmp is
@@ -229,23 +239,24 @@ func (a *SystemAPI) restoreImportDevices(w http.ResponseWriter, r *http.Request)
 	// the modules here, the key store's provenance
 	p, hasPlan := a.importPlan()
 	rec := system.NewImportedRadio(time.Now().UTC(), body.File, res.Backup, p, hasPlan, target.UserKey || res.TargetKeyReplaced)
+	rec.BidCosRF.KeyCheck = keyCheck
 	if a.ImportRecord != nil {
 		if err := a.ImportRecord.Write(rec); err != nil {
 			a.trustLog().Warn("restore: the import record was not written", "err", err)
 		}
 	}
-	withCaller(r, a.trustLog()).Info("restore: paired devices imported, rebooting", "file", body.File, "bidcos_rf", res.Backup.BidCosRF.Devices, "hmip", res.Backup.HmIP.Devices, "wired", res.Backup.BidCosWired.Devices, "non_default_key", res.NonDefaultKey, "target_key_replaced", res.TargetKeyReplaced, "hmip_module_changed", rec.HmIP.ModuleChanged, "hmip_from", rec.HmIP.FromSGTIN, "hmip_to", rec.HmIP.ToSGTIN, "aside", res.Aside)
+	withCaller(r, a.trustLog()).Info("restore: paired devices imported, rebooting", "file", body.File, "bidcos_rf", res.Backup.BidCosRF.Devices, "hmip", res.Backup.HmIP.Devices, "wired", res.Backup.BidCosWired.Devices, "non_default_key", res.NonDefaultKey, "key_check", keyCheck, "target_key_replaced", res.TargetKeyReplaced, "hmip_module_changed", rec.HmIP.ModuleChanged, "hmip_from", rec.HmIP.FromSGTIN, "hmip_to", rec.HmIP.ToSGTIN, "aside", res.Aside)
 	if a.Manager == nil {
-		writeJSON(w, 200, map[string]any{"ok": true, "imported": res, "record": rec, "names": names, "rebooting": false, "message": "imported; reboot to apply it"})
+		writeJSON(w, 200, map[string]any{"ok": true, "imported": res, "record": rec, "names": names, "key_check": keyCheck, "rebooting": false, "message": "imported; reboot to apply it"})
 		return
 	}
 	a.markBoot(bootexpect.KindRestore)
 	if err := a.Manager.Reboot(context.Background()); err != nil {
 		a.unmarkBoot()
-		writeJSON(w, 200, map[string]any{"ok": true, "imported": res, "record": rec, "names": names, "rebooting": false, "message": "imported, but the reboot did not start: " + err.Error()})
+		writeJSON(w, 200, map[string]any{"ok": true, "imported": res, "record": rec, "names": names, "key_check": keyCheck, "rebooting": false, "message": "imported, but the reboot did not start: " + err.Error()})
 		return
 	}
-	writeJSON(w, 200, map[string]any{"ok": true, "imported": res, "record": rec, "names": names, "rebooting": true})
+	writeJSON(w, 200, map[string]any{"ok": true, "imported": res, "record": rec, "names": names, "key_check": keyCheck, "rebooting": true})
 }
 
 // radioImportView: {imported: false} without a record, else {imported: true, record, outcome} -

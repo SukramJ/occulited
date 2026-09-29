@@ -147,6 +147,7 @@ func TestProgramShapes(t *testing.T) {
 		{"/bin/restoreBackup.sh", "-c /usr/local/tmp/restore-1.sbk"},
 		{"/bin/restoreBackup.sh", "/usr/local/tmp/restore-1.sbk"},
 		{"/bin/restoreBackup.sh", "-f /usr/local/tmp/restore-1.sbk"},
+		{"/bin/restoreBackup.sh", "-c -f /usr/local/tmp/restore-1.sbk"}, // the check past a missing key (task 296)
 		{"/bin/restoreBackup.sh", "-c /usr/local/etc/occulite/staging/up.sbk"},
 		{"/bin/cronBackup.sh", ""},
 		{"/bin/updateTZ.sh", ""},
@@ -351,6 +352,15 @@ func TestRefusedRunIsLoggedAndNotRun(t *testing.T) {
 	}
 	if len(lines) != 1 || !strings.Contains(lines[0], "refused run systemd-run") {
 		t.Errorf("log: %q", lines)
+	}
+	// openccu-lite task 296: a passphrase the shape refuses (crypttool takes letters, digits and _)
+	// is refused without its value in the journal
+	lines = nil
+	if r := srv.do(context.Background(), request{Op: "run", Name: "/bin/crypttool", Args: []string{"-v", "-t", "3", "-k", "pass word!"}}); !strings.HasPrefix(r.Error, "refused") {
+		t.Fatalf("not refused: %+v", r)
+	}
+	if len(lines) != 1 || strings.Contains(lines[0], "pass word!") || !strings.Contains(lines[0], "-k <redacted>") {
+		t.Errorf("the passphrase in the log: %q", lines)
 	}
 	r = srv.do(context.Background(), request{Op: "run", Name: "systemctl", Args: []string{"daemon-reload"}})
 	if r.Error != "" || len(ops.cmds) != 1 {

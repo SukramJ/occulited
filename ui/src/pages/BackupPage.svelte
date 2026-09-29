@@ -10,6 +10,7 @@
     import BackupEncryption, {type EncryptionView} from '../lib/BackupEncryption.svelte';
     import Help from '../lib/Help.svelte';
     import RegaImport from '../lib/RegaImport.svelte';
+    import BidCosKeyCheck, {keyConfirmed, keyWarning, type Verdict} from '../lib/BidCosKeyCheck.svelte';
     import FactoryReset from '../lib/FactoryReset.svelte';
     import BackupTargets from '../lib/BackupTargets.svelte';
     import BootBar from '../lib/BootBar.svelte';
@@ -19,7 +20,8 @@
     import {onMount} from 'svelte';
     import {scrollToAnchor} from '../lib/anchor';
 
-    interface Check { ok: boolean; output: string; backup_version?: string; running_version?: string; needs_key: boolean; has_rega: boolean }
+    // task 296: backup_key / system_key - which side has a BidCos security key of its own; key_index the backup's
+    interface Check { ok: boolean; output: string; backup_version?: string; running_version?: string; needs_key: boolean; has_rega: boolean; backup_key?: boolean; system_key?: boolean; key_index?: number }
     // openccu-lite task 251: the paired devices a checked backup holds, and this system's side
     interface RadioBackup {
         bidcos_rf: {devices: number; address?: string; serial?: string; has_key: boolean; gateways: number};
@@ -80,6 +82,8 @@
             check = r.check;
             encInfo = r.encryption;
             recoveryKey = '';
+            restoreVerdict = null;
+            key = '';
         } catch (e) {
             error = recoveryKeyError(e, t);
             // B-194: a damaged upload is gone with the refusal - back to the file picker
@@ -102,6 +106,12 @@
     let key = $state('');
     let force = $state(false);
     let applied = $state('');
+    // task 296: the passphrase check of the backup's BidCos key - the restore's and the import's -
+    // and the warning the result repeats when it was not confirmed
+    let restoreVerdict = $state<Verdict | null>(null);
+    let importVerdict = $state<Verdict | null>(null);
+    let importPass = $state('');
+    let appliedKeyNote = $state('');
     let namesMsg = $state('');
     // task 251: the paired devices of the checked backup, loaded after a check for an administrator
     let devices = $state<DevicesView | null>(null);
@@ -114,6 +124,10 @@
         devices = null;
         devicesMsg = '';
         replaceKey = false;
+        importVerdict = null;
+        importPass = '';
+        restoreVerdict = null;
+        key = '';
         if (!uploaded || auth.role !== 'admin') return;
         try {
             const v = await api.get<DevicesView>(`/api/system/v1/restore/devices?file=${encodeURIComponent(uploaded)}`);
@@ -140,7 +154,10 @@
         if (devices.non_default_key) lines.push(t('The backup\'s BidCos security key is not the default key: it comes along as it is.'));
         if (devices.target.user_key) lines.push(t('This system\'s own security key is replaced by the backup\'s.'));
         if (check?.has_rega) lines.push(t('The names, rooms and functions of the backup\'s ReGa database are imported first (merged with what this system has), then the system reboots.'));
-        if (!(await ask({title: t('Import the paired devices'), message: lines.join('\n\n'), confirm: t('Import and reboot'), danger: true}))) return;
+        // task 296: without the confirmed passphrase the warning comes first - the import still runs on the word
+        const unconfirmed = !!devices.non_default_key && !keyConfirmed(importVerdict, true);
+        if (unconfirmed) lines.unshift(...keyWarning('import', importVerdict));
+        if (!(await ask({title: unconfirmed ? t('Import without the confirmed passphrase?') : t('Import the paired devices'), message: lines.join('\n\n'), confirm: unconfirmed ? t('Import anyway and reboot') : t('Import and reboot'), danger: true}))) return;
         busy = 'devices';
         error = '';
         devicesMsg = '';
@@ -151,7 +168,7 @@
             watchBoot({entry, before, onUpdate: (e) => (restoring = e), onBack: () => setTimeout(() => location.reload(), EASE_MS)});
         };
         try {
-            const r = await api.post<{ok: boolean; rebooting: boolean; message?: string; names?: {ok: boolean; objects: number; rooms: number; functions: number; error?: string}}>('/api/system/v1/restore/import-devices', {file: uploaded, replace_key: replaceKey});
+            const r = await api.post<{ok: boolean; rebooting: boolean; message?: string; names?: {ok: boolean; objects: number; rooms: number; functions: number; error?: string}}>('/api/system/v1/restore/import-devices', {file: uploaded, replace_key: replaceKey, key: importVerdict?.backup === 'skipped' ? '' : importPass});
             // task 281: the names of the same file came first; a failure is said, and the names
             // import above still works while the file is there (until the reboot)
             const namesLine = r.names ? (r.names.ok ? t('Names: {o} named objects, {r} rooms, {f} functions imported from the backup.', {o: r.names.objects, r: r.names.rooms, f: r.names.functions}) : t('The names could not be imported from the backup: {error}', {error: r.names.error ?? ''})) : '';
@@ -161,8 +178,9 @@
                     t('The paired devices are imported.'),
                     namesLine,
                     devices.module_changed ? t('HmIP: the identity of module {from} is moved onto {to} when hmipserver starts. The outcome is shown on the Interfaces page; battery devices are re-keyed when they wake up.', {from: b.hmip.identity_sgtin ?? '', to: moduleName(devices.target.hmip_module)}) : '',
-                    devices.non_default_key ? t('The backup\'s non-default BidCos security key came along. Keep the other system\'s passphrase safe: it is needed to change the key later, or to pair a device that still holds it.') : '',
+                    devices.non_default_key && !unconfirmed ? t('The backup\'s non-default BidCos security key came along. Keep the other system\'s passphrase safe: it is needed to change the key later, or to pair a device that still holds it.') : '',
                 ].filter(Boolean).join('\n');
+                appliedKeyNote = unconfirmed ? t('The backup\'s non-default BidCos security key came along without a confirmed passphrase. Find it before you change the key, re-key or re-pair these devices, or restore onto a system with another key: without it, only a factory reset of every such device and pairing it again helps.') : '';
                 wait();
             } else {
                 removeEntry();
@@ -262,7 +280,16 @@
 
     async function apply() {
         if (!check || !uploaded) return;
-        if (!(await ask(t('Restore this backup and reboot? /usr/local is replaced: pairings, keys, addons and their settings.')))) return;
+        const question = t('Restore this backup and reboot? /usr/local is replaced: pairings, keys, addons and their settings.');
+        // task 296: the backup's own BidCos key without a confirmed passphrase - the warning, then the
+        // restore on the user's word (force: the script would refuse the key it cannot check)
+        const unconfirmed = !!check.backup_key && !keyConfirmed(restoreVerdict, true);
+        if (unconfirmed) {
+            if (!(await ask({title: t('Restore without the confirmed passphrase?'), message: [...keyWarning('restore', restoreVerdict), question].join('\n\n'), confirm: t('Restore anyway'), danger: true}))) return;
+        } else if (!(await ask(question))) return;
+        // the backup's passphrase confirmed but this system has another key: the restore replaces it (the
+        // panel said so), and the script, which wants one key for both sides, needs the force for that
+        const forced = force || unconfirmed || (!!check.backup_key && restoreVerdict?.system === 'mismatch');
         busy = 'apply';
         error = '';
         // the countdown before the request (task 94): the restore reboots the box when it is done
@@ -274,9 +301,10 @@
         };
         try {
             // B-193: the answer comes before the reboot; rebooting false = staged for the next boot
-            const r = await api.post<{output: string; rebooting: boolean; message?: string}>('/api/system/v1/restore/apply', {file: uploaded, key, force});
+            const r = await api.post<{output: string; rebooting: boolean; message?: string}>('/api/system/v1/restore/apply', {file: uploaded, key: restoreVerdict?.backup === 'skipped' ? '' : key, force: forced});
             if (r.rebooting) {
                 applied = r.output;
+                appliedKeyNote = unconfirmed ? t('Restored without a confirmed passphrase for the backup\'s BidCos security key. Find it before you change the key, re-key or re-pair these devices, or restore onto a system with another key: without it, only a factory reset of every such device and pairing it again helps.') : '';
                 wait();
             } else {
                 removeEntry();
@@ -394,13 +422,11 @@
                     {:else if b.hmip.identity_sgtin && !tg.hmip_module}
                         <div class="ol-notice" data-notice="module-change">{t('This system has no HmIP module: the HmIP identity of module {from} is imported and waits for one.', {from: b.hmip.identity_sgtin})}</div>
                     {/if}
-                    <!-- openccu-lite task 278 (option B): the backup's BidCos key store comes along as it is, no
-                         passphrase asked - the user is told that it is not the default key and to keep the other
-                         system's passphrase; a system with a key store of its own says yes to the replacement -->
+                    <!-- openccu-lite task 278 (option B) and 296: the backup's BidCos key store comes along as it is;
+                         its passphrase is asked as a check - match, mismatch, skip - and never stops the import -->
                     {#if devices.non_default_key}
-                        <div class="ol-notice" data-notice="bidcos-key">
-                            <strong>{t('Non-default BidCos security key.')}</strong>
-                            {t('This backup uses its own BidCos security key (the system security key of the other system). It comes along with the import - the BidCos devices paired with it know it - and no passphrase is asked here. Keep that system\'s passphrase safe: it is needed to change the key later, or to pair a device that still holds it.')}
+                        <div data-notice="bidcos-key">
+                            <BidCosKeyCheck file={uploaded} keyIndex={b.key_index} what="import" bind:verdict={importVerdict} bind:passphrase={importPass} />
                         </div>
                     {/if}
                     {#if tg.user_key}
@@ -419,15 +445,21 @@
             {#if encInfo?.encrypted}
                 <p class="ol-muted">{t('The security key protects the radio link to BidCos devices, and a restore on another system asks for it; the recovery key encrypts the backup itself, so nobody can read it without that key.')}</p>
             {/if}
-            <label>{t('Security key')} <input class="hmm-input" type="password" bind:value={key} autocomplete="off" /></label>
-            <label><input type="checkbox" bind:checked={force} /> {t('Force (ignore a key mismatch)')}</label>
+            {#if check.backup_key}
+                <!-- task 296: the backup's own key - its passphrase as a check, never a gate -->
+                <div data-restore="key-check"><BidCosKeyCheck file={uploaded} keyIndex={check.key_index ?? 0} what="restore" systemKey={!!check.system_key} bind:verdict={restoreVerdict} bind:passphrase={key} /></div>
+            {:else}
+                <!-- only this system has a key of its own: the firmware asks for it, as the CCU's restore does -->
+                <label>{t('Security key')} <input class="hmm-input" type="password" bind:value={key} autocomplete="off" data-input="restore-key" /></label>
+                <label><input type="checkbox" bind:checked={force} data-input="restore-force" /> {t('Force (ignore a key mismatch)')}</label>
+            {/if}
         {/if}
         {#if check.ok}
-            <div class="ol-actions" style="margin-top:8px"><button class="hmm-button" onclick={apply} disabled={busy !== '' || (check.needs_key && !key && !force)}>{t('Restore and reboot')}</button></div>
+            <div class="ol-actions" style="margin-top:8px"><button class="hmm-button" onclick={apply} disabled={busy !== '' || (check.needs_key && !check.backup_key && !key && !force)} data-action="restore-apply">{t('Restore and reboot')}</button></div>
         {/if}
     {/if}
     {#if applied || restoring}
-        <div class="ol-notice ol-restorenotice" role="status"><strong>{t('Restoring — the system reboots now.')}</strong>{#if restoring}<BootBar entry={restoring} />{/if}{#if applied}<pre class="ol-log">{applied}</pre>{/if}</div>
+        <div class="ol-notice ol-restorenotice" role="status"><strong>{t('Restoring — the system reboots now.')}</strong>{#if appliedKeyNote}<p class="ol-warn" data-notice="restore-key-warning">{appliedKeyNote}</p>{/if}{#if restoring}<BootBar entry={restoring} />{/if}{#if applied}<pre class="ol-log">{applied}</pre>{/if}</div>
     {/if}
 {/if}
 {#if auth.role === 'admin'}

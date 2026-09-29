@@ -363,7 +363,7 @@ func (a *SystemAPI) restoreDecrypt(w http.ResponseWriter, r *http.Request) {
 			enc.KeyCreated = &c
 		}
 	}
-	c := a.Root.CheckBackup(r.Context(), a.Run, out)
+	c := a.checkBackup(r.Context(), out)
 	reqLog(r).Info("restore: backup decrypted with the recovery key", "file", filepath.Base(out), "key", enc.Known)
 	writeJSON(w, 200, map[string]any{"file": filepath.Base(out), "check": c, "encryption": enc})
 }

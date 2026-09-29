@@ -191,6 +191,11 @@ type SystemAPI struct {
 	Timers TimerLister
 	// ChangeKey sends a new security key to rfd (task 8); nil = crypttool only (development).
 	ChangeKey func(ctx context.Context, key string) error
+	// SystemKeyCheck checks a passphrase against this system's own BidCos security key
+	// (openccu-lite task 296): set, match, known as system.Root.SystemKeyMatches, which nil means.
+	SystemKeyCheck func(ctx context.Context, passphrase string) (set, match, known bool)
+	// backupSigs keeps the signature of the checked upload, whose MD5 takes a moment (task 296)
+	backupSigs backupSigCache
 	// AddonCtl answers which addon an addonctl token belongs to (28.8); nil = the route answers 501.
 	AddonCtl AddonController
 	// InstallToken is the credential of POST /addons/install/local (openccu-lite B-274, the fork's
@@ -477,6 +482,7 @@ func (a *SystemAPI) Register(mux *http.ServeMux) {
 	route(mux, auth.ScopeSystemWrite, "PUT "+p+"/certificate/settings", a.certificateSettingsPut)
 	a.registerTrust(mux, p)          // openccu-lite task 231
 	a.registerRestoreDevices(mux, p) // openccu-lite task 251
+	a.registerRestoreKey(mux, p)     // openccu-lite task 296
 	route(mux, auth.ScopeSystemWrite, "POST "+p+"/certificate/test", a.certificateStart(acme.KindTest))
 	route(mux, auth.ScopeSystemWrite, "POST "+p+"/certificate/issue", a.certificateStart(acme.KindIssue))
 	route(mux, auth.ScopeSystemWrite, "POST "+p+"/certificate/renew", a.certificateStart(acme.KindRenew))
@@ -2036,7 +2042,7 @@ func (a *SystemAPI) restoreCheck(w http.ResponseWriter, r *http.Request) {
 	if enc.NeedsRecoveryKey {
 		out["check"] = nil
 	} else {
-		out["check"] = a.Root.CheckBackup(r.Context(), a.Run, up.Path)
+		out["check"] = a.checkBackup(r.Context(), up.Path)
 	}
 	writeJSON(w, 200, out)
 }
@@ -2061,6 +2067,18 @@ func (a *SystemAPI) restoreApply(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, apiError{Error: "not_found", Message: "upload not found - check it again"})
 		return
 	}
+	// openccu-lite task 296: the passphrase's verdict for the answer and the journal (never the
+	// passphrase). Without the backup's own passphrase the script gets a random placeholder: its
+	// step 3 would otherwise derive this system's key from a wrong word, which a later key change
+	// would then take for the right one; the restore at boot brings the backup's key files anyway.
+	verdict := keyVerdict{Backup: system.KeyCheckNone, System: system.KeyCheckNone}
+	scriptKey := body.Key
+	if sig, err := a.backupSignature(path); err == nil {
+		verdict = a.verdictFor(r.Context(), sig, body.Key)
+		if body.Force && (verdict.Backup == system.KeyCheckMismatch || verdict.Backup == system.KeyCheckSkipped) {
+			scriptKey = placeholderKey()
+		}
+	}
 	// task 91: the system's backup identity survives the restore in /usr/local/tmp
 	a.carryBoxIdentity()
 	// openccu-lite B-193: the script stages the restore for the next boot and does not reboot
@@ -2069,23 +2087,23 @@ func (a *SystemAPI) restoreApply(w http.ResponseWriter, r *http.Request) {
 	// the ServiceManager's reboot starts a moment later, once the answer has reached the client.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 10*time.Minute)
 	defer cancel()
-	out, err := a.Root.RestoreBackup(ctx, a.RunStdin, path, body.Key, body.Force)
+	out, err := a.Root.RestoreBackup(ctx, a.RunStdin, path, scriptKey, body.Force)
 	if err != nil {
-		writeJSON(w, http.StatusUnprocessableEntity, apiError{Error: "restore-failed", Message: err.Error() + ": " + out})
+		writeJSON(w, http.StatusUnprocessableEntity, apiError{Error: "restore-failed", Message: err.Error() + ": " + out, Detail: map[string]any{"key_check": verdict}})
 		return
 	}
-	reqLog(r).Info("restore: backup staged for the next boot", "file", body.File, "force", body.Force)
+	reqLog(r).Info("restore: backup staged for the next boot", "file", body.File, "force", body.Force, "key_backup", verdict.Backup, "key_system", verdict.System, "key_index", verdict.KeyIndex)
 	if a.Manager == nil {
-		writeJSON(w, 200, map[string]any{"ok": true, "output": out, "rebooting": false, "message": "restore staged; reboot to apply it"})
+		writeJSON(w, 200, map[string]any{"ok": true, "output": out, "rebooting": false, "key_check": verdict, "message": "restore staged; reboot to apply it"})
 		return
 	}
 	a.markBoot(bootexpect.KindRestore)
 	if err := a.Manager.Reboot(context.Background()); err != nil {
 		a.unmarkBoot()
-		writeJSON(w, 200, map[string]any{"ok": true, "output": out, "rebooting": false, "message": "restore staged, but the reboot did not start: " + err.Error()})
+		writeJSON(w, 200, map[string]any{"ok": true, "output": out, "rebooting": false, "key_check": verdict, "message": "restore staged, but the reboot did not start: " + err.Error()})
 		return
 	}
-	writeJSON(w, 200, map[string]any{"ok": true, "output": out, "rebooting": true})
+	writeJSON(w, 200, map[string]any{"ok": true, "output": out, "rebooting": true, "key_check": verdict})
 }
 
 func (a *SystemAPI) radioHealth(w http.ResponseWriter, r *http.Request) {

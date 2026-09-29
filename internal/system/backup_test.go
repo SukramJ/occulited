@@ -47,12 +47,30 @@ func TestBackupCreateCheckRestore(t *testing.T) {
 		t.Error("RemoveBackupFile must refuse a path outside the backup directory")
 	}
 
-	checker := func(_ context.Context, name string, args ...string) ([]byte, error) {
-		return []byte("1) Checking sbk backup file consistency:\n   generated on 3.75.7.20250101, applying to 3.89.8, OK\n   backup and/or system protected by security key...\n   Enter security key: "), nil
+	// task 296: the check answers the key prompt with an empty line and goes on past it (-f), so a
+	// backup with a key is valid and says which side has one; the script's "does NOT match ...,
+	// forced restore." about the empty key is not shown as a failed check
+	var checkIn string
+	var checkArgs []string
+	checker := func(_ context.Context, in []byte, name string, args ...string) ([]byte, error) {
+		checkIn, checkArgs = string(in), args
+		return []byte("1) Checking sbk backup file consistency:\n   generated on 3.75.7.20250101, applying to 3.89.8, OK\n   backup and/or system protected by security key...\n   Enter security key:    system NOT protected with a key, OK\n   backup protected with a key, WARNING: security key does NOT match key in backup, forced restore.\n\nConfig check processing only, exiting."), nil
 	}
 	c := r.CheckBackup(context.Background(), checker, up)
-	if !c.OK || c.BackupVersion != "3.75.7.20250101" || c.RunningVersion != "3.89.8" || !c.NeedsKey || c.HasRega {
+	if !c.OK || c.BackupVersion != "3.75.7.20250101" || c.RunningVersion != "3.89.8" || !c.NeedsKey || c.HasRega || !c.BackupKey || c.SystemKey {
 		t.Errorf("%+v", c)
+	}
+	if checkIn != "\n" || strings.Join(checkArgs, " ") != "-c -f "+up {
+		t.Errorf("check stdin %q args %v", checkIn, checkArgs)
+	}
+	if strings.Contains(c.Output, "does NOT match") || strings.Contains(c.Output, "forced restore") || !strings.Contains(c.Output, "backup protected with a key, the passphrase is asked for below.") {
+		t.Errorf("output: %q", c.Output)
+	}
+	sysOnly := func(context.Context, []byte, string, ...string) ([]byte, error) {
+		return []byte("   backup and/or system protected by security key...\n   system protected with a key, WARNING: security key does NOT match system key, forced restore.\n   backup NOT protected with a key, OK\n"), nil
+	}
+	if c := r.CheckBackup(context.Background(), sysOnly, up); !c.OK || !c.SystemKey || c.BackupKey || !c.NeedsKey {
+		t.Errorf("system key only: %+v", c)
 	}
 	rec.calls = nil
 	var stdin string

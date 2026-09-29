@@ -4,8 +4,9 @@ import {expect, test} from '@playwright/test';
 // radio module, the Interfaces page says how hmipserver's move of the identity onto this module
 // went - pending with a retry and the battery hint, done, rejected (the exchange notice takes over),
 // no module - and the BidCos line whether rfd runs with the imported identity; task 278: that the
-// backup's non-default key came along. Dismiss removes the record. The stub shows the record for
-// stub-import=<state>.
+// backup's non-default key came along; task 296: the warning again when its passphrase was not
+// confirmed at the import. Dismiss removes the record. The stub shows the record for
+// stub-import=<state>, with stub-import-key=<verdict> the passphrase's verdict.
 
 async function open(page: import('@playwright/test').Page, state: string, admin = true) {
     await page.context().addCookies([{name: 'stub-import', value: `${state}.${Math.random().toString(36).slice(2)}`, url: 'http://127.0.0.1'}]);
@@ -51,4 +52,33 @@ test('no module, and a user sees the notice without its buttons; German', async 
     await page.reload();
     await expect(n).toContainText('Geräte aus einer Sicherung importiert');
     await expect(n.locator('[data-hmip="no-module"]')).toContainText('dieses System hat kein HmIP-Funkmodul');
+});
+
+// openccu-lite task 296: the passphrase was skipped or did not match at the import - the notice
+// says it again, as a warning, in English and German; a match keeps the plain hint
+for (const [verdict, en, de] of [
+    ['skipped', 'its passphrase was skipped at the import', 'seine Passphrase wurde beim Import übersprungen'],
+    ['mismatch', 'the passphrase entered at the import did not match it', 'die beim Import eingegebene Passphrase passte nicht'],
+] as const) {
+    test(`the key's passphrase ${verdict} at the import: the warning again`, async ({page}) => {
+        await page.context().addCookies([{name: 'stub-import-key', value: verdict, url: 'http://127.0.0.1'}]);
+        await open(page, 'done');
+        const n = page.locator('[data-notice="devices-import"]');
+        const w = n.locator('[data-bidcos="key-unconfirmed"]');
+        await expect(w).toContainText(en);
+        await expect(w).toContainText('only a factory reset of every such device and pairing it again helps');
+        await expect(w).toHaveClass(/ol-warn/);
+        await expect(n.locator('[data-bidcos="key"]')).toHaveCount(0);
+        await page.evaluate(() => localStorage.setItem('ol.language', 'de'));
+        await page.reload();
+        await expect(page.locator('[data-bidcos="key-unconfirmed"]')).toContainText(de);
+    });
+}
+
+test('the key\'s passphrase matched at the import: the plain hint', async ({page}) => {
+    await page.context().addCookies([{name: 'stub-import-key', value: 'match', url: 'http://127.0.0.1'}]);
+    await open(page, 'done');
+    const n = page.locator('[data-notice="devices-import"]');
+    await expect(n.locator('[data-bidcos="key"]')).toContainText('non-default BidCos security key came along');
+    await expect(n.locator('[data-bidcos="key-unconfirmed"]')).toHaveCount(0);
 });

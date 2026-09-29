@@ -74,7 +74,7 @@ func defaultProgramShapes() map[string]argShape {
 		// staging directory (the check and the restore are told apart by -c)
 		"/bin/install_addon":    noArgs,
 		"/bin/createBackup.sh":  templates("<backupfile>"),
-		"/bin/restoreBackup.sh": templates("-c <backupfile>", "<backupfile>", "-f <backupfile>"),
+		"/bin/restoreBackup.sh": templates("-c <backupfile>", "-c -f <backupfile>", "<backupfile>", "-f <backupfile>"),
 		"/bin/cronBackup.sh":    noArgs,
 		"/bin/updateTZ.sh":      noArgs,
 		// the radio module's version (radiofw.go): the legacy flasher's read-only query, and

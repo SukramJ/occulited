@@ -6,8 +6,9 @@ import {expect, test, type Page} from '@playwright/test';
 // the import onto a system without paired devices - refused with the reason when devices are
 // paired here or an interface did not answer, the danger question, then the POST and the reboot
 // notice. Task 275: the notice that HmIP re-keys when the backup's identity belongs to another
-// module; task 278 (option B): no passphrase - the notice that a non-default BidCos key comes
-// along, and the word to replace this system's own key store.
+// module; task 278 (option B): the notice that a non-default BidCos key comes along, and the word to
+// replace this system's own key store; task 296: its passphrase as a check (restore-key.spec.ts has
+// the check itself) - not checked, the import still runs after the warning.
 
 const CHECK = {ok: true, output: '1) Checking sbk backup file consistency:\n   generated on 3.89.11.20260919, applying to 3.89.11.20260919, OK\n   backup or system NOT protected by security key, OK', backup_version: '3.89.11.20260919', running_version: '3.89.11.20260919', needs_key: false, has_rega: true};
 const BACKUP = {
@@ -68,7 +69,7 @@ test('the backup\'s devices, a free system, the import asks in red and posts the
     await expect(page.locator('.ol-restorenotice pre')).toContainText('The paired devices are imported.');
     await expect(page.locator('.ol-restorenotice pre')).toContainText('HmIP: the identity of module 3014F711A0001F0000000A03 is moved onto RPI-RF-MOD 0000000A01');
     await expect(page.locator('.ol-restorenotice pre')).toContainText('Names: 109 named objects, 11 rooms, 10 functions imported from the backup.');
-    expect(posts).toEqual([{file: 'restore-ccu.sbk', replace_key: false}]);
+    expect(posts).toEqual([{file: 'restore-ccu.sbk', replace_key: false, key: ''}]);
 });
 
 test('refused with devices paired here, waiting while an interface is silent, a non-default key is said and never asked, the own key is replaced on the word only', async ({page}) => {
@@ -100,17 +101,18 @@ test('refused with devices paired here, waiting while an interface is silent, a 
     await expect(block.locator('[data-devices="none"]')).toContainText('None: the backup holds no paired device');
     await expect(block.locator('[data-action="import-devices"]')).toHaveCount(0);
     backup = full;
-    // task 278: a backup with a non-default security key onto a free system - said, not asked;
-    // the same module, so no module-change notice
+    // task 278: a backup with a non-default security key onto a free system - said; task 296: its
+    // passphrase asked as a check, never a gate; the same module, so no module-change notice
     target = FREE;
     backup = {...BACKUP, key_index: 2, bidcos_rf: {...BACKUP.bidcos_rf, has_key: true}};
     nonDefaultKey = true;
     await upload(page);
     await expect(block.locator('[data-devices="bidcos-rf"]')).toContainText('an individual security key');
     const keyNotice = block.locator('[data-notice="bidcos-key"]');
-    await expect(keyNotice).toContainText('Non-default BidCos security key.');
-    await expect(keyNotice).toContainText('no passphrase is asked here');
-    await expect(keyNotice).toContainText('Keep that system\'s passphrase safe');
+    await expect(keyNotice).toContainText('The backup\'s BidCos security key');
+    await expect(keyNotice).toContainText('own BidCos security key (key index 2)');
+    await expect(keyNotice).toContainText('The import brings it along as it is');
+    await expect(keyNotice.locator('[data-input="keycheck-pass"]')).toBeVisible();
     await expect(block.locator('[data-input="devices-key"]')).toHaveCount(0);
     await expect(block.locator('[data-notice="module-change"]')).toHaveCount(0);
     await expect(block.locator('[data-action="import-devices"]')).toBeEnabled();
@@ -124,14 +126,18 @@ test('refused with devices paired here, waiting while an interface is silent, a 
     await replace.check();
     await expect(block.locator('[data-action="import-devices"]')).toBeEnabled();
     await block.locator('[data-action="import-devices"]').click();
+    // the passphrase was not checked: the warning first, the import on the word
     const dlg = page.getByRole('dialog');
+    await expect(dlg).toContainText('Import without the confirmed passphrase?');
+    await expect(dlg).toContainText('The passphrase of the backup\'s BidCos security key is not confirmed.');
     await expect(dlg).toContainText('not the default key');
     await expect(dlg).toContainText('This system\'s own security key is replaced by the backup\'s.');
-    await dlg.getByRole('button', {name: 'Import and reboot'}).click();
-    await expect(page.locator('.ol-restorenotice pre')).toContainText('non-default BidCos security key came along');
+    await dlg.getByRole('button', {name: 'Import anyway and reboot'}).click();
+    await expect(page.locator('[data-notice="restore-key-warning"]')).toContainText('non-default BidCos security key came along without a confirmed passphrase');
+    await expect(page.locator('.ol-restorenotice pre')).not.toContainText('Keep the other system');
     // task 281: a names failure is said and does not stop the devices
     await expect(page.locator('.ol-restorenotice pre')).toContainText('The names could not be imported from the backup: no ReGa database in the backup');
-    expect(posts).toEqual([{file: 'restore-ccu.sbk', replace_key: true}]);
+    expect(posts).toEqual([{file: 'restore-ccu.sbk', replace_key: true, key: ''}]);
 });
 
 test('German: the heading and the refusal', async ({page}) => {
@@ -148,6 +154,7 @@ test('German: the heading and the refusal', async ({page}) => {
     await expect(block.locator('[data-action="import-devices"]')).toHaveText('Angelernte Geräte importieren und neu starten');
     await expect(block.locator('[data-notice="module-change"]')).toContainText('Anderes Funkmodul: HmIP schlüsselt um.');
     await expect(block.locator('[data-notice="module-change"]')).toContainText('drücken Sie eine Taste daran');
-    await expect(block.locator('[data-notice="bidcos-key"]')).toContainText('Eigener BidCos-Sicherheitsschlüssel.');
-    await expect(block.locator('[data-notice="bidcos-key"]')).toContainText('Bewahren Sie die Passphrase jenes Systems sicher auf');
+    await expect(block.locator('[data-notice="bidcos-key"]')).toContainText('Der BidCos-Sicherheitsschlüssel der Sicherung');
+    await expect(block.locator('[data-notice="bidcos-key"]')).toContainText('Der Import bringt ihn unverändert mit');
+    await expect(block.locator('[data-action="keycheck-skip"]')).toHaveText('Überspringen - ich kenne sie nicht');
 });
