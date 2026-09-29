@@ -72,6 +72,22 @@ func (c *Controller) radioDownUnits() []string {
 	return radioUnits
 }
 
+// transientDir is where systemd keeps the unit files of transient units: the ones systemd-run
+// makes, under their own --unit= name as well as its run-<id> ones.
+const transientDir = "run/systemd/transient"
+
+// transient says whether a unit is a transient one that systemd-run made (openccu-lite B-276): a
+// person or a script at the shell started it, not the system, so its failure is not the system's
+// error. Without --collect a failed one stays failed until reset-failed, and it held the LED red
+// for an hour after a lab check that was meant to fail. run-<id>.service and .scope are
+// systemd-run's own names; a named one is known by its unit file in transientDir.
+func (c *Controller) transient(unit string) bool {
+	if strings.HasPrefix(unit, "run-") && (strings.HasSuffix(unit, ".service") || strings.HasSuffix(unit, ".scope")) {
+		return true
+	}
+	return unit != "" && !strings.Contains(unit, "/") && c.exists(transientDir, unit)
+}
+
 // heldStates are the error states that must hold for errorHold before they show.
 var heldStates = []string{StateRadioDown, StateServiceFailed, StateNoNetwork}
 
@@ -602,7 +618,7 @@ func (c *Controller) evaluate(now time.Time, rows []system.UnitRow, unitsOK bool
 		var failed []string
 		for _, r := range rows {
 			id := strings.TrimSuffix(r.Unit, ".service")
-			if r.Active != "failed" || slices.Contains(radio, id) || (strings.HasPrefix(id, "addon-") && !c.cfg.AddonUnits) {
+			if r.Active != "failed" || slices.Contains(radio, id) || (strings.HasPrefix(id, "addon-") && !c.cfg.AddonUnits) || c.transient(r.Unit) {
 				continue
 			}
 			failed = append(failed, id)

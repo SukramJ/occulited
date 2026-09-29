@@ -673,6 +673,35 @@ func TestControllerBootStatesShutdown(t *testing.T) {
 	r.steps(1)
 	r.expectShown(Look{Color: Blue, Pattern: Solid}, StateNormal)
 
+	// openccu-lite B-276: a failed transient unit - systemd-run's run-<id> ones, and a named one
+	// whose unit file is in /run/systemd/transient - is not service-failed; a real one still is
+	r.setUnit("run-p2492-i2493.service", "failed", "failed")
+	r.setUnit("run-r0123.scope", "failed", "failed")
+	r.setUnit("b276-test.service", "failed", "failed")
+	r.file("run/systemd/transient/b276-test.service", true)
+	r.steps(3)
+	r.expectShown(Look{Color: Blue, Pattern: Solid}, StateNormal)
+	r.setUnit("runner.service", "failed", "failed")
+	r.steps(3)
+	r.expectShown(Look{Color: Red, Pattern: Slow}, StateServiceFailed)
+	if st := r.c.State(); st.Shown.Detail != "runner" {
+		t.Errorf("service-failed detail with transient units %q", st.Shown.Detail)
+	}
+	r.setUnit("runner.service", "active", "running")
+	r.file("run/systemd/transient/b276-test.service", false)
+	r.steps(3)
+	r.expectShown(Look{Color: Red, Pattern: Slow}, StateServiceFailed)
+	if st := r.c.State(); st.Shown.Detail != "b276-test" {
+		t.Errorf("a named unit without its transient file %q", st.Shown.Detail)
+	}
+	r.mu.Lock()
+	r.units = slices.DeleteFunc(r.units, func(u system.UnitRow) bool {
+		return u.Unit == "run-p2492-i2493.service" || u.Unit == "run-r0123.scope" || u.Unit == "b276-test.service" || u.Unit == "runner.service"
+	})
+	r.mu.Unlock()
+	r.steps(1)
+	r.expectShown(Look{Color: Blue, Pattern: Solid}, StateNormal)
+
 	// openccu-lite task 283: units in a crash loop are service-failed, beside a failed one, and
 	// not a status warning; the state goes with the warning
 	r.mu.Lock()
