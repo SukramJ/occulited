@@ -180,6 +180,8 @@ func (a *SystemAPI) checkStall(ctx context.Context, s rpcsub.Stall) stallView {
 		Owner: func(port uint16) string {
 			return users[rpcstall.ListenOwner(conns, port)]
 		},
+		// B-228: hmipserver's connection to rfd is no listener
+		Interfaces: a.Root.InterfacePorts(),
 	})
 	v.at = time.Now()
 	v.CheckedAt = v.at.UTC().Format(time.RFC3339)

@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -267,6 +268,42 @@ func TestCheckRegisteredNoAnswer(t *testing.T) {
 	got := (&Prober{Timeout: 200 * time.Millisecond}).Check(context.Background(), in)
 	if len(got) != 2 || got[0].Address != frozen || got[0].Verdict != VerdictNoAnswer || got[1].Verdict != VerdictUnregistered || got[1].Stuck() {
 		t.Errorf("%+v", got)
+	}
+}
+
+// B-228: hmipserver's connection to rfd's own port is one interface process talking to another,
+// not a callback. With a stalled VirtualDevices and every registered listener answering, the check
+// named rfd's 127.0.0.1:32001 as the listener that holds it. A peer on an interface port is no
+// candidate now - the check finds no listener, and the warning is left to the interface's state -
+// while a handlers entry on such a port (hmipserver's BidCos-RF_java at rfd) is still asked.
+func TestCheckSkipsInterfacePorts(t *testing.T) {
+	good := listener(t, "answer")
+	ap := func(s string) netip.AddrPort { return netip.MustParseAddrPort(s) }
+	own := "127.0.0.1:8184"
+	in := Input{
+		Subscribers: []Subscriber{{ID: "occulited_VirtualDevices", URL: "http://" + own + "/cb/VirtualDevices"}},
+		Daemon:      Daemon{Peers: []netip.AddrPort{ap(own), ap("127.0.0.1:32001"), ap("[::1]:32010")}},
+		Skip:        func(s Subscriber) bool { return strings.HasPrefix(s.ID, "occulited_") },
+		Interfaces:  []uint16{32000, 32001, 32010, 39292, 2000, 2001, 2010, 9292},
+	}
+	if got := (&Prober{Timeout: 200 * time.Millisecond}).Check(context.Background(), in); len(got) != 0 {
+		t.Fatalf("interface processes named: %+v", got)
+	}
+	// without the list it is today's verdict: the peer holds the daemon
+	in.Interfaces = nil
+	if got := (&Prober{Timeout: 200 * time.Millisecond}).Check(context.Background(), in); len(got) != 2 || got[0].Verdict != VerdictHolds {
+		t.Fatalf("without the ports: %+v", got)
+	}
+	// a registered entry on an interface port is probed all the same
+	_, port, _ := net.SplitHostPort(good)
+	n, _ := strconv.Atoi(port)
+	in = Input{
+		Subscribers: []Subscriber{{ID: "BidCos-RF_java", URL: "http://" + good + "/bidcos"}},
+		Daemon:      Daemon{Peers: []netip.AddrPort{ap(good)}},
+		Interfaces:  []uint16{uint16(n)},
+	}
+	if got := (&Prober{Timeout: 200 * time.Millisecond}).Check(context.Background(), in); len(got) != 1 || got[0].Verdict != VerdictAnswers || got[0].ID != "BidCos-RF_java" {
+		t.Fatalf("registered entry on an interface port: %+v", got)
 	}
 }
 

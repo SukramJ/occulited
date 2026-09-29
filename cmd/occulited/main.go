@@ -576,7 +576,9 @@ func run(opts daemonOptions) error {
 		traceHandler = base
 	}
 	tracer := rpctrace.New(rpctrace.Options{Log: slog.New(traceHandler), Store: &traceStore{path: *cfgPath}})
-	rpcSub := rpcsub.New(rpcsub.Config{Listen: cfg.RPC.CallbackListen, Interfaces: filepath.Join(*rootDir, "etc/config/InterfacesList.xml"), Log: area("radio"), Trace: tracer, Enrich: devState.Enrich})
+	// B-270: an init the daemon answered late but took (its handlers file says so) is a registration
+	rpcSub := rpcsub.New(rpcsub.Config{Listen: cfg.RPC.CallbackListen, Interfaces: filepath.Join(*rootDir, "etc/config/InterfacesList.xml"), Log: area("radio"), Trace: tracer, Enrich: devState.Enrich,
+		Taken: system.Root(*rootDir).HoldsRegistration})
 	rpcSub.Attach(sampler, serviceMsgs, devState)
 	// the daily addon update check (what checkAddonUpdates.sh did into a ReGa variable)
 	// the update check runs the addon's update.cgi through occulited's own CGI route (not

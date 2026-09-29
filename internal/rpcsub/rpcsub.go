@@ -75,6 +75,13 @@ type Config struct {
 	PingTimeout time.Duration
 	// InitTimeout bounds one init, ping or deregistration call.
 	InitTimeout time.Duration
+	// InitTimeouts bounds the registering init of single interfaces instead (openccu-lite B-270);
+	// nil = DefaultInitTimeouts. Pings and deregistrations keep InitTimeout.
+	InitTimeouts map[string]time.Duration
+	// Taken says whether the daemon's handlers file holds the registration id -> callback of that
+	// interface, written at or after since (B-270): an init that got no answer within its bound but
+	// was taken counts as registered. nil = never asked, every unanswered init is a failure.
+	Taken func(iface, id, callback string, since time.Time) bool
 	// InitGrace is how long after an init the daemon's listDevices and listMethods still count as
 	// part of it: hmipserver's init returns before it calls back (measured, 4-18 ms and then the
 	// calls), so a call in this window is the registration, not a restart.
@@ -91,6 +98,13 @@ type Config struct {
 	// call back into the subscriber.
 	Enrich func(m *Message, at time.Time)
 }
+
+// DefaultInitTimeouts are the interfaces whose init may take longer than InitTimeout (B-270):
+// hmipserver answers the VirtualDevices init only once its BackendUpdateDevicesCommand has
+// answered, which took 10 s on a system without HmIP radio - a 10 s bound counted every such init
+// as failed and tried again, and each try held hmipserver's event loop for as long. rfd and
+// HmIP-RF keep the short bound: the stall detection (B-201) relies on it.
+var DefaultInitTimeouts = map[string]time.Duration{"VirtualDevices": 30 * time.Second}
 
 // Message is what goes over the bus: the bus's ring and the remote stream carry it as one JSON
 // object; the in-process handlers get it typed.
@@ -208,6 +222,7 @@ type iface struct {
 	failures   int
 	nextTry    time.Time
 	handler    *xmlrpc.Handler
+	lateSaid   bool // the "took it but answered late" line was written (once per interface and run)
 }
 
 // New makes a subscriber; Run starts it.
@@ -226,6 +241,9 @@ func New(cfg Config) *Subscriber {
 	}
 	if cfg.InitTimeout == 0 {
 		cfg.InitTimeout = 10 * time.Second
+	}
+	if cfg.InitTimeouts == nil {
+		cfg.InitTimeouts = DefaultInitTimeouts
 	}
 	if cfg.Watch == 0 {
 		cfg.Watch = 10 * time.Second
@@ -525,6 +543,18 @@ func (s *Subscriber) markCall(i *iface, err error) {
 var errNoAnswer = errors.New("no answer")
 
 func (s *Subscriber) call(i *iface, method string, params ...*xmlrpc.Value) (*xmlrpc.Value, error) {
+	return s.callWithin(i, s.cfg.InitTimeout, method, params...)
+}
+
+// initTimeout is the bound of an interface's registering init.
+func (s *Subscriber) initTimeout(name string) time.Duration {
+	if d, ok := s.cfg.InitTimeouts[name]; ok && d > 0 {
+		return d
+	}
+	return s.cfg.InitTimeout
+}
+
+func (s *Subscriber) callWithin(i *iface, limit time.Duration, method string, params ...*xmlrpc.Value) (*xmlrpc.Value, error) {
 	type res struct {
 		v   *xmlrpc.Value
 		err error
@@ -537,24 +567,39 @@ func (s *Subscriber) call(i *iface, method string, params ...*xmlrpc.Value) (*xm
 	select {
 	case r := <-ch:
 		return r.v, r.err
-	case <-time.After(s.cfg.InitTimeout):
-		return nil, fmt.Errorf("%w within %s", errNoAnswer, s.cfg.InitTimeout)
+	case <-time.After(limit):
+		return nil, fmt.Errorf("%w within %s", errNoAnswer, limit)
 	}
 }
 
 // register is one init(url, id). The daemon calls back during it (rfd: listMethods and
 // listDevices before it returns), which the handler answers from another goroutine.
+//
+// An init that got no answer within its bound, while the daemon's handlers file shows it took the
+// registration (written since the init began), counts as registered (B-270): trying again would
+// only make the daemon do the slow part again, and it is no stall of its calls. The ping watchdog
+// judges its liveness from then on as for any registration.
 func (s *Subscriber) register(i *iface) {
 	s.mu.Lock()
 	i.inInit = true
 	was := i.state
 	s.mu.Unlock()
-	_, err := s.call(i, "init", xmlrpc.NewString(i.callback), xmlrpc.NewString(i.id))
+	start := s.now()
+	limit := s.initTimeout(i.name)
+	_, err := s.callWithin(i, limit, "init", xmlrpc.NewString(i.callback), xmlrpc.NewString(i.id))
+	late := false
+	if errors.Is(err, errNoAnswer) && s.cfg.Taken != nil && s.cfg.Taken(i.name, i.id, i.callback, start) {
+		late, err = true, nil
+	}
 	s.markCall(i, err)
 	now := s.now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	i.inInit = false
+	if late && !i.lateSaid {
+		i.lateSaid = true
+		s.log.Info("rpc: the daemon took the registration but answered its init late", "interface", i.name, "bound", limit)
+	}
 	if err != nil {
 		i.failures++
 		i.lastErr = err.Error()

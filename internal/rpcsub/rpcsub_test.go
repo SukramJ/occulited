@@ -34,6 +34,30 @@ type fakeDaemon struct {
 	stuck bool
 	// hang, when set, holds every init and ping until it is closed (rfd held the same way)
 	hang chan struct{}
+	// slow: a registering init takes the registration and its callbacks at once, then answers only
+	// after this long (hmipserver's VirtualDevices without HmIP radio, B-270)
+	slow time.Duration
+	// regAt is when each callback's entry was written, as the handlers file's time would say
+	regAt map[string]time.Time
+}
+
+// taken is what the handlers file would say: the entry is there, written at or after since.
+func (f *fakeDaemon) taken(id, callback string, since time.Time) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.regs[callback] == id && !f.regAt[callback].Before(since)
+}
+
+func (f *fakeDaemon) initCount(id string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, x := range f.inits {
+		if x == id {
+			n++
+		}
+	}
+	return n
 }
 
 func (f *fakeDaemon) setStuck(v bool) {
@@ -49,7 +73,7 @@ func (f *fakeDaemon) held() (stuck bool, hang chan struct{}) {
 }
 
 func newFakeDaemon(t *testing.T) *fakeDaemon {
-	f := &fakeDaemon{t: t, regs: map[string]string{}}
+	f := &fakeDaemon{t: t, regs: map[string]string{}, regAt: map[string]time.Time{}}
 	d := &xmlrpc.BasicDispatcher{}
 	d.AddSystemMethods()
 	d.HandleFunc("init", func(args *xmlrpc.Value) (*xmlrpc.Value, error) {
@@ -65,7 +89,9 @@ func newFakeDaemon(t *testing.T) *fakeDaemon {
 			delete(f.regs, url)
 		} else {
 			f.regs[url] = id
+			f.regAt[url] = time.Now()
 		}
+		slow := f.slow
 		f.mu.Unlock()
 		if id != "" && !stuck {
 			// what rfd does before init returns
@@ -76,6 +102,9 @@ func newFakeDaemon(t *testing.T) *fakeDaemon {
 			if v, err := c.Call("listDevices", xmlrpc.Values{xmlrpc.NewString(id)}); err != nil || v == nil || v.Array == nil || len(v.Array.Data) != 0 {
 				t.Errorf("fake: listDevices on %s: %v %v", url, v, err)
 			}
+		}
+		if id != "" && slow > 0 {
+			time.Sleep(slow)
 		}
 		return xmlrpc.NewString(""), nil
 	})
@@ -543,5 +572,87 @@ func TestCallbackTrace(t *testing.T) {
 	// an event's "" answer is not a line
 	if strings.Contains(joined, "← occulited BidCos-RF event") {
 		t.Error("an event's empty answer was traced")
+	}
+}
+
+// B-270: an init the daemon took but answered only after the bound counts as registered, once its
+// handlers file shows the entry written since the init began - no retry, no stall of the calls.
+func TestLateInitTakenCountsAsRegistered(t *testing.T) {
+	hm := newFakeDaemon(t)
+	hm.slow = 400 * time.Millisecond
+	var asked sync.WaitGroup
+	asked.Add(1)
+	var once sync.Once
+	s, _ := startSub(t, Config{InitTimeout: 150 * time.Millisecond, InitTimeouts: map[string]time.Duration{}, PingAfter: time.Hour,
+		Taken: func(iface, id, callback string, since time.Time) bool {
+			once.Do(asked.Done)
+			return iface == "VirtualDevices" && hm.taken(id, callback, since)
+		}})
+	s.Set([]Entry{{Name: "VirtualDevices", URL: hm.url()}})
+	waitRegistered(t, s, "VirtualDevices")
+	asked.Wait()
+	time.Sleep(time.Second) // 20 watch ticks: a failed init would have been tried again after 5 s at the earliest, a stall shows at once
+	if n := hm.initCount("occulited_VirtualDevices"); n != 1 {
+		t.Fatalf("inits %d, want 1", n)
+	}
+	if st := s.Stalls(); len(st) != 0 {
+		t.Fatalf("stalls %+v", st)
+	}
+	if v := s.Status()[0]; !v.Registered || v.State != "up" || v.LastError != "" {
+		t.Fatalf("status %+v", v)
+	}
+}
+
+// B-270: the same late init without the handlers entry is today's failure - down, a calls stall,
+// tried again.
+func TestLateInitNotTakenFails(t *testing.T) {
+	hm := newFakeDaemon(t)
+	hm.slow = 400 * time.Millisecond
+	s, _ := startSub(t, Config{InitTimeout: 150 * time.Millisecond, InitTimeouts: map[string]time.Duration{}, PingAfter: time.Hour,
+		Taken: func(iface, id, callback string, since time.Time) bool { return false }})
+	s.Set([]Entry{{Name: "VirtualDevices", URL: hm.url()}})
+	waitFor(t, "the calls stall", func() bool { st := s.Stalls(); return len(st) == 1 && st[0].Kind == StallCalls })
+	if v := s.Status()[0]; v.Registered || v.State != "down" || !strings.Contains(v.LastError, "no answer") {
+		t.Fatalf("status %+v", v)
+	}
+}
+
+// B-270: an entry written before the init began (a dead run's, which the daemon keeps) is no proof
+// that this init was taken.
+func TestLateInitStaleEntryIsNotTaken(t *testing.T) {
+	hm := newFakeDaemon(t)
+	hm.slow = 400 * time.Millisecond
+	s, _ := startSub(t, Config{InitTimeout: 150 * time.Millisecond, InitTimeouts: map[string]time.Duration{}, PingAfter: time.Hour,
+		Taken: func(iface, id, callback string, since time.Time) bool {
+			return hm.taken(id, callback, since.Add(time.Hour)) // as if the file were older than the init
+		}})
+	s.Set([]Entry{{Name: "VirtualDevices", URL: hm.url()}})
+	waitFor(t, "the calls stall", func() bool { return len(s.Stalls()) == 1 })
+	if v := s.Status()[0]; v.Registered {
+		t.Fatalf("status %+v", v)
+	}
+}
+
+// B-270: VirtualDevices' init has a bound of its own; an init that answers within it is an
+// ordinary registration, while the same wait on another interface is a failure.
+func TestInitTimeoutPerInterface(t *testing.T) {
+	vd, rfd := newFakeDaemon(t), newFakeDaemon(t)
+	vd.slow, rfd.slow = 300*time.Millisecond, 300*time.Millisecond
+	s, _ := startSub(t, Config{InitTimeout: 150 * time.Millisecond, InitTimeouts: map[string]time.Duration{"VirtualDevices": 2 * time.Second}, PingAfter: time.Hour})
+	s.Set([]Entry{{Name: "VirtualDevices", URL: vd.url()}, {Name: "BidCos-RF", URL: rfd.url()}})
+	waitRegistered(t, s, "VirtualDevices")
+	waitFor(t, "BidCos-RF down", func() bool {
+		for _, v := range s.Status() {
+			if v.Name == "BidCos-RF" && v.State == "down" && strings.Contains(v.LastError, "within 150ms") {
+				return true
+			}
+		}
+		return false
+	})
+	if d := New(Config{}).initTimeout("VirtualDevices"); d != 30*time.Second {
+		t.Fatalf("default VirtualDevices bound %s", d)
+	}
+	if d := New(Config{}).initTimeout("HmIP-RF"); d != 10*time.Second {
+		t.Fatalf("default HmIP-RF bound %s", d)
 	}
 }

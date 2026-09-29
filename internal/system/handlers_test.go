@@ -1,6 +1,11 @@
 package system
 
-import "testing"
+import (
+	"fmt"
+	"os"
+	"testing"
+	"time"
+)
 
 // The fixtures are verbatim from a CCU3 running all four interface processes, tabs and escapes
 // included. The Java file's "\:" is what java.util.Properties writes and is the whole reason
@@ -178,5 +183,53 @@ func TestDuplicateHint(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// B-270: the daemon took our registration when its handlers file lists exactly it and was written
+// since the init began; an older file is a previous run's entry.
+func TestHoldsRegistration(t *testing.T) {
+	const cb = "http://127.0.0.1:8184/cb/VirtualDevices"
+	r := rootWith(t, map[string]string{
+		"var/HMSERVER.handlers":      "http://127.0.0.1:2048\tnr_x_VirtualDevices\n" + cb + "\tocculited_VirtualDevices\n",
+		"var/LegacyService.handlers": "occulited_HmIP-RF=http\\://127.0.0.1\\:8184/cb/HmIP-RF\n",
+	})
+	now := time.Now()
+	if !r.HoldsRegistration("VirtualDevices", "occulited_VirtualDevices", cb, now.Add(-time.Minute)) {
+		t.Error("the entry, written since: not taken")
+	}
+	if !r.HoldsRegistration("HmIP-RF", "occulited_HmIP-RF", "http://127.0.0.1:8184/cb/HmIP-RF", now.Add(-time.Minute)) {
+		t.Error("the Java file's entry: not taken")
+	}
+	for _, c := range []struct{ name, id, url string }{
+		{"VirtualDevices", "occulited_Other", cb},                // another id
+		{"VirtualDevices", "occulited_VirtualDevices", cb + "x"}, // another callback
+		{"BidCos-RF", "occulited_VirtualDevices", cb},            // no file
+		{"Nonsense", "occulited_VirtualDevices", cb},             // no interface
+	} {
+		if r.HoldsRegistration(c.name, c.id, c.url, now.Add(-time.Minute)) {
+			t.Errorf("%+v: taken", c)
+		}
+	}
+	// a file older than the init began
+	old := now.Add(-time.Hour)
+	if err := os.Chtimes(r.Path("/var/HMSERVER.handlers"), old, old); err != nil {
+		t.Fatal(err)
+	}
+	if r.HoldsRegistration("VirtualDevices", "occulited_VirtualDevices", cb, now.Add(-time.Minute)) {
+		t.Error("a stale file counted")
+	}
+}
+
+// B-228: the interface processes' ports - the list's, and the classic ones with their backends.
+func TestInterfacePorts(t *testing.T) {
+	r := rootWith(t, map[string]string{
+		"etc/config/InterfacesList.xml": `<interfaces><ipc><name>BidCos-RF</name><url>xmlrpc_bin://127.0.0.1:32001</url></ipc>` +
+			`<ipc><name>VirtualDevices</name><url>xmlrpc://127.0.0.1:39292/groups</url></ipc>` +
+			`<ipc><name>CCU-Jack</name><url>xmlrpc://127.0.0.1:2121/RPC3</url></ipc></interfaces>`,
+	})
+	got := fmt.Sprint(r.InterfacePorts())
+	if got != "[2000 2001 2010 2121 9292 32000 32001 32010 39292 42000 42001 42010 49292]" {
+		t.Fatalf("ports %s", got)
 	}
 }

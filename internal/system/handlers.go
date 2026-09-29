@@ -2,6 +2,7 @@ package system
 
 import (
 	"net"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -69,6 +70,28 @@ func (r Root) InterfaceURL(name string) string {
 	return ""
 }
 
+// InterfacePorts are the ports of the system's interface processes (openccu-lite B-228): every
+// InterfacesList.xml entry's, and the classic ports with their loopback backends whether or not
+// they are switched on. A daemon's connection to one of them is interface process to interface
+// process, never a callback listener. Sorted, each once.
+func (r Root) InterfacePorts() []uint16 {
+	seen := map[uint16]bool{}
+	for _, i := range parseInterfacesList(readFile(r.join("/etc/config/InterfacesList.xml"))) {
+		if p := urlPort(i.URL); p > 0 && p < 65536 {
+			seen[uint16(p)] = true
+		}
+	}
+	for _, c := range classicPorts {
+		seen[uint16(c.Port)], seen[uint16(c.Backend)] = true, true
+	}
+	out := make([]uint16, 0, len(seen))
+	for p := range seen {
+		out = append(out, p)
+	}
+	sort.Slice(out, func(a, b int) bool { return out[a] < out[b] })
+	return out
+}
+
 // InterfaceSubscribers reads the registered callbacks for one interface name. An unknown name, a
 // missing file or an empty one all give an empty list rather than an error: not running is a
 // normal state here, not a fault.
@@ -85,6 +108,28 @@ func (r Root) InterfaceSubscribers(name string) []InterfaceSubscriber {
 		return parseJavaHandlers(body)
 	}
 	return parsePlainHandlers(body)
+}
+
+// HoldsRegistration says whether the daemon of interface name has taken the registration id ->
+// callback: its handlers file lists exactly that entry, and was written at or after since (less a
+// second, for a clock that stamps coarsely). openccu-lite B-270: hmipserver writes the entry when
+// it takes a VirtualDevices init and answers the init itself only later; a file older than the
+// init is a previous run's entry, which the daemons keep, and proves nothing.
+func (r Root) HoldsRegistration(name, id, callback string, since time.Time) bool {
+	path, ok := handlerFiles[name]
+	if !ok {
+		return false
+	}
+	st, err := os.Stat(r.join(path))
+	if err != nil || st.ModTime().Before(since.Add(-time.Second)) {
+		return false
+	}
+	for _, x := range r.InterfaceSubscribers(name) {
+		if x.ID == id && x.URL == callback {
+			return true
+		}
+	}
+	return false
 }
 
 // parsePlainHandlers reads "<url><whitespace><id>" lines.

@@ -300,6 +300,13 @@ type Input struct {
 	Skip func(s Subscriber) bool
 	// Owner names the user of a local listening port; nil = no names.
 	Owner func(port uint16) string
+	// Interfaces are the loopback ports of the system's interface processes - rfd, hmipserver,
+	// hs485d and their classic faces (openccu-lite B-228). A connection the daemon holds to one of
+	// them is one interface process talking to another (hmipserver to rfd), not a callback: such a
+	// peer is never a candidate, neither probed nor taken for the one that holds the daemon. An
+	// entry of the handlers file on such a port (hmipserver's own BidCos-RF_java at rfd) is still
+	// probed.
+	Interfaces []uint16
 }
 
 // Check asks every listener of one daemon: the handlers file's entries, each with its own id, and
@@ -338,6 +345,10 @@ func (p *Prober) Check(ctx context.Context, in Input) []Listener {
 			c.l.ID, c.l.URL, c.bin, c.path = s.ID, s.URL, bin, path
 		}
 	}
+	iface := map[uint16]bool{}
+	for _, p := range in.Interfaces {
+		iface[p] = true
+	}
 	connected := map[string]bool{}
 	for _, peer := range in.Daemon.Peers {
 		a := peer.String()
@@ -345,7 +356,7 @@ func (p *Prober) Check(ctx context.Context, in Input) []Listener {
 		if own[a] {
 			continue
 		}
-		if _, ok := byAddr[a]; !ok && !peer.Addr().IsLoopback() {
+		if _, ok := byAddr[a]; !ok && (!peer.Addr().IsLoopback() || iface[peer.Port()]) {
 			continue
 		}
 		add(a)
