@@ -62,3 +62,13 @@ func Tier(c Call) auth.Scope {
 
 // Known says whether the table names the method (the page can say "unknown: administer").
 func Known(method string) bool { _, ok := tiers[method]; return ok }
+
+// Methods is the tier table as it stands: every method it names and the scope a call needs,
+// before the two parameter rules of Tier (the method catalogue of openccu-lite task 298).
+func Methods() map[string]auth.Scope {
+	out := make(map[string]auth.Scope, len(tiers))
+	for m, s := range tiers {
+		out[m] = s
+	}
+	return out
+}

@@ -3,6 +3,8 @@ package httpapi
 import (
 	"fmt"
 	"net/http"
+	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 
@@ -30,6 +32,9 @@ const scopeOpen auth.Scope = ""
 var (
 	routesMu    sync.Mutex
 	routeScopes = map[string][]auth.Scope{}
+	// routeHandlers names each pattern's handler as the runtime does (runtime.FuncForPC), for the
+	// API documents' generator, which reads the handler's source (openccu-lite task 298)
+	routeHandlers = map[string]string{}
 )
 
 // route registers pattern on mux with the scope it needs (and, where a route belongs to two,
@@ -42,6 +47,7 @@ func route(mux *http.ServeMux, scope auth.Scope, pattern string, h func(http.Res
 		panic(fmt.Sprintf("httpapi: route %q registered with scopes %v and %v", pattern, have, scopes))
 	}
 	routeScopes[pattern] = scopes
+	routeHandlers[pattern] = runtime.FuncForPC(reflect.ValueOf(h).Pointer()).Name()
 	routesMu.Unlock()
 	if (scope == scopeOpen) != open(strings.TrimPrefix(pattern, methodOf(pattern)+" ")) {
 		panic(fmt.Sprintf("httpapi: route %q: the table and open() disagree", pattern))

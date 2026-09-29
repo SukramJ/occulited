@@ -9,6 +9,15 @@ route needs a credential (session or API token, see meta-api.md → Conventions)
 commands are argument slices, never shell strings; with `--root` pointing anywhere but `/` they
 are logged instead of executed.
 
+**Machine-readable** (openccu-lite task 298): [openapi.json](openapi.json) is the OpenAPI 3.1 document of every route
+here, in meta-api.md and lite-rpc's — summary, scope, parameters, request and answer schemas — generated from the route
+table and the handlers' source, checked by CI and attached to each release. The running system serves it as
+**`GET /api/openapi.json`** (**`system:read`**; `info.version` is the running occulited's). This prose stays the
+reference for what a route does. The event streams (the SSE routes and lite-rpc's WebSocket) and their messages are in
+[asyncapi.json](asyncapi.json) (AsyncAPI 3.0), lite-rpc's methods and the scope each needs in
+[lite-rpc-methods.json](lite-rpc-methods.json); all three are generated together (`OCCULITED_UPDATE_DOCS=1 go test
+./internal/httpapi -run TestAPIDocuments`).
+
 ## Scopes
 
 Every route needs a credential unless marked *(open)*, and **every route names the scope it needs**
@@ -32,7 +41,7 @@ The names are frozen with the API at 1.0.
 | `led` | the status LED's state, an override of the token's own, locate — the role `led` |
 | `radio:keys` | the HmIP device keys: the list, adding and removing a key, applying them, and the key sheet — the one answer with every key in clear. No other scope includes it (`system:write` does not); Full access does. The token page says it *reads every HmIP device key in clear*. |
 | `auth:admin` | accounts, tokens, every session, the security and login settings (the identity provider, the password-login switch, the global legacy session switch); includes `self` |
-| `rpc:read`, `rpc:operate`, `rpc:configure`, `rpc:admin` | lite-rpc (`/api/rpc/v1`, below): every route needs `rpc:read`, and each call the tier its method needs; each tier includes the ones before it |
+| `rpc:read`, `rpc:operate`, `rpc:configure`, `rpc:admin` | lite-rpc (`/api/rpc/v1`, below): every route needs `rpc:read`, and each call the tier its method needs; each tier includes the ones before it. The table per method: [lite-rpc-methods.json](lite-rpc-methods.json). |
 | `*` | **Full access**: every scope that exists and every one added later, the `rpc:*` tiers included (a Full-access token has `rpc:admin`). Offered when a token is created, with the hint that explicit scopes are safer for a program. |
 | `self` | the caller's own account and session: `POST /logout`, `POST /password` (one's own), `GET`/`DELETE /sessions`, `DELETE /sessions/{sid}` (one's own), `/me/preferences`, `/me/webauthn` (one's own security keys, task 262), `POST /legacy-sid`, `POST /ticket`. Every account session has it; a token only through `auth:admin`. It cannot be given to a token. |
 

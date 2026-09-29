@@ -337,6 +337,7 @@ type FirstBootImport struct {
 func (a *SystemAPI) Register(mux *http.ServeMux) {
 	p := "/api/system/v1"
 	route(mux, auth.ScopeSystemRead, "GET "+p+"/status", a.status)
+	route(mux, auth.ScopeSystemRead, "GET /api/openapi.json", a.openAPI) // task 298, openapi.go
 	route(mux, auth.ScopeSystemRead, "GET "+p+"/radio", a.radio)
 	route(mux, auth.ScopeSystemRead, "GET "+p+"/services", a.services)
 	route(mux, auth.ScopeSystemWrite, "POST "+p+"/services/{id}/{action}", a.control)

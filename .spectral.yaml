@@ -1,0 +1,8 @@
+# The lint of docs/asyncapi.json (openccu-lite task 298): `npx @stoplight/spectral-cli lint docs/asyncapi.json`.
+# docs/openapi.json is linted by redocly (redocly.yaml).
+extends: ["spectral:asyncapi"]
+rules:
+  # 3.0 on purpose: what the tools around AsyncAPI read today
+  asyncapi-latest-version: off
+  # the project has an issue tracker, no mail address
+  asyncapi-info-contact-properties: off

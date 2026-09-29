@@ -1,0 +1,10 @@
+# The lint of the generated API documents (openccu-lite task 298): `npx @redocly/cli lint`.
+extends:
+  - recommended
+rules:
+  # every operation refers to the error answer as `default`; the scoped ones also name 401 and
+  # 403 - an open route's 4xx are its handler's and in the prose (docs/system-api.md)
+  operation-4xx-response: off
+  # Go's mux picks the more specific of two patterns that overlap (/pairing/request/{id} and
+  # /pairing/{id}/reject); both are what the server does
+  no-ambiguous-paths: off

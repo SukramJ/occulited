@@ -1,0 +1,1665 @@
+{
+  "asyncapi": "3.0.0",
+  "channels": {
+    "liteEvents": {
+      "address": "/api/rpc/v1/events",
+      "description": "Query parameters: interface, address, key (datapoint), type filter the messages (comma-separated or repeated); devices=true adds each interface's device list at the start; the last event id (Last-Event-ID, or ?last_event_id=) resumes. Each message but resync and the devices list carries an id `<boot>:<seq>`.",
+      "messages": {
+        "deleteDevices": {
+          "$ref": "#/components/messages/liteEventsDeleteDevices"
+        },
+        "event": {
+          "$ref": "#/components/messages/liteEventsEvent"
+        },
+        "hello": {
+          "$ref": "#/components/messages/liteEventsHello"
+        },
+        "interface": {
+          "$ref": "#/components/messages/liteEventsInterface"
+        },
+        "newDevices": {
+          "$ref": "#/components/messages/liteEventsNewDevices"
+        },
+        "readdedDevice": {
+          "$ref": "#/components/messages/liteEventsReaddedDevice"
+        },
+        "replaceDevice": {
+          "$ref": "#/components/messages/liteEventsReplaceDevice"
+        },
+        "resync": {
+          "$ref": "#/components/messages/liteEventsResync"
+        },
+        "state": {
+          "$ref": "#/components/messages/liteEventsState"
+        },
+        "updateDevice": {
+          "$ref": "#/components/messages/liteEventsUpdateDevice"
+        }
+      },
+      "servers": [
+        {
+          "$ref": "#/servers/http"
+        }
+      ],
+      "title": "lite-rpc: the interface processes' events as server-sent events"
+    },
+    "liteEventsWS": {
+      "address": "/api/rpc/v1/events/ws",
+      "description": "Query parameters: interface, address, key (datapoint), type filter the messages (comma-separated or repeated); devices=true adds each interface's device list at the start; the last event id (Last-Event-ID, or ?last_event_id=) resumes. Each message but resync and the devices list carries an id `<boot>:<seq>`.",
+      "messages": {
+        "deleteDevices": {
+          "$ref": "#/components/messages/liteEventsWSDeleteDevices"
+        },
+        "event": {
+          "$ref": "#/components/messages/liteEventsWSEvent"
+        },
+        "hello": {
+          "$ref": "#/components/messages/liteEventsWSHello"
+        },
+        "interface": {
+          "$ref": "#/components/messages/liteEventsWSInterface"
+        },
+        "newDevices": {
+          "$ref": "#/components/messages/liteEventsWSNewDevices"
+        },
+        "readdedDevice": {
+          "$ref": "#/components/messages/liteEventsWSReaddedDevice"
+        },
+        "replaceDevice": {
+          "$ref": "#/components/messages/liteEventsWSReplaceDevice"
+        },
+        "resync": {
+          "$ref": "#/components/messages/liteEventsWSResync"
+        },
+        "state": {
+          "$ref": "#/components/messages/liteEventsWSState"
+        },
+        "updateDevice": {
+          "$ref": "#/components/messages/liteEventsWSUpdateDevice"
+        }
+      },
+      "servers": [
+        {
+          "$ref": "#/servers/ws"
+        }
+      ],
+      "title": "lite-rpc: the same events over a WebSocket, one frame {type, id?, data} per message"
+    },
+    "logStream": {
+      "address": "/api/system/v1/log/stream",
+      "messages": {
+        "error": {
+          "$ref": "#/components/messages/logStreamError"
+        },
+        "message": {
+          "$ref": "#/components/messages/logStreamMessage"
+        }
+      },
+      "servers": [
+        {
+          "$ref": "#/servers/http"
+        }
+      ],
+      "title": "The journal as it grows, with the filters of GET /api/system/v1/log"
+    },
+    "metaEvents": {
+      "address": "/api/meta/v1/events/sse",
+      "description": "?since=<revision> replays the changes after it, or sends a resync when the log no longer holds them.",
+      "messages": {
+        "message": {
+          "$ref": "#/components/messages/metaEventsMessage"
+        }
+      },
+      "servers": [
+        {
+          "$ref": "#/servers/http"
+        }
+      ],
+      "title": "The metadata changes, one per revision"
+    },
+    "pairing": {
+      "address": "/api/auth/v1/pairing/stream",
+      "messages": {
+        "pairing": {
+          "$ref": "#/components/messages/pairingPairing"
+        }
+      },
+      "servers": [
+        {
+          "$ref": "#/servers/http"
+        }
+      ],
+      "title": "Client pairing: the requests, the whole view again on every change"
+    },
+    "serviceMessages": {
+      "address": "/api/system/v1/service-messages/stream",
+      "messages": {
+        "messages": {
+          "$ref": "#/components/messages/serviceMessagesMessages"
+        }
+      },
+      "servers": [
+        {
+          "$ref": "#/servers/http"
+        }
+      ],
+      "title": "The service messages, the whole view again on every change"
+    }
+  },
+  "components": {
+    "messages": {
+      "liteEventsDeleteDevices": {
+        "contentType": "application/json",
+        "name": "deleteDevices",
+        "payload": {
+          "properties": {
+            "addresses": {
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "interface": {
+              "type": "string"
+            },
+            "ts": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "addresses",
+            "interface",
+            "ts"
+          ],
+          "type": "object"
+        },
+        "summary": "Devices were deleted"
+      },
+      "liteEventsEvent": {
+        "contentType": "application/json",
+        "name": "event",
+        "payload": {
+          "properties": {
+            "address": {
+              "type": "string"
+            },
+            "batch": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "confirmed": {
+              "type": "boolean"
+            },
+            "interface": {
+              "type": "string"
+            },
+            "key": {
+              "type": "string"
+            },
+            "lc": {
+              "type": "string"
+            },
+            "previous_for_s": {
+              "type": "number"
+            },
+            "ts": {
+              "type": "string"
+            },
+            "value": {}
+          },
+          "required": [
+            "address",
+            "interface",
+            "key",
+            "ts",
+            "value"
+          ],
+          "type": "object"
+        },
+        "summary": "A datapoint's value as an interface process reported it"
+      },
+      "liteEventsHello": {
+        "contentType": "application/json",
+        "name": "hello",
+        "payload": {
+          "properties": {
+            "boot_id": {
+              "type": "string"
+            },
+            "buffer": {
+              "properties": {
+                "events": {
+                  "type": "integer"
+                },
+                "seconds": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "events",
+                "seconds"
+              ],
+              "type": "object"
+            },
+            "interfaces": {
+              "items": {
+                "$ref": "#/components/schemas/RpcsubIfaceStatus"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "seq": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "boot_id",
+            "buffer",
+            "interfaces",
+            "seq"
+          ],
+          "type": "object"
+        },
+        "summary": "The stream's first message: the process's boot id, where the ring is, the interfaces, the buffer"
+      },
+      "liteEventsInterface": {
+        "contentType": "application/json",
+        "name": "interface",
+        "payload": {
+          "properties": {
+            "interface": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string"
+            },
+            "ts": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "interface",
+            "state",
+            "ts"
+          ],
+          "type": "object"
+        },
+        "summary": "An interface process came up, went down, restarted, was added or removed"
+      },
+      "liteEventsNewDevices": {
+        "contentType": "application/json",
+        "name": "newDevices",
+        "payload": {
+          "anyOf": [
+            {
+              "properties": {
+                "addresses": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "interface": {
+                  "type": "string"
+                },
+                "ts": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "addresses",
+                "interface",
+                "ts"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "devices": {},
+                "error": {
+                  "type": "string"
+                },
+                "interface": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "interface"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "summary": "Devices were paired; with ?devices=true also each interface's device list at the start"
+      },
+      "liteEventsReaddedDevice": {
+        "contentType": "application/json",
+        "name": "readdedDevice",
+        "payload": {
+          "properties": {
+            "addresses": {
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "interface": {
+              "type": "string"
+            },
+            "ts": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "addresses",
+            "interface",
+            "ts"
+          ],
+          "type": "object"
+        },
+        "summary": "Devices were paired again"
+      },
+      "liteEventsReplaceDevice": {
+        "contentType": "application/json",
+        "name": "replaceDevice",
+        "payload": {
+          "properties": {
+            "addresses": {
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "interface": {
+              "type": "string"
+            },
+            "ts": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "addresses",
+            "interface",
+            "ts"
+          ],
+          "type": "object"
+        },
+        "summary": "A device was replaced by another"
+      },
+      "liteEventsResync": {
+        "contentType": "application/json",
+        "name": "resync",
+        "payload": {
+          "properties": {
+            "reason": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "reason"
+          ],
+          "type": "object"
+        },
+        "summary": "The stream could not resume after the client's Last-Event-ID (reason gap or boot): read the state again"
+      },
+      "liteEventsState": {
+        "contentType": "application/json",
+        "name": "state",
+        "payload": {
+          "properties": {
+            "address": {
+              "type": "string"
+            },
+            "confirmed": {
+              "type": "boolean"
+            },
+            "datapoint": {
+              "type": "string"
+            },
+            "interface": {
+              "type": "string"
+            },
+            "lc": {
+              "type": "string"
+            },
+            "previous_for_s": {
+              "type": "number"
+            },
+            "source": {
+              "type": "string"
+            },
+            "ts": {
+              "type": "string"
+            },
+            "value": {}
+          },
+          "required": [
+            "address",
+            "datapoint",
+            "interface",
+            "lc",
+            "source",
+            "ts",
+            "value"
+          ],
+          "type": "object"
+        },
+        "summary": "The state store's sweep confirmed or changed a datapoint"
+      },
+      "liteEventsUpdateDevice": {
+        "contentType": "application/json",
+        "name": "updateDevice",
+        "payload": {
+          "properties": {
+            "addresses": {
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "interface": {
+              "type": "string"
+            },
+            "ts": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "addresses",
+            "interface",
+            "ts"
+          ],
+          "type": "object"
+        },
+        "summary": "A device's description changed"
+      },
+      "liteEventsWSDeleteDevices": {
+        "contentType": "application/json",
+        "name": "deleteDevices",
+        "payload": {
+          "properties": {
+            "data": {
+              "properties": {
+                "addresses": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "interface": {
+                  "type": "string"
+                },
+                "ts": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "addresses",
+                "interface",
+                "ts"
+              ],
+              "type": "object"
+            },
+            "id": {
+              "description": "The event id to resume after (`<boot>:<seq>`), where the message has one.",
+              "type": "string"
+            },
+            "type": {
+              "const": "deleteDevices"
+            }
+          },
+          "required": [
+            "type",
+            "data"
+          ],
+          "type": "object"
+        },
+        "summary": "Devices were deleted"
+      },
+      "liteEventsWSEvent": {
+        "contentType": "application/json",
+        "name": "event",
+        "payload": {
+          "properties": {
+            "data": {
+              "properties": {
+                "address": {
+                  "type": "string"
+                },
+                "batch": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "confirmed": {
+                  "type": "boolean"
+                },
+                "interface": {
+                  "type": "string"
+                },
+                "key": {
+                  "type": "string"
+                },
+                "lc": {
+                  "type": "string"
+                },
+                "previous_for_s": {
+                  "type": "number"
+                },
+                "ts": {
+                  "type": "string"
+                },
+                "value": {}
+              },
+              "required": [
+                "address",
+                "interface",
+                "key",
+                "ts",
+                "value"
+              ],
+              "type": "object"
+            },
+            "id": {
+              "description": "The event id to resume after (`<boot>:<seq>`), where the message has one.",
+              "type": "string"
+            },
+            "type": {
+              "const": "event"
+            }
+          },
+          "required": [
+            "type",
+            "data"
+          ],
+          "type": "object"
+        },
+        "summary": "A datapoint's value as an interface process reported it"
+      },
+      "liteEventsWSHello": {
+        "contentType": "application/json",
+        "name": "hello",
+        "payload": {
+          "properties": {
+            "data": {
+              "properties": {
+                "boot_id": {
+                  "type": "string"
+                },
+                "buffer": {
+                  "properties": {
+                    "events": {
+                      "type": "integer"
+                    },
+                    "seconds": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "events",
+                    "seconds"
+                  ],
+                  "type": "object"
+                },
+                "interfaces": {
+                  "items": {
+                    "$ref": "#/components/schemas/RpcsubIfaceStatus"
+                  },
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "seq": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "boot_id",
+                "buffer",
+                "interfaces",
+                "seq"
+              ],
+              "type": "object"
+            },
+            "id": {
+              "description": "The event id to resume after (`<boot>:<seq>`), where the message has one.",
+              "type": "string"
+            },
+            "type": {
+              "const": "hello"
+            }
+          },
+          "required": [
+            "type",
+            "data"
+          ],
+          "type": "object"
+        },
+        "summary": "The stream's first message: the process's boot id, where the ring is, the interfaces, the buffer"
+      },
+      "liteEventsWSInterface": {
+        "contentType": "application/json",
+        "name": "interface",
+        "payload": {
+          "properties": {
+            "data": {
+              "properties": {
+                "interface": {
+                  "type": "string"
+                },
+                "state": {
+                  "type": "string"
+                },
+                "ts": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "interface",
+                "state",
+                "ts"
+              ],
+              "type": "object"
+            },
+            "id": {
+              "description": "The event id to resume after (`<boot>:<seq>`), where the message has one.",
+              "type": "string"
+            },
+            "type": {
+              "const": "interface"
+            }
+          },
+          "required": [
+            "type",
+            "data"
+          ],
+          "type": "object"
+        },
+        "summary": "An interface process came up, went down, restarted, was added or removed"
+      },
+      "liteEventsWSNewDevices": {
+        "contentType": "application/json",
+        "name": "newDevices",
+        "payload": {
+          "properties": {
+            "data": {
+              "anyOf": [
+                {
+                  "properties": {
+                    "addresses": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": [
+                        "array",
+                        "null"
+                      ]
+                    },
+                    "interface": {
+                      "type": "string"
+                    },
+                    "ts": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "addresses",
+                    "interface",
+                    "ts"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "devices": {},
+                    "error": {
+                      "type": "string"
+                    },
+                    "interface": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "interface"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "id": {
+              "description": "The event id to resume after (`<boot>:<seq>`), where the message has one.",
+              "type": "string"
+            },
+            "type": {
+              "const": "newDevices"
+            }
+          },
+          "required": [
+            "type",
+            "data"
+          ],
+          "type": "object"
+        },
+        "summary": "Devices were paired; with ?devices=true also each interface's device list at the start"
+      },
+      "liteEventsWSReaddedDevice": {
+        "contentType": "application/json",
+        "name": "readdedDevice",
+        "payload": {
+          "properties": {
+            "data": {
+              "properties": {
+                "addresses": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "interface": {
+                  "type": "string"
+                },
+                "ts": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "addresses",
+                "interface",
+                "ts"
+              ],
+              "type": "object"
+            },
+            "id": {
+              "description": "The event id to resume after (`<boot>:<seq>`), where the message has one.",
+              "type": "string"
+            },
+            "type": {
+              "const": "readdedDevice"
+            }
+          },
+          "required": [
+            "type",
+            "data"
+          ],
+          "type": "object"
+        },
+        "summary": "Devices were paired again"
+      },
+      "liteEventsWSReplaceDevice": {
+        "contentType": "application/json",
+        "name": "replaceDevice",
+        "payload": {
+          "properties": {
+            "data": {
+              "properties": {
+                "addresses": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "interface": {
+                  "type": "string"
+                },
+                "ts": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "addresses",
+                "interface",
+                "ts"
+              ],
+              "type": "object"
+            },
+            "id": {
+              "description": "The event id to resume after (`<boot>:<seq>`), where the message has one.",
+              "type": "string"
+            },
+            "type": {
+              "const": "replaceDevice"
+            }
+          },
+          "required": [
+            "type",
+            "data"
+          ],
+          "type": "object"
+        },
+        "summary": "A device was replaced by another"
+      },
+      "liteEventsWSResync": {
+        "contentType": "application/json",
+        "name": "resync",
+        "payload": {
+          "properties": {
+            "data": {
+              "properties": {
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "reason"
+              ],
+              "type": "object"
+            },
+            "id": {
+              "description": "The event id to resume after (`<boot>:<seq>`), where the message has one.",
+              "type": "string"
+            },
+            "type": {
+              "const": "resync"
+            }
+          },
+          "required": [
+            "type",
+            "data"
+          ],
+          "type": "object"
+        },
+        "summary": "The stream could not resume after the client's Last-Event-ID (reason gap or boot): read the state again"
+      },
+      "liteEventsWSState": {
+        "contentType": "application/json",
+        "name": "state",
+        "payload": {
+          "properties": {
+            "data": {
+              "properties": {
+                "address": {
+                  "type": "string"
+                },
+                "confirmed": {
+                  "type": "boolean"
+                },
+                "datapoint": {
+                  "type": "string"
+                },
+                "interface": {
+                  "type": "string"
+                },
+                "lc": {
+                  "type": "string"
+                },
+                "previous_for_s": {
+                  "type": "number"
+                },
+                "source": {
+                  "type": "string"
+                },
+                "ts": {
+                  "type": "string"
+                },
+                "value": {}
+              },
+              "required": [
+                "address",
+                "datapoint",
+                "interface",
+                "lc",
+                "source",
+                "ts",
+                "value"
+              ],
+              "type": "object"
+            },
+            "id": {
+              "description": "The event id to resume after (`<boot>:<seq>`), where the message has one.",
+              "type": "string"
+            },
+            "type": {
+              "const": "state"
+            }
+          },
+          "required": [
+            "type",
+            "data"
+          ],
+          "type": "object"
+        },
+        "summary": "The state store's sweep confirmed or changed a datapoint"
+      },
+      "liteEventsWSUpdateDevice": {
+        "contentType": "application/json",
+        "name": "updateDevice",
+        "payload": {
+          "properties": {
+            "data": {
+              "properties": {
+                "addresses": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "interface": {
+                  "type": "string"
+                },
+                "ts": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "addresses",
+                "interface",
+                "ts"
+              ],
+              "type": "object"
+            },
+            "id": {
+              "description": "The event id to resume after (`<boot>:<seq>`), where the message has one.",
+              "type": "string"
+            },
+            "type": {
+              "const": "updateDevice"
+            }
+          },
+          "required": [
+            "type",
+            "data"
+          ],
+          "type": "object"
+        },
+        "summary": "A device's description changed"
+      },
+      "logStreamError": {
+        "contentType": "application/json",
+        "name": "error",
+        "payload": {
+          "type": "string"
+        },
+        "summary": "The journal could not be followed; the stream ends"
+      },
+      "logStreamMessage": {
+        "contentType": "application/json",
+        "name": "message",
+        "payload": {
+          "$ref": "#/components/schemas/SystemLogLine"
+        },
+        "summary": "One journal line"
+      },
+      "metaEventsMessage": {
+        "contentType": "application/json",
+        "name": "message",
+        "payload": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/MetaEvent"
+            },
+            {
+              "properties": {
+                "kind": {
+                  "type": "string"
+                },
+                "revision": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "kind",
+                "revision"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "summary": "A change (kind names it) or a resync"
+      },
+      "pairingPairing": {
+        "contentType": "application/json",
+        "name": "pairing",
+        "payload": {
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "requests": {
+              "items": {
+                "$ref": "#/components/schemas/PairingView"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "enabled",
+            "requests"
+          ],
+          "type": "object"
+        },
+        "summary": "The view of GET /api/auth/v1/pairing"
+      },
+      "serviceMessagesMessages": {
+        "contentType": "application/json",
+        "name": "messages",
+        "payload": {
+          "properties": {
+            "count": {
+              "type": "integer"
+            },
+            "errors": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "feed": {
+              "$ref": "#/components/schemas/RpcsubView"
+            },
+            "messages": {
+              "items": {
+                "$ref": "#/components/schemas/ServiceMessageView"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "swept": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          "required": [
+            "count",
+            "errors",
+            "messages",
+            "swept"
+          ],
+          "type": "object"
+        },
+        "summary": "The view of GET /api/system/v1/service-messages"
+      }
+    },
+    "schemas": {
+      "MetaEvent": {
+        "properties": {
+          "enum": {
+            "type": "string"
+          },
+          "enums": {
+            "type": "integer"
+          },
+          "from": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "objects": {
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "revision": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "to": {
+            "type": "string"
+          },
+          "value": {}
+        },
+        "required": [
+          "kind",
+          "revision"
+        ],
+        "type": "object"
+      },
+      "PairingView": {
+        "properties": {
+          "access": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "address": {
+            "type": "string"
+          },
+          "app": {
+            "type": "string"
+          },
+          "app_version": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "created": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "expires": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "fingerprint": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "instance": {
+            "type": "string"
+          },
+          "look_alike": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "purpose": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "access",
+          "address",
+          "app",
+          "code",
+          "created",
+          "expires",
+          "id",
+          "name",
+          "scopes"
+        ],
+        "type": "object"
+      },
+      "RpcsubIfaceStatus": {
+        "properties": {
+          "calls": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "events": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "last_activity": {
+            "type": "string"
+          },
+          "last_error": {
+            "type": "string"
+          },
+          "last_init": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "registered": {
+            "type": "boolean"
+          },
+          "restored": {
+            "type": "boolean"
+          },
+          "stall_kind": {
+            "type": "string"
+          },
+          "stalled": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "calls",
+          "events",
+          "name",
+          "registered",
+          "state",
+          "url"
+        ],
+        "type": "object"
+      },
+      "RpcsubView": {
+        "properties": {
+          "boot_id": {
+            "type": "string"
+          },
+          "connected": {
+            "type": "boolean"
+          },
+          "interfaces": {
+            "items": {
+              "$ref": "#/components/schemas/RpcsubIfaceStatus"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "received": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "boot_id",
+          "connected",
+          "interfaces",
+          "received"
+        ],
+        "type": "object"
+      },
+      "ServiceMessageView": {
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "channel": {
+            "type": "string"
+          },
+          "enums": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "interface": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "seen": {
+            "type": "string"
+          },
+          "since": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "value": {}
+        },
+        "required": [
+          "address",
+          "channel",
+          "interface",
+          "key",
+          "seen",
+          "since",
+          "value"
+        ],
+        "type": "object"
+      },
+      "SystemLogLine": {
+        "properties": {
+          "area": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "facility": {
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "monotonic_us": {
+            "type": "integer"
+          },
+          "pid": {
+            "type": "integer"
+          },
+          "severity": {
+            "type": "string"
+          },
+          "tag": {
+            "type": "string"
+          },
+          "time": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "message",
+          "time"
+        ],
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "bearer": {
+        "description": "A session id or an API token; the channel's scope is in x-occulite-scopes.",
+        "scheme": "bearer",
+        "type": "http"
+      },
+      "cookie": {
+        "description": "The web UI's session cookie; lite-rpc's streams also want the request from the system's own origin.",
+        "in": "cookie",
+        "name": "occulite_session",
+        "type": "httpApiKey"
+      }
+    }
+  },
+  "defaultContentType": "application/json",
+  "info": {
+    "contact": {
+      "name": "openccu-lite",
+      "url": "https://github.com/hobbyquaker/openccu-lite/issues"
+    },
+    "description": "The REST API of occulited, openccu-lite's system service: metadata (`/api/meta/v1`), accounts and sessions (`/api/auth/v1`), system administration (`/api/system/v1`) and lite-rpc (`/api/rpc/v1`). Generated from the route table and the handlers' source; the prose in docs/meta-api.md (normative) and docs/system-api.md says what each route does in detail. The event streams are in docs/asyncapi.json, lite-rpc's methods per scope in docs/lite-rpc-methods.json.",
+    "license": {
+      "name": "GPL-3.0-only",
+      "url": "https://spdx.org/licenses/GPL-3.0-only.html"
+    },
+    "tags": [
+      {
+        "name": "occulited"
+      }
+    ],
+    "title": "occulited",
+    "version": "dev"
+  },
+  "operations": {
+    "receiveLiteEvents": {
+      "action": "receive",
+      "channel": {
+        "$ref": "#/channels/liteEvents"
+      },
+      "description": "Query parameters: interface, address, key (datapoint), type filter the messages (comma-separated or repeated); devices=true adds each interface's device list at the start; the last event id (Last-Event-ID, or ?last_event_id=) resumes. Each message but resync and the devices list carries an id `<boot>:<seq>`.",
+      "messages": [
+        {
+          "$ref": "#/channels/liteEvents/messages/deleteDevices"
+        },
+        {
+          "$ref": "#/channels/liteEvents/messages/event"
+        },
+        {
+          "$ref": "#/channels/liteEvents/messages/hello"
+        },
+        {
+          "$ref": "#/channels/liteEvents/messages/interface"
+        },
+        {
+          "$ref": "#/channels/liteEvents/messages/newDevices"
+        },
+        {
+          "$ref": "#/channels/liteEvents/messages/readdedDevice"
+        },
+        {
+          "$ref": "#/channels/liteEvents/messages/replaceDevice"
+        },
+        {
+          "$ref": "#/channels/liteEvents/messages/resync"
+        },
+        {
+          "$ref": "#/channels/liteEvents/messages/state"
+        },
+        {
+          "$ref": "#/channels/liteEvents/messages/updateDevice"
+        }
+      ],
+      "security": [
+        {
+          "$ref": "#/components/securitySchemes/bearer"
+        },
+        {
+          "$ref": "#/components/securitySchemes/cookie"
+        }
+      ],
+      "summary": "lite-rpc: the interface processes' events as server-sent events",
+      "x-occulite-scopes": [
+        "rpc:read"
+      ]
+    },
+    "receiveLiteEventsWS": {
+      "action": "receive",
+      "channel": {
+        "$ref": "#/channels/liteEventsWS"
+      },
+      "description": "Query parameters: interface, address, key (datapoint), type filter the messages (comma-separated or repeated); devices=true adds each interface's device list at the start; the last event id (Last-Event-ID, or ?last_event_id=) resumes. Each message but resync and the devices list carries an id `<boot>:<seq>`.",
+      "messages": [
+        {
+          "$ref": "#/channels/liteEventsWS/messages/deleteDevices"
+        },
+        {
+          "$ref": "#/channels/liteEventsWS/messages/event"
+        },
+        {
+          "$ref": "#/channels/liteEventsWS/messages/hello"
+        },
+        {
+          "$ref": "#/channels/liteEventsWS/messages/interface"
+        },
+        {
+          "$ref": "#/channels/liteEventsWS/messages/newDevices"
+        },
+        {
+          "$ref": "#/channels/liteEventsWS/messages/readdedDevice"
+        },
+        {
+          "$ref": "#/channels/liteEventsWS/messages/replaceDevice"
+        },
+        {
+          "$ref": "#/channels/liteEventsWS/messages/resync"
+        },
+        {
+          "$ref": "#/channels/liteEventsWS/messages/state"
+        },
+        {
+          "$ref": "#/channels/liteEventsWS/messages/updateDevice"
+        }
+      ],
+      "security": [
+        {
+          "$ref": "#/components/securitySchemes/bearer"
+        },
+        {
+          "$ref": "#/components/securitySchemes/cookie"
+        }
+      ],
+      "summary": "lite-rpc: the same events over a WebSocket, one frame {type, id?, data} per message",
+      "x-occulite-scopes": [
+        "rpc:read"
+      ]
+    },
+    "receiveLogStream": {
+      "action": "receive",
+      "channel": {
+        "$ref": "#/channels/logStream"
+      },
+      "description": "The journal as it grows, with the filters of GET /api/system/v1/log.",
+      "messages": [
+        {
+          "$ref": "#/channels/logStream/messages/error"
+        },
+        {
+          "$ref": "#/channels/logStream/messages/message"
+        }
+      ],
+      "security": [
+        {
+          "$ref": "#/components/securitySchemes/bearer"
+        },
+        {
+          "$ref": "#/components/securitySchemes/cookie"
+        }
+      ],
+      "summary": "The journal as it grows, with the filters of GET /api/system/v1/log",
+      "x-occulite-scopes": [
+        "logs:read"
+      ]
+    },
+    "receiveMetaEvents": {
+      "action": "receive",
+      "channel": {
+        "$ref": "#/channels/metaEvents"
+      },
+      "description": "?since=<revision> replays the changes after it, or sends a resync when the log no longer holds them.",
+      "messages": [
+        {
+          "$ref": "#/channels/metaEvents/messages/message"
+        }
+      ],
+      "security": [
+        {
+          "$ref": "#/components/securitySchemes/bearer"
+        },
+        {
+          "$ref": "#/components/securitySchemes/cookie"
+        }
+      ],
+      "summary": "The metadata changes, one per revision",
+      "x-occulite-scopes": [
+        "meta:read"
+      ]
+    },
+    "receivePairing": {
+      "action": "receive",
+      "channel": {
+        "$ref": "#/channels/pairing"
+      },
+      "description": "Client pairing: the requests, the whole view again on every change.",
+      "messages": [
+        {
+          "$ref": "#/channels/pairing/messages/pairing"
+        }
+      ],
+      "security": [
+        {
+          "$ref": "#/components/securitySchemes/bearer"
+        },
+        {
+          "$ref": "#/components/securitySchemes/cookie"
+        }
+      ],
+      "summary": "Client pairing: the requests, the whole view again on every change",
+      "x-occulite-scopes": [
+        "auth:admin"
+      ]
+    },
+    "receiveServiceMessages": {
+      "action": "receive",
+      "channel": {
+        "$ref": "#/channels/serviceMessages"
+      },
+      "description": "The service messages, the whole view again on every change.",
+      "messages": [
+        {
+          "$ref": "#/channels/serviceMessages/messages/messages"
+        }
+      ],
+      "security": [
+        {
+          "$ref": "#/components/securitySchemes/bearer"
+        },
+        {
+          "$ref": "#/components/securitySchemes/cookie"
+        }
+      ],
+      "summary": "The service messages, the whole view again on every change",
+      "x-occulite-scopes": [
+        "system:read"
+      ]
+    }
+  },
+  "servers": {
+    "http": {
+      "description": "Server-sent events over the web port (`text/event-stream`); `: ping` comments keep the connection.",
+      "host": "{host}",
+      "protocol": "https",
+      "variables": {
+        "host": {
+          "default": "ccu.local",
+          "description": "The system's name or address."
+        }
+      }
+    },
+    "ws": {
+      "description": "A WebSocket over the web port: one JSON object per text frame; ping frames keep the connection.",
+      "host": "{host}",
+      "protocol": "wss",
+      "variables": {
+        "host": {
+          "default": "ccu.local",
+          "description": "The system's name or address."
+        }
+      }
+    }
+  }
+}

@@ -77,6 +77,12 @@ jobs:
         run: |
           git status --porcelain internal/ui/dist
           test -z "$(git status --porcelain internal/ui/dist)" || { echo "internal/ui/dist differs from a fresh build: run 'cd ui && npm run build' and commit"; exit 1; }
+      - name: The API documents lint (openccu-lite task 298)
+        # docs/openapi.json and docs/asyncapi.json are generated and diff-checked by go test
+        # (TestAPIDocuments, TestEveryRouteDocumented); this checks they are valid documents
+        run: |
+          npx --yes @redocly/cli@2.55.0 lint docs/openapi.json
+          npx --yes @stoplight/spectral-cli@6.16.3 lint --fail-severity error docs/asyncapi.json
       - name: Every string is in German
         run: python3 scripts/i18n-check.py
       - name: User-facing text says "the system" and "Sie"
