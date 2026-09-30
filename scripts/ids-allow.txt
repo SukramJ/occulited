@@ -91,3 +91,6 @@ XEQ0000002
 3014F711A0001F5F000000AF
 KEQ0000001
 KEQ0000002
+# openccu-lite B-285: two device files in the module-move snapshot test (radioconn_test.go)
+3014F711A0000000000000B1
+3014F711A0000000000000B2

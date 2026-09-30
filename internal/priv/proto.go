@@ -665,11 +665,16 @@ func DefaultPolicy(root, stateDir string) Policy {
 		},
 		// openccu-lite B-253: hmipserver's data directory is 0700 with 0600 files. The daemon
 		// lists its names (which devices, which modules) and reads the module's three identity
-		// files for the local key mode's snapshot (task 149, D-103) - never a device file.
+		// files for the local key mode's snapshot (task 149, D-103). Since openccu-lite B-285
+		// (maintainer, 2026-09-30) the device files too: the snapshot a connection change takes
+		// before it moves HmIP-RF to another module keeps them, since hmipserver rewrites them
+		// for the new access point and the way back needs the old ones. linkData.conf and
+		// metaData.conf stay unreadable.
 		ReadGlobs: []string{
 			"/etc/config/crRFD/data/*.ap", "/usr/local/etc/config/crRFD/data/*.ap",
 			"/etc/config/crRFD/data/*.apkx", "/usr/local/etc/config/crRFD/data/*.apkx",
 			"/etc/config/crRFD/data/*.bbkx", "/usr/local/etc/config/crRFD/data/*.bbkx",
+			"/etc/config/crRFD/data/*.dev", "/usr/local/etc/config/crRFD/data/*.dev",
 		},
 		ListDirs: []string{"/etc/config/crRFD/data", "/usr/local/etc/config/crRFD/data"},
 		// the SSH page's "set root's password": the file is 0640 root:root and stays that way,

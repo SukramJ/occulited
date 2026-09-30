@@ -8136,6 +8136,16 @@
           "devices_error": {
             "type": "string"
           },
+          "hmip_move": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SystemHmIPMoveInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "plan": {
             "$ref": "#/components/schemas/SystemConnPlan"
           },
@@ -8836,6 +8846,53 @@
           "module",
           "ok",
           "started"
+        ],
+        "type": "object"
+      },
+      "SystemHmIPMoveBack": {
+        "properties": {
+          "at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "choices": {
+            "$ref": "#/components/schemas/RadioChoices"
+          },
+          "devices": {
+            "type": "integer"
+          },
+          "previous": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "at",
+          "choices",
+          "devices",
+          "previous"
+        ],
+        "type": "object"
+      },
+      "SystemHmIPMoveInfo": {
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "local_key": {
+            "type": "boolean"
+          },
+          "snapshot": {
+            "type": "boolean"
+          },
+          "to": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "from",
+          "local_key",
+          "snapshot",
+          "to"
         ],
         "type": "object"
       },
@@ -9585,6 +9642,16 @@
             "format": "date-time",
             "type": "string"
           },
+          "choices": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RadioChoices"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "files": {
             "items": {
               "type": "string"
@@ -10313,6 +10380,19 @@
                 "type": "null"
               }
             ]
+          },
+          "hmip_move_back": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SystemHmIPMoveBack"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "hostname": {
+            "type": "string"
           },
           "last": {
             "anyOf": [
@@ -28586,6 +28666,76 @@
           }
         ],
         "summary": "Puts a previous module's identity back after a fresh start",
+        "tags": [
+          "system/radio"
+        ],
+        "x-occulite-scopes": [
+          "system:write"
+        ]
+      }
+    },
+    "/api/system/v1/radio/hmip/module-move/back": {
+      "post": {
+        "operationId": "postSystemRadioHmipModuleMoveBack",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "confirm": {
+                    "type": "boolean"
+                  },
+                  "hostname": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/SystemLocalKeyStatus"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SystemRadioConnStatus"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Accepted"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "bearer": [
+              "system:write"
+            ]
+          },
+          {
+            "cookie": [
+              "system:write"
+            ]
+          }
+        ],
+        "summary": "Takes HmIP-RF back to the previous module from the snapshot",
         "tags": [
           "system/radio"
         ],

@@ -129,6 +129,11 @@ type RadioConnStatus struct {
 	HBRFETH *ConnHBRFETH `json:"hb_rf_eth,omitempty"`
 	Running *ConnApply   `json:"running"`
 	Last    *ConnApply   `json:"last"`
+	// HmIPMoveBack: a snapshot from before a move of HmIP-RF to another module is kept, and the
+	// page offers the way back (openccu-lite B-285); absent without one, and during a change.
+	// Hostname is the system's name, which the way back has typed as its confirmation.
+	HmIPMoveBack *HmIPMoveBack `json:"hmip_move_back,omitempty"`
+	Hostname     string        `json:"hostname,omitempty"`
 }
 
 // ConnModule is one detected module as the Interfaces page lists it (openccu-lite B-272).
@@ -217,6 +222,18 @@ type ConnPreview struct {
 	Devices    []BidCosDevice `json:"devices"`
 	// DevicesError: rfd did not answer, so the list may be incomplete.
 	DevicesError string `json:"devices_error,omitempty"`
+	// HmIPMove: the change moves HmIP-RF from one module to another (openccu-lite B-285) - an
+	// adapter exchange through eQ-3's key server while local key mode is off, and one-way in
+	// practice: the change takes a module-move snapshot first (Snapshot), the way back.
+	HmIPMove *HmIPMoveInfo `json:"hmip_move,omitempty"`
+}
+
+// HmIPMoveInfo says which module HmIP-RF leaves and which it goes to.
+type HmIPMoveInfo struct {
+	From     string `json:"from"`
+	To       string `json:"to"`
+	LocalKey bool   `json:"local_key"`
+	Snapshot bool   `json:"snapshot"`
 }
 
 // RadioConnections is the service.
@@ -226,6 +243,13 @@ type RadioConnections struct {
 	Systemd  bool
 	// Firmware is the flash service: no change while a flash runs, no flash while a change does.
 	Firmware *RadioFirmware
+	// BeforeHmIPMove takes the module-move snapshot before a change moves HmIP-RF to another
+	// module (openccu-lite B-285: HmIPLocalKey.SnapshotBeforeMove); nil = no snapshot. An error
+	// fails the change before anything is written.
+	BeforeHmIPMove func(from string, prev radio.Choices) error
+	// MoveBackOffer says whether a module-move snapshot is kept (HmIPLocalKey.MoveBackOffer); the
+	// status carries it for the page's "back to the previous module".
+	MoveBackOffer func() *HmIPMoveBack
 	// BidCosDevices lists rfd's paired devices; nil = not available.
 	BidCosDevices func(ctx context.Context) ([]BidCosDevice, error)
 	// Run executes commands for radio.Load (uname, hostname); nil = exec.
@@ -350,6 +374,12 @@ func (s *RadioConnections) Status() RadioConnStatus {
 	st.HBRFETH = s.hbRFETH(det)
 	s.mu.Lock()
 	st.Running, st.Last = copyApply(s.running), copyApply(s.last)
+	// openccu-lite B-285: the way back after a module move, while its snapshot is kept
+	if s.MoveBackOffer != nil && st.Running == nil {
+		if st.HmIPMoveBack = s.MoveBackOffer(); st.HmIPMoveBack != nil {
+			st.Hostname = s.Root.Hostname()
+		}
+	}
 	s.mu.Unlock()
 	return st
 }
@@ -445,6 +475,12 @@ func (s *RadioConnections) Preview(ctx context.Context, c radio.Choices) (ConnPr
 	if pv.Changed {
 		pv.Restarts = append(pv.Restarts, radioUnits...)
 	}
+	// openccu-lite B-285: HmIP-RF leaves one module for another
+	if cp.HmIP != nil && pv.Plan.HmIP != nil && cp.HmIP.SGTIN != "" && pv.Plan.HmIP.SGTIN != "" && !strings.EqualFold(cp.HmIP.SGTIN, pv.Plan.HmIP.SGTIN) {
+		hu, _ := s.read(hmipUserConf)
+		local := radio.ReadLocalKey(hu).Enabled()
+		pv.HmIPMove = &HmIPMoveInfo{From: strings.ToUpper(cp.HmIP.SGTIN), To: strings.ToUpper(pv.Plan.HmIP.SGTIN), LocalKey: local, Snapshot: !local && s.BeforeHmIPMove != nil}
+	}
 	pv.BidCosLost = cp.localBidCos() && !pv.Plan.localBidCos()
 	if pv.BidCosLost && s.BidCosDevices != nil {
 		devs, err := s.BidCosDevices(ctx)
@@ -480,6 +516,16 @@ func (s *RadioConnections) Apply(ctx context.Context, c radio.Choices, confirm b
 	a := &ConnApply{Choices: c, Previous: s.choices(), Started: s.now(), Lines: []string{}}
 	s.running = a
 	s.mu.Unlock()
+	// openccu-lite B-285: the snapshot before HmIP-RF leaves its module - a failure ends the
+	// change before anything is written
+	if pv.HmIPMove != nil && pv.HmIPMove.Snapshot {
+		if err := s.BeforeHmIPMove(pv.HmIPMove.From, a.Previous); err != nil {
+			err = fmt.Errorf("the snapshot of %s before the move: %w", pv.HmIPMove.From, err)
+			s.finish(a, err)
+			return copyApply(a), err
+		}
+		s.line(a, "the identity and device files of "+pv.HmIPMove.From+" kept in a snapshot: the way back to that module")
+	}
 	if err := s.writeChoices(a.Previous, c); err != nil {
 		s.finish(a, err)
 		return copyApply(a), err
@@ -490,8 +536,44 @@ func (s *RadioConnections) Apply(ctx context.Context, c radio.Choices, confirm b
 	s.mu.Lock()
 	out := copyApply(a)
 	s.mu.Unlock()
-	go s.apply(a)
+	go s.applyWith(a, nil)
 	return out, nil
+}
+
+// ApplyRestore is the way back after a module move (openccu-lite B-285, HmIPLocalKey.MoveBack):
+// a connection change to the choices from before the move, run to its end here, with restore
+// called while the daemons are stopped - the previous module's identity and device files return
+// before the detection runs and hmipserver starts on it. No module-move snapshot is taken (the
+// move back is not a move away), and the BidCos confirmation is given: the choices were the
+// system's own before.
+func (s *RadioConnections) ApplyRestore(ctx context.Context, c radio.Choices, restore func() error) error {
+	if s.Firmware != nil && s.Firmware.Status().Running != nil {
+		return ErrConnApplyRunning
+	}
+	if _, err := s.Preview(ctx, c); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	if s.running != nil {
+		s.mu.Unlock()
+		return ErrConnApplyRunning
+	}
+	a := &ConnApply{Choices: c, Previous: s.choices(), Started: s.now(), Lines: []string{}}
+	s.running = a
+	s.mu.Unlock()
+	if err := s.writeChoices(a.Previous, c); err != nil {
+		s.finish(a, err)
+		return err
+	}
+	s.line(a, fmt.Sprintf("back to the previous module: choices written: HmIP %s (%s), BidCos-RF %s", orAuto(c.HmIP), orAuto(c.HmIPPath), orAuto(c.BidCos)))
+	_ = writeJSONFile(filepath.Join(s.StateDir, "running.json"), a)
+	s.applyWith(a, restore)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if a.Error != "" {
+		return errors.New(a.Error)
+	}
+	return nil
 }
 
 func orAuto(v string) string {
@@ -558,8 +640,9 @@ func (s *RadioConnections) finish(a *ConnApply, err error) {
 	}
 }
 
-// apply is the orchestration: stop, re-run the detection and the plan, start.
-func (s *RadioConnections) apply(a *ConnApply) {
+// applyWith is the orchestration: stop, restore (the way back after a module move, else nil),
+// re-run the detection and the plan, start.
+func (s *RadioConnections) applyWith(a *ConnApply, restore func() error) {
 	timeout := s.Timeout
 	if timeout == 0 {
 		timeout = 10 * time.Minute
@@ -576,6 +659,15 @@ func (s *RadioConnections) apply(a *ConnApply) {
 			return
 		}
 		s.line(a, radioUnits[i]+" stopped")
+	}
+	if restore != nil {
+		if rerr := restore(); rerr != nil {
+			err = fmt.Errorf("restoring the previous module's files: %w", rerr)
+			s.line(a, "restoring the previous module's files failed: "+rerr.Error())
+			s.startAll(ctx, a)
+			return
+		}
+		s.line(a, "the previous module's identity and device files are back")
 	}
 	s.line(a, "re-running the radio detection and the plan")
 	if _, rerr := s.Services.Control(ctx, RadioDetectionUnit, "restart"); rerr != nil {

@@ -453,6 +453,7 @@ func (a *SystemAPI) Register(mux *http.ServeMux) {
 	route(mux, auth.ScopeSystemWrite, "GET "+p+"/radio/hmip/exchange", a.exchangeView)
 	route(mux, auth.ScopeSystemWrite, "POST "+p+"/radio/hmip/exchange/retry", a.exchangeRetry)
 	route(mux, auth.ScopeSystemWrite, "POST "+p+"/radio/hmip/exchange/fresh-start", a.exchangeFreshStart)
+	route(mux, auth.ScopeSystemWrite, "POST "+p+"/radio/hmip/module-move/back", a.hmipMoveBack) // openccu-lite B-285
 	// task 154 (D-104): the device keys, all under radio:keys; the export asks a session to confirm
 	route(mux, auth.ScopeRadioKeys, "GET "+p+"/radio/hmip/device-keys", a.deviceKeys)
 	route(mux, auth.ScopeRadioKeys, "POST "+p+"/radio/hmip/device-keys", a.deviceKeyAdd)

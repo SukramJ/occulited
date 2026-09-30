@@ -73,17 +73,18 @@ func TestListDirAndIdentityReads(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// the identity files by shape, through either spelling
-	for _, ext := range []string{".ap", ".apkx", ".bbkx"} {
+	// the identity files by shape, through either spelling - and the device files, since the
+	// module-move snapshot keeps them (openccu-lite B-285)
+	for _, ext := range []string{".ap", ".apkx", ".bbkx", ".dev"} {
 		for _, dir := range []string{"etc/config/crRFD/data", "usr/local/etc/config/crRFD/data"} {
 			if b, err := c.ReadFile(filepath.Join(root, dir, sg+ext)); err != nil || string(b) != strings.ToUpper(ext[1:]) {
 				t.Errorf("%s%s: %q %v", dir, ext, b, err)
 			}
 		}
 	}
-	// and nothing else in the directory: a device file, the link data, a name with the extension
-	// somewhere else in it, a directory
-	for _, bad := range []string{sg + ".dev", "linkData.conf", "metaData.conf", "x.ap.dev", "old_20260101", "old_20260101/" + sg + ".ap"} {
+	// and nothing else in the directory: the link data, a name with the extension somewhere
+	// else in it, a directory
+	for _, bad := range []string{"linkData.conf", "metaData.conf", "x.ap.devx", "old_20260101", "old_20260101/" + sg + ".ap"} {
 		if _, err := c.ReadFile(filepath.Join(data, bad)); !errors.Is(err, ErrRefused) {
 			t.Errorf("%s was readable: %v", bad, err)
 		}

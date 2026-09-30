@@ -251,6 +251,7 @@ var routeDocs = map[string]apidoc.Doc{
 	"GET /api/system/v1/radio/hmip/exchange":                             {Summary: "The HmIP adapter exchange's state"},
 	"POST /api/system/v1/radio/hmip/exchange/fresh-start":                {Summary: "Starts afresh after a failed adapter exchange"},
 	"POST /api/system/v1/radio/hmip/exchange/retry":                      {Summary: "Retries the adapter exchange"},
+	"POST /api/system/v1/radio/hmip/module-move/back":                    {Summary: "Takes HmIP-RF back to the previous module from the snapshot"},
 	"DELETE /api/system/v1/radio/hmip/local-key":                         {Summary: "Goes back to eQ-3's key server"},
 	"GET /api/system/v1/radio/hmip/local-key":                            {Summary: "The HmIP local key mode's state"},
 	"PUT /api/system/v1/radio/hmip/local-key":                            {Summary: "Switches to the HmIP local key mode"},

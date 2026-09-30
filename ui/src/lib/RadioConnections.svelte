@@ -17,7 +17,8 @@
     import {api, type Service} from './api';
     import {pageLife} from './pagelife.svelte';
     import {statusDot, statusKind} from './units';
-    import {ask} from './dialog.svelte';
+    import {ask, askText} from './dialog.svelte';
+    import {sameHostname} from './factoryreset';
     import {t} from './i18n.svelte';
     import {link} from './router.svelte';
     import Help from './Help.svelte';
@@ -39,8 +40,10 @@
     }
     interface Change { choices: Choices; previous: Choices; started: string; finished?: string; ok: boolean; error?: string; lines: string[] }
     interface Choices { hmip: string; bidcos: string; hmip_path?: string }
-    interface Status { available: boolean; choices: Choices; options: {hmip: Option[]; bidcos: Option[]}; plan?: Plan; mode?: string; hmip_fatal?: {code: string; line: string; adapter?: string; cause?: string}; modules?: ConnModule[]; hb_rf_eth?: ConnBoard; running: Change | null; last: Change | null }
-    interface Preview { plan: Plan; changed: boolean; restarts: string[]; bidcos_lost: boolean; devices: {address: string; type: string}[]; devices_error?: string }
+    // openccu-lite B-285: a snapshot from before a move of HmIP-RF to another module is kept
+    interface MoveBack { previous: string; at: string; choices: Choices; devices: number }
+    interface Status { available: boolean; choices: Choices; options: {hmip: Option[]; bidcos: Option[]}; plan?: Plan; mode?: string; hmip_fatal?: {code: string; line: string; adapter?: string; cause?: string}; modules?: ConnModule[]; hb_rf_eth?: ConnBoard; running: Change | null; last: Change | null; hmip_move_back?: MoveBack; hostname?: string }
+    interface Preview { plan: Plan; changed: boolean; restarts: string[]; bidcos_lost: boolean; devices: {address: string; type: string}[]; devices_error?: string; hmip_move?: {from: string; to: string; local_key: boolean; snapshot: boolean} }
 
     // onready: called once, after the first load (answered or not) - the page scrolls to an anchor
     // only then, since this section appearing above it would push the anchor out of view
@@ -249,17 +252,28 @@
             ].join('\n'),
         ];
         if (pv.restarts.length) paras.push(t('{units} are stopped and started again. The radio is unavailable for about a minute; nothing is flashed.', {units: pv.restarts.join(', ')}));
+        // openccu-lite B-285: HmIP-RF leaves its module - an adapter exchange through eQ-3's key server,
+        // one-way in practice; the system keeps a snapshot first, the only way back
+        if (pv.hmip_move && !pv.hmip_move.local_key) {
+            paras.push(t('HmIP-RF moves from module {from} to module {to}. That is an adapter exchange through eQ-3\'s key server: the HmIP network belongs to the new module afterwards, and the key server refuses the exchange back.', {from: pv.hmip_move.from, to: pv.hmip_move.to}));
+            paras.push(pv.hmip_move.snapshot
+                ? t('The system keeps a snapshot of the current module\'s identity and device files first. "Back to the previous module" on this page works from that snapshot alone - without it there is no way back.')
+                : t('No snapshot can be kept here: there is no way back to the current module afterwards.'));
+        } else if (pv.hmip_move) {
+            paras.push(t('HmIP-RF moves from module {from} to module {to}. Local key mode is on: no key server is involved.', {from: pv.hmip_move.from, to: pv.hmip_move.to}));
+        }
         if (pv.bidcos_lost) {
             paras.push(t('BidCos-RF loses its local radio. Paired devices stop working until it is back, unless a LAN gateway reaches them. Pairings, keys and the rfd configuration stay untouched.'));
             if (pv.devices.length) paras.push(t('Paired BidCos-RF devices ({n}):', {n: pv.devices.length}) + '\n' + pv.devices.map((d) => `${d.address} · ${d.type}`).join('\n'));
             if (pv.devices_error) paras.push(t('rfd did not answer, so the list may be incomplete: {error}', {error: pv.devices_error}));
         }
+        const move = !!pv.hmip_move && !pv.hmip_move.local_key;
         await ask({
             title: t('Change the radio connections?'),
             message: paras.join('\n\n'),
             confirm: t('Change'),
-            danger: pv.bidcos_lost,
-            focusCancel: pv.bidcos_lost,
+            danger: pv.bidcos_lost || move,
+            focusCancel: pv.bidcos_lost || move,
             run: async () => {
                 await api.put('/api/system/v1/radio/connections', {...choice, confirm: pv.bidcos_lost});
                 touched = false;
@@ -267,6 +281,40 @@
                 await load();
             },
         });
+    }
+
+    // openccu-lite B-285: the way back after a module move, from the snapshot the change kept;
+    // confirmed by typing the system's host name, as the fresh start is
+    async function moveBack(mb: MoveBack) {
+        const host = st?.hostname ?? '';
+        const message = [
+            t('HmIP-RF goes back to module {module}. Its identity and its device files from before the move ({n} devices) return, the HmIP network is known on it again without eQ-3\'s key server, and the connections are set as they were before the move.', {module: mb.previous, n: mb.devices}),
+            t('The identity the exchange made for the module in use now is moved aside into a kept identity of its own. Devices paired since the move have to be paired again.'),
+            t('The radio is unavailable for about a minute. The snapshot is consumed.'),
+            t('Type the host name {host} to confirm.', {host}),
+        ].join('\n\n');
+        const typed = await askText({
+            title: t('Back to module {module}?', {module: mb.previous}),
+            message,
+            input: {label: t('Host name'), placeholder: host},
+            confirm: t('Back to the previous module'),
+            danger: true,
+            focusCancel: true,
+        });
+        if (typed === null) return;
+        if (!sameHostname(typed, host)) {
+            err = t('The name typed is not this system\'s host name; nothing happened.');
+            return;
+        }
+        try {
+            await api.post('/api/system/v1/radio/hmip/module-move/back', {confirm: true, hostname: typed});
+            err = '';
+            touched = false;
+            wasRunning = true;
+            await load();
+        } catch (e) {
+            err = (e as Error).message;
+        }
     }
 
     function reset() {
@@ -309,6 +357,13 @@
             {:else}
                 {t('HmIP-RF is restarting and tries the move to this module again.')}
             {/if}
+        </div>
+    {/if}
+    {#if st.hmip_move_back && !st.running}
+        <!-- openccu-lite B-285: the snapshot the move kept is the way back to the previous module -->
+        <div class="ol-notice" data-notice="hmip-move-back">
+            {t('HmIP-RF was moved away from module {module} on {when}; the system kept that module\'s identity and device files ({n} devices). Back on that module, the HmIP network is known again without eQ-3\'s key server.', {module: st.hmip_move_back.previous, when: new Date(st.hmip_move_back.at).toLocaleString(), n: st.hmip_move_back.devices})}
+            {#if admin}<button type="button" class="hmm-button" onclick={() => st?.hmip_move_back && moveBack(st.hmip_move_back)}>{t('Back to the previous module…')}</button>{/if}
         </div>
     {/if}
     <!-- openccu-lite task 275: after a device import from another module's backup, how hmipserver's

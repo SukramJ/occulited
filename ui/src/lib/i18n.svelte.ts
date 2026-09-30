@@ -1102,6 +1102,29 @@ const CATALOGUE: Record<string, {de: string; en?: string}> = {
         de: '{name} deinstallieren? Die Konfiguration unter /usr/local bleibt möglicherweise erhalten — das entscheidet die Zusatzsoftware selbst.',
     },
     Uninstalled: {de: 'Deinstalliert'},
+    // openccu-lite B-285: the HmIP module move and the way back
+    'HmIP-RF moves from module {from} to module {to}. That is an adapter exchange through eQ-3\'s key server: the HmIP network belongs to the new module afterwards, and the key server refuses the exchange back.': {
+        de: 'HmIP-RF wechselt von Modul {from} auf Modul {to}. Das ist ein Adapterwechsel über den Schlüsselserver von eQ-3: das HmIP-Netz gehört danach dem neuen Modul, und der Schlüsselserver verweigert den Wechsel zurück.',
+    },
+    'The system keeps a snapshot of the current module\'s identity and device files first. "Back to the previous module" on this page works from that snapshot alone - without it there is no way back.': {
+        de: 'Das System sichert zuvor die Identität und die Gerätedateien des aktuellen Moduls. „Zurück zum vorherigen Modul“ auf dieser Seite funktioniert allein aus dieser Sicherung — ohne sie gibt es keinen Weg zurück.',
+    },
+    'No snapshot can be kept here: there is no way back to the current module afterwards.': {de: 'Hier kann keine Sicherung angelegt werden: danach gibt es keinen Weg zurück zum aktuellen Modul.'},
+    'HmIP-RF moves from module {from} to module {to}. Local key mode is on: no key server is involved.': {de: 'HmIP-RF wechselt von Modul {from} auf Modul {to}. Der lokale Schlüsselmodus ist an: kein Schlüsselserver ist beteiligt.'},
+    'HmIP-RF goes back to module {module}. Its identity and its device files from before the move ({n} devices) return, the HmIP network is known on it again without eQ-3\'s key server, and the connections are set as they were before the move.': {
+        de: 'HmIP-RF geht zurück auf Modul {module}. Seine Identität und seine Gerätedateien von vor dem Wechsel ({n} Geräte) kommen zurück, das HmIP-Netz ist darauf ohne den Schlüsselserver von eQ-3 wieder bekannt, und die Verbindungen werden wie vor dem Wechsel gesetzt.',
+    },
+    'The identity the exchange made for the module in use now is moved aside into a kept identity of its own. Devices paired since the move have to be paired again.': {
+        de: 'Die Identität, die der Wechsel für das jetzt genutzte Modul angelegt hat, wird als eigene aufbewahrte Identität beiseitegelegt. Seit dem Wechsel angelernte Geräte müssen neu angelernt werden.',
+    },
+    'The radio is unavailable for about a minute. The snapshot is consumed.': {de: 'Der Funk ist etwa eine Minute nicht verfügbar. Die Sicherung wird dabei verbraucht.'},
+    'Back to module {module}?': {de: 'Zurück auf Modul {module}?'},
+    'Back to the previous module': {de: 'Zurück zum vorherigen Modul'},
+    'Back to the previous module…': {de: 'Zurück zum vorherigen Modul…'},
+    'HmIP-RF was moved away from module {module} on {when}; the system kept that module\'s identity and device files ({n} devices). Back on that module, the HmIP network is known again without eQ-3\'s key server.': {
+        de: 'HmIP-RF wurde am {when} von Modul {module} weggewechselt; das System hat die Identität und die Gerätedateien dieses Moduls aufbewahrt ({n} Geräte). Zurück auf diesem Modul ist das HmIP-Netz ohne den Schlüsselserver von eQ-3 wieder bekannt.',
+    },
+    'kept before HmIP-RF moved to another module; the Interfaces page offers the way back': {de: 'aufbewahrt, bevor HmIP-RF auf ein anderes Modul wechselte; die Schnittstellen-Seite bietet den Weg zurück'},
     'The system removed the remaining files: {list}.': {de: 'Die restlichen Dateien hat das System entfernt: {list}.'},
     Uninstall: {de: 'Deinstallieren'},
     'Check for update': {de: 'Auf Update prüfen'},

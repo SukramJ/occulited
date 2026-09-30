@@ -6,8 +6,12 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/user"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/hobbyquaker/occulited/internal/radio"
 )
@@ -24,6 +28,219 @@ import (
 // SnapshotFreshStart marks a snapshot the fresh start made: the previous module's identity as it
 // was, not one made before a switch to local key mode.
 const SnapshotFreshStart = "fresh-start"
+
+// SnapshotModuleMove marks the snapshot a connection change takes before it moves HmIP-RF to
+// another module (openccu-lite B-285, maintainer 2026-09-30): the module's identity files,
+// hmip_address.conf and every device file, with the connection choices from before the move. The
+// move is an adapter exchange through eQ-3's key server, which refused the exchange back on a lab
+// system - and hmipserver had rewritten the device files for the new access point, so the way
+// back needs the pre-move identity and device files, which only this snapshot has.
+const SnapshotModuleMove = "module-move"
+
+// HmIPMoveBack is the Interfaces page's offer: a module-move snapshot is kept, and HmIP-RF can go
+// back to that module from it without the key server.
+type HmIPMoveBack struct {
+	Previous string        `json:"previous"` // the module the snapshot belongs to
+	At       time.Time     `json:"at"`
+	Choices  radio.Choices `json:"choices"` // the connection choices from before the move
+	Devices  int           `json:"devices"` // device files in the snapshot
+}
+
+// SnapshotBeforeMove copies the module's identity files, hmip_address.conf and every device file
+// of hmipserver's data directory into a module-move snapshot before a connection change moves
+// HmIP-RF away from it (the change calls it before it writes anything). Nothing is removed. With
+// local key mode on nothing is taken: no key server is involved then, and the switch's snapshot
+// of the module must stay. A snapshot of the module kept from an earlier move or a fresh start
+// is replaced - it is older than what is on the system now.
+func (k *HmIPLocalKey) SnapshotBeforeMove(from string, prev radio.Choices) error {
+	from = strings.ToUpper(from)
+	if !sgtinRe.MatchString(from) {
+		return ErrLocalKey{"not an SGTIN: " + from}
+	}
+	conf := k.conf()
+	if radio.ReadLocalKey(conf).Enabled() {
+		return nil
+	}
+	if s, ok := k.snapshotFor(from); ok && s.Kind == "" {
+		return ErrLocalKey{"a snapshot of " + from + " from before the switch to local key mode is kept; discard it first"}
+	}
+	dir := k.snapshotDir(from)
+	if err := os.RemoveAll(dir); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	_ = os.Chmod(filepath.Join(k.StateDir, "snapshots"), 0o700)
+	_ = os.Chmod(k.StateDir, 0o700)
+	choices := prev
+	snap := LocalKeySnapshot{SGTIN: from, At: k.now(), Files: []string{}, Kind: SnapshotModuleMove, Choices: &choices}
+	copyIn := func(src, name string) error {
+		b := readFile(src)
+		if b == "" {
+			return fmt.Errorf("%s is empty or unreadable", name)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(b), 0o600); err != nil {
+			return err
+		}
+		snap.Files = append(snap.Files, name)
+		return nil
+	}
+	ids := k.identityFiles(from)
+	if len(ids) == 0 {
+		_ = os.RemoveAll(dir)
+		return ErrLocalKey{"no identity files of " + from + " in " + crRFDDataDir}
+	}
+	for _, name := range ids {
+		if err := copyIn(k.Root.join(filepath.Join(crRFDDataDir, name)), name); err != nil {
+			_ = os.RemoveAll(dir)
+			return err
+		}
+	}
+	if readFile(k.Root.join(hmipAddressConf)) != "" {
+		if err := copyIn(k.Root.join(hmipAddressConf), filepath.Base(hmipAddressConf)); err != nil {
+			_ = os.RemoveAll(dir)
+			return err
+		}
+	}
+	for _, name := range k.deviceFiles() {
+		if err := copyIn(k.Root.join(filepath.Join(crRFDDataDir, name)), name); err != nil {
+			_ = os.RemoveAll(dir)
+			return err
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "hmip_user.conf"), []byte(conf), 0o600); err != nil {
+		return err
+	}
+	b, _ := json.MarshalIndent(snap, "", "  ")
+	if err := os.WriteFile(filepath.Join(dir, "snapshot.json"), b, 0o600); err != nil {
+		return err
+	}
+	k.log().Info("module move: the previous module's identity and device files kept", "module", from, "devices", len(k.deviceFiles()), "choices", fmt.Sprintf("%+v", prev))
+	return nil
+}
+
+// deviceFiles names hmipserver's device files (<SGTIN>.dev) in its data directory, sorted.
+func (k *HmIPLocalKey) deviceFiles() []string {
+	var out []string
+	for _, name := range readDir(k.Root.join(crRFDDataDir)) {
+		if strings.HasSuffix(strings.ToUpper(name), ".DEV") && sgtinRe.MatchString(strings.ToUpper(strings.TrimSuffix(name, filepath.Ext(name)))) {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// moveSnapshot is the newest module-move snapshot, if one is kept.
+func (k *HmIPLocalKey) moveSnapshot() (LocalKeySnapshot, bool) {
+	for _, s := range k.Snapshots() {
+		if s.Kind == SnapshotModuleMove {
+			return s, true
+		}
+	}
+	return LocalKeySnapshot{}, false
+}
+
+// MoveBackOffer is what the Interfaces page shows while a module-move snapshot is kept; nil
+// without one, and with local key mode on (no key server, no one-way move).
+func (k *HmIPLocalKey) MoveBackOffer() *HmIPMoveBack {
+	s, ok := k.moveSnapshot()
+	if !ok || s.Choices == nil || radio.ReadLocalKey(k.conf()).Enabled() {
+		return nil
+	}
+	n := 0
+	for _, f := range s.Files {
+		if strings.HasSuffix(strings.ToUpper(f), ".DEV") {
+			n++
+		}
+	}
+	return &HmIPMoveBack{Previous: s.SGTIN, At: s.At, Choices: *s.Choices, Devices: n}
+}
+
+// MoveBack takes HmIP-RF back to the module a module-move snapshot belongs to (openccu-lite
+// B-285): a connection change to the choices from before the move, and - while the daemons are
+// stopped - every other module's identity in the data directory (the one the exchange made for
+// the module HmIP-RF ran on since) moved aside into a fresh-start snapshot of its own, the
+// snapshot's identity files, device files and hmip_address.conf put back, a marker of a rejected
+// exchange cleared. hmipserver then starts on the previous module with its own identity and the
+// devices as they were: no key-server exchange. The snapshot is consumed. Refused with local key
+// mode on, without a snapshot, and beside a switch, a connection change or a flash.
+func (k *HmIPLocalKey) MoveBack() error {
+	snap, ok := k.moveSnapshot()
+	if !ok {
+		return ErrLocalKey{"no snapshot from before a module move is kept"}
+	}
+	if snap.Choices == nil {
+		return ErrLocalKey{"the snapshot of " + snap.SGTIN + " carries no connection choices"}
+	}
+	if radio.ReadLocalKey(k.conf()).Enabled() {
+		return ErrLocalKey{"local key mode is on: the module is changed on the Interfaces page, no key server is involved"}
+	}
+	if k.Conn == nil {
+		return ErrLocalKey{"the connection change is not available"}
+	}
+	conf := k.conf()
+	ctx, err := k.begin("move-back")
+	if err != nil {
+		return err
+	}
+	dir := k.snapshotDir(snap.SGTIN)
+	restore := func() error {
+		for _, p := range k.previousIdentities(snap.SGTIN) {
+			if err := k.moveIdentityAside(p, conf); err != nil {
+				return fmt.Errorf("moving the identity of %s aside: %w", p, err)
+			}
+		}
+		for _, f := range snap.Files {
+			b, err := os.ReadFile(filepath.Join(dir, f))
+			if err != nil {
+				return fmt.Errorf("reading the snapshot's %s: %w", f, err)
+			}
+			if f == filepath.Base(hmipAddressConf) {
+				// hmipserver's own (0644): it rewrites the file when the address changes
+				if err := writeFileAtomic(k.Root.join(hmipAddressConf), b, 0o644); err != nil {
+					return fmt.Errorf("restoring %s: %w", f, err)
+				}
+				if uid, gid, ok := hmipserverIDs(); ok {
+					_ = Priv.Chown(k.Root.join(hmipAddressConf), uid, gid, false)
+				}
+				continue
+			}
+			// root's for a moment, as the fresh-start restore: hmipserver's prep gives the
+			// directory and what is in it back to hmipserver at its start (openccu-lite B-253)
+			if err := writeFileAtomic(k.Root.join(filepath.Join(crRFDDataDir, f)), b, 0o600); err != nil {
+				return fmt.Errorf("restoring %s: %w", f, err)
+			}
+		}
+		if err := k.clearFatal(); err != nil {
+			return err
+		}
+		if err := os.RemoveAll(dir); err != nil {
+			return fmt.Errorf("removing the consumed snapshot: %w", err)
+		}
+		return nil
+	}
+	go func() {
+		k.log().Warn("module move: back to the previous module from its snapshot", "module", snap.SGTIN, "choices", fmt.Sprintf("%+v", *snap.Choices), "files", len(snap.Files))
+		k.end(k.Conn(ctx, *snap.Choices, restore))
+	}()
+	return nil
+}
+
+// hmipserverIDs is hmipserver's uid and gid on this system; false where the account is unknown.
+func hmipserverIDs() (uid, gid int, ok bool) {
+	u, err := lookupSystemUser("hmipserver")
+	if err != nil {
+		return 0, 0, false
+	}
+	uid, err1 := strconv.Atoi(u.Uid)
+	gid, err2 := strconv.Atoi(u.Gid)
+	return uid, gid, err1 == nil && err2 == nil
+}
+
+// lookupSystemUser is user.Lookup, replaceable by a test.
+var lookupSystemUser = user.Lookup
 
 // ExchangeView is what the API answers about the adapter exchange.
 type ExchangeView struct {

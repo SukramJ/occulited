@@ -542,3 +542,182 @@ func TestConnModulesRoles(t *testing.T) {
 		t.Fatalf("empty: %#v", got)
 	}
 }
+
+// twoHmIPRoot is a system with two modules that can carry HmIP-RF: the RPI-RF-MOD on the header
+// (HmIP-RF runs on it, its identity, hmip_address.conf and two device files are on the system) and
+// an HmIP-RFUSB.
+func twoHmIPRoot(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	w := func(p, c string) {
+		full := filepath.Join(root, p)
+		_ = os.MkdirAll(filepath.Dir(full), 0o755)
+		if err := os.WriteFile(full, []byte(c), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mod := radio.Module{Name: "raw-uart", Node: "/dev/raw-uart", DeviceType: "GPIO@3f201000.serial", GPIO: true, Hardware: "RPI-RF-MOD", Serial: "0000000A03", SGTIN: "3014F711A0001F0000000A03", HmRFAddress: "0x1F6C2E", HmIPAddress: "0x3FAE2C", Version: "4.4.22", Probe: "ok"}
+	stick := radio.Module{Name: "raw-uart1", Node: "/dev/raw-uart1", DeviceType: "eQ-3 HmIP-RFUSB@usb-0000:01:00.0-1.3", Hardware: "HMIP-RFUSB", Serial: "0000000A01", SGTIN: "3014F711A000040000000A01", HmRFAddress: "0xFF0001", HmIPAddress: "0xB00001", Version: "4.4.18", Probe: "ok"}
+	det := radio.Detection{Modules: []radio.Module{mod, stick}}
+	w("var/hm_mode", "HM_HOST='rpi3'\nHM_MODE='NORMAL'\n")
+	w("etc/config/rfd.conf", connRFDConf)
+	w("etc/config_templates/rfd.conf", connRFDConf)
+	w("etc/config_templates/InterfacesList.xml", "<interfaces><ipc><name>BidCos-RF</name><url>xmlrpc_bin://127.0.0.1:32001</url><info>BidCos-RF</info></ipc><ipc><name>VirtualDevices</name><url>xmlrpc://127.0.0.1:39292/groups</url><info>VirtualDevices</info></ipc></interfaces>")
+	w("etc/config/crRFD/hmip_user.conf", "occulite.hmip.path=\n")
+	for _, ext := range []string{".ap", ".apkx", ".bbkx"} {
+		w("etc/config/crRFD/data/3014F711A0001F0000000A03"+ext, "MOD-"+ext)
+	}
+	w("etc/config/crRFD/data/3014F711A0000000000000B1.dev", "DEV-B1-before")
+	w("etc/config/crRFD/data/3014F711A0000000000000B2.dev", "DEV-B2-before")
+	w("etc/config/crRFD/data/linkData.conf", "links")
+	w("etc/config/hmip_address.conf", "Adapter.1.Address=3FAE2C\n")
+	w("etc/config/netconfig", "HOSTNAME=lite-test\n")
+	b, _ := json.Marshal(det)
+	w("run/occulite/radio/modules.json", string(b))
+	in := radio.Load(context.Background(), root, fakeRunner, det)
+	b, _ = json.Marshal(radio.MakePlan(in))
+	w("run/occulite/radio/plan.json", string(b))
+	return root
+}
+
+// openccu-lite B-285: a change that moves HmIP-RF to another module is named in the preview, takes
+// a module-move snapshot of the module it leaves (identity, hmip_address.conf, the device files,
+// the choices from before) before anything is written, and the way back restores it all while
+// the daemons are stopped and puts the choices back - no key-server exchange
+func TestHmIPModuleMoveSnapshotAndTheWayBack(t *testing.T) {
+	root := twoHmIPRoot(t)
+	s, svc := newConn(t, root, nil)
+	k := &HmIPLocalKey{Root: Root(root), Services: svc, StateDir: filepath.Join(root, "state/hmip-local-key"), Plan: s.BootPlan, Busy: s.Busy}
+	s.BeforeHmIPMove, s.MoveBackOffer, k.Conn = k.SnapshotBeforeMove, k.MoveBackOffer, s.ApplyRestore
+	const mod, stick = "3014F711A0001F0000000A03", "3014F711A000040000000A01"
+	if st := s.Status(); st.Plan.HmIP == nil || st.Plan.HmIP.SGTIN != mod || st.HmIPMoveBack != nil {
+		t.Fatalf("before: %+v %+v", st.Plan.HmIP, st.HmIPMoveBack)
+	}
+	// the preview names the move; a change of the BidCos side alone does not
+	toStick := radio.Choices{HmIP: "0000000A01", HmIPPath: radio.PathDirect}
+	pv, err := s.Preview(context.Background(), toStick)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pv.HmIPMove == nil || pv.HmIPMove.From != mod || pv.HmIPMove.To != stick || pv.HmIPMove.LocalKey || !pv.HmIPMove.Snapshot {
+		t.Fatalf("preview: %+v", pv.HmIPMove)
+	}
+	if pv, err := s.Preview(context.Background(), radio.Choices{BidCos: radio.BidCosNone}); err != nil || pv.HmIPMove != nil {
+		t.Fatalf("a BidCos-only change names a move: %+v %v", pv.HmIPMove, err)
+	}
+	// the move: the snapshot first, then the change
+	if _, err := s.Apply(context.Background(), toStick, false); err != nil {
+		t.Fatal(err)
+	}
+	a := waitApply(t, s)
+	if !a.OK || !strings.Contains(strings.Join(a.Lines, "\n"), "kept in a snapshot") {
+		t.Fatalf("the move: %+v", a)
+	}
+	snaps := k.Snapshots()
+	if len(snaps) != 1 || snaps[0].SGTIN != mod || snaps[0].Kind != SnapshotModuleMove || snaps[0].Choices == nil || snaps[0].Choices.HmIP != "" {
+		t.Fatalf("snapshot: %+v", snaps)
+	}
+	if got := strings.Join(snaps[0].Files, " "); got != mod+".ap "+mod+".apkx "+mod+".bbkx hmip_address.conf 3014F711A0000000000000B1.dev 3014F711A0000000000000B2.dev" {
+		t.Fatalf("snapshot files: %s", got)
+	}
+	dir := k.snapshotDir(mod)
+	if readFile(filepath.Join(dir, "3014F711A0000000000000B1.dev")) != "DEV-B1-before" || readFile(filepath.Join(dir, "hmip_address.conf")) != "Adapter.1.Address=3FAE2C\n" || readFile(filepath.Join(dir, "hmip_user.conf")) == "" {
+		t.Fatal("the snapshot's copies")
+	}
+	// nothing was removed from the data directory by the snapshot
+	if readFile(filepath.Join(root, "etc/config/crRFD/data", mod+".ap")) != "MOD-.ap" {
+		t.Fatal("the identity was taken from the data directory")
+	}
+	st := s.Status()
+	if st.Plan.HmIP == nil || st.Plan.HmIP.SGTIN != stick || st.HmIPMoveBack == nil || st.HmIPMoveBack.Previous != mod || st.HmIPMoveBack.Devices != 2 || st.HmIPMoveBack.Choices.HmIP != "" {
+		t.Fatalf("after the move: %+v %+v", st.Plan.HmIP, st.HmIPMoveBack)
+	}
+	// hmipserver did the exchange onto the stick: its identity, the device files rewritten for the
+	// new access point, the address file rewritten - and then the exchange back was refused
+	data := filepath.Join(root, "etc/config/crRFD/data")
+	_ = os.WriteFile(filepath.Join(data, stick+".ap"), []byte("STICK-.ap"), 0o644)
+	_ = os.Remove(filepath.Join(data, mod+".ap"))
+	_ = os.Remove(filepath.Join(data, mod+".apkx"))
+	_ = os.Remove(filepath.Join(data, mod+".bbkx"))
+	_ = os.WriteFile(filepath.Join(data, "3014F711A0000000000000B1.dev"), []byte("DEV-B1-after"), 0o644)
+	_ = os.WriteFile(filepath.Join(data, "3014F711A0000000000000B2.dev"), []byte("DEV-B2-after"), 0o644)
+	_ = os.WriteFile(filepath.Join(root, "etc/config/hmip_address.conf"), []byte("Adapter.1.Address=B00001\n"), 0o644)
+	marker := lkFatal(t, root, radio.CauseRefused)
+	// the way back
+	svc.calls = nil
+	if err := k.MoveBack(); err != nil {
+		t.Fatal(err)
+	}
+	if lst := lkWait(t, k); lst.Error != "" {
+		t.Fatalf("the way back: %+v", lst)
+	}
+	a = waitApply(t, s)
+	if !a.OK || a.Choices.HmIP != "" || !strings.Contains(strings.Join(a.Lines, "\n"), "identity and device files are back") {
+		t.Fatalf("the change back: %+v", a)
+	}
+	for _, ext := range []string{".ap", ".apkx", ".bbkx"} {
+		if b := readFile(filepath.Join(data, mod+ext)); b != "MOD-"+ext {
+			t.Errorf("restored %s: %q", ext, b)
+		}
+	}
+	if readFile(filepath.Join(data, "3014F711A0000000000000B1.dev")) != "DEV-B1-before" || readFile(filepath.Join(data, "3014F711A0000000000000B2.dev")) != "DEV-B2-before" {
+		t.Error("the device files were not restored")
+	}
+	if readFile(filepath.Join(root, "etc/config/hmip_address.conf")) != "Adapter.1.Address=3FAE2C\n" {
+		t.Error("hmip_address.conf was not restored")
+	}
+	if _, err := os.Stat(filepath.Join(data, stick+".ap")); !os.IsNotExist(err) {
+		t.Error("the stick's identity is still in the data directory")
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Error("the marker of the rejected exchange stayed")
+	}
+	// the stick's identity is a fresh-start snapshot of its own; the move snapshot is consumed
+	snaps = k.Snapshots()
+	if len(snaps) != 1 || snaps[0].SGTIN != stick || snaps[0].Kind != SnapshotFreshStart {
+		t.Fatalf("snapshots after the way back: %+v", snaps)
+	}
+	st = s.Status()
+	if st.Plan.HmIP == nil || st.Plan.HmIP.SGTIN != mod || st.HmIPMoveBack != nil {
+		t.Fatalf("after the way back: %+v %+v", st.Plan.HmIP, st.HmIPMoveBack)
+	}
+	// the restore ran while the daemons were stopped: after the stops, before the detection
+	joined := strings.Join(svc.calls, "\n")
+	if !strings.Contains(joined, "hmipserver stop") || !strings.Contains(joined, RadioDetectionUnit+" restart") {
+		t.Fatalf("calls: %s", joined)
+	}
+	if strings.Index(joined, "hmipserver stop") > strings.Index(joined, RadioDetectionUnit+" restart") {
+		t.Fatalf("the detection ran before the stop: %s", joined)
+	}
+	// a second way back has nothing to go back to
+	if err := k.MoveBack(); err == nil || !strings.Contains(err.Error(), "no snapshot") {
+		t.Fatalf("second way back: %v", err)
+	}
+}
+
+// with local key mode on no key server is involved: the preview says so, no snapshot is taken
+// and nothing is offered
+func TestHmIPModuleMoveWithLocalKeyOnTakesNoSnapshot(t *testing.T) {
+	root := twoHmIPRoot(t)
+	_ = os.WriteFile(filepath.Join(root, "etc/config/crRFD/hmip_user.conf"), []byte("occulite.hmip.path=\nKeyServer.Mode=LOCAL\nNetwork.Key=00112233445566778899AABBCCDDEEFF\n"), 0o644)
+	s, svc := newConn(t, root, nil)
+	k := &HmIPLocalKey{Root: Root(root), Services: svc, StateDir: filepath.Join(root, "state/hmip-local-key"), Plan: s.BootPlan, Busy: s.Busy}
+	s.BeforeHmIPMove, s.MoveBackOffer, k.Conn = k.SnapshotBeforeMove, k.MoveBackOffer, s.ApplyRestore
+	toStick := radio.Choices{HmIP: "0000000A01", HmIPPath: radio.PathDirect}
+	pv, err := s.Preview(context.Background(), toStick)
+	if err != nil || pv.HmIPMove == nil || !pv.HmIPMove.LocalKey || pv.HmIPMove.Snapshot {
+		t.Fatalf("preview: %+v %v", pv.HmIPMove, err)
+	}
+	if _, err := s.Apply(context.Background(), toStick, false); err != nil {
+		t.Fatal(err)
+	}
+	if a := waitApply(t, s); !a.OK || strings.Contains(strings.Join(a.Lines, "\n"), "snapshot") {
+		t.Fatalf("%+v", a)
+	}
+	if len(k.Snapshots()) != 0 || s.Status().HmIPMoveBack != nil {
+		t.Fatalf("a snapshot with local key mode on: %+v", k.Snapshots())
+	}
+	if err := k.MoveBack(); err == nil {
+		t.Fatal("a way back without a snapshot")
+	}
+}

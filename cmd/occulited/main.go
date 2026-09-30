@@ -758,6 +758,10 @@ func run(opts daemonOptions) error {
 	radioBusy := func() bool { return radioConn.Busy() || radioFW.Status().Running != nil }
 	hmipRestarts := &system.HmIPRestartLock{} // B-198: one lock for every hmipserver rewrite and restart
 	localKey := &system.HmIPLocalKey{Root: root, Services: services, StateDir: filepath.Join(cfg.StateDir, "hmip-local-key"), Plan: radioConn.BootPlan, Busy: radioBusy, Restarts: hmipRestarts, Log: area("hmip-local-key")}
+	// openccu-lite B-285: the snapshot before HmIP-RF moves to another module, and the way back
+	radioConn.BeforeHmIPMove = localKey.SnapshotBeforeMove
+	radioConn.MoveBackOffer = localKey.MoveBackOffer
+	localKey.Conn = radioConn.ApplyRestore
 	// openccu-lite task 275: the record of the last device import, read by the Interfaces page
 	importRecord := &system.ImportRecord{Path: filepath.Join(cfg.StateDir, "devices-import.json"), Root: root, Plan: radioConn.BootPlan}
 	if *rootDir == "/" {

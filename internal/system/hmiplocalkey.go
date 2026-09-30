@@ -39,8 +39,12 @@ type HmIPLocalKey struct {
 	// Restarts is the lock shared with the device keys' apply (B-198): whoever rewrites
 	// hmipserver's configuration and restarts it holds it. One of its own when nil.
 	Restarts *HmIPRestartLock
-	Log      *slog.Logger
-	Now      func() time.Time
+	// Conn runs a connection change to the choices given and, while the daemons are stopped,
+	// the restore (RadioConnections.ApplyRestore); the way back after a module move needs both
+	// (openccu-lite B-285). nil = no way back.
+	Conn func(ctx context.Context, c radio.Choices, restore func() error) error
+	Log  *slog.Logger
+	Now  func() time.Time
 
 	// the check's timing: how long hmipserver gets to answer after the restart, how long and how
 	// often the devices are watched (defaults 3 min, 10 min, 30 s)
@@ -91,6 +95,9 @@ type LocalKeySnapshot struct {
 	At    time.Time `json:"at"`
 	Files []string  `json:"files"`
 	Kind  string    `json:"kind,omitempty"`
+	// Choices are the connection choices from before a module move (SnapshotModuleMove,
+	// openccu-lite B-285): the way back puts them back.
+	Choices *radio.Choices `json:"choices,omitempty"`
 }
 
 // LocalKeyStatus is what the API answers; it never carries a key.
