@@ -206,6 +206,9 @@ type iface struct {
 
 	registered bool
 	restored   bool
+	// reinit: the daemon restarted and kept the entry; the next tick makes a fresh init, since
+	// hmipserver delivers no events to an entry it restored from its handlers file (B-286)
+	reinit     bool
 	inInit     bool
 	state      string
 	lastAct    time.Time
@@ -463,9 +466,14 @@ func (s *Subscriber) tick(ctx context.Context) {
 		}
 		s.checkDelivery(i, now)
 		s.mu.Lock()
-		registered, next, act, ping := i.registered, i.nextTry, i.lastAct, i.pingSent
+		registered, next, act, ping, reinit := i.registered, i.nextTry, i.lastAct, i.pingSent, i.reinit
 		s.mu.Unlock()
 		switch {
+		case reinit:
+			// the daemon restarted and kept our entry: a fresh init, because a kept entry is not
+			// delivered to (openccu-lite B-286, measured on hmipserver: five minutes of nothing on
+			// the kept entry, events again within seconds of a fresh init)
+			s.register(i)
 		case !registered:
 			if now.Before(next) {
 				continue
@@ -604,6 +612,7 @@ func (s *Subscriber) register(i *iface) {
 		i.failures++
 		i.lastErr = err.Error()
 		i.registered = false
+		i.reinit = false // the retry path takes over
 		// 5 s, 10, 20, 40, 80, then every 2 min: a daemon that is down at boot is tried again
 		// soon, one that is gone for good does not fill the journal
 		delay := 5 * time.Second << min(i.failures-1, 4)
@@ -622,6 +631,7 @@ func (s *Subscriber) register(i *iface) {
 	}
 	i.registered = true
 	i.restored = false
+	i.reinit = false
 	i.failures = 0
 	i.lastErr = ""
 	i.lastInit = now

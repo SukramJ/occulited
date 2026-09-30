@@ -27,8 +27,11 @@ type fakeDaemon struct {
 	// registrations by callback URL -> id; an init with an empty id removes
 	regs  map[string]string
 	inits []string // every init's id, in order ("" for a removal)
-	// keep says whether a restart keeps the registrations (hmipserver does)
+	// keep says whether a restart keeps the registrations (hmipserver does). A kept entry is
+	// mute until a fresh init: hmipserver calls listDevices on it and PONGs it, but delivers no
+	// events to it (openccu-lite B-286, measured)
 	keep bool
+	mute map[string]bool
 	// stuck: init and ping answer, and nothing is delivered - no callback in init, no PONG
 	// (hmipserver held by a listener that does not answer, B-201)
 	stuck bool
@@ -73,7 +76,7 @@ func (f *fakeDaemon) held() (stuck bool, hang chan struct{}) {
 }
 
 func newFakeDaemon(t *testing.T) *fakeDaemon {
-	f := &fakeDaemon{t: t, regs: map[string]string{}, regAt: map[string]time.Time{}}
+	f := &fakeDaemon{t: t, regs: map[string]string{}, regAt: map[string]time.Time{}, mute: map[string]bool{}}
 	d := &xmlrpc.BasicDispatcher{}
 	d.AddSystemMethods()
 	d.HandleFunc("init", func(args *xmlrpc.Value) (*xmlrpc.Value, error) {
@@ -90,6 +93,7 @@ func newFakeDaemon(t *testing.T) *fakeDaemon {
 		} else {
 			f.regs[url] = id
 			f.regAt[url] = time.Now()
+			delete(f.mute, url)
 		}
 		slow := f.slow
 		f.mu.Unlock()
@@ -146,9 +150,16 @@ func (f *fakeDaemon) registrations() map[string]string {
 	return out
 }
 
-// send delivers to every registered callback: one event, or a multicall of several.
+// send delivers to every registered callback: one event, or a multicall of several. A kept
+// entry that was not inited afresh gets nothing, as hmipserver's do.
 func (f *fakeDaemon) send(events [][3]string, multicall bool) {
 	for u, id := range f.registrations() {
+		f.mu.Lock()
+		mute := f.mute[u]
+		f.mu.Unlock()
+		if mute {
+			continue
+		}
 		c := &xmlrpc.Client{Addr: strings.TrimPrefix(u, "http://")}
 		if !multicall {
 			for _, e := range events {
@@ -181,6 +192,9 @@ func (f *fakeDaemon) restart() {
 	regs := f.regs
 	if !f.keep {
 		f.regs = map[string]string{}
+	}
+	for u := range regs {
+		f.mute[u] = f.keep
 	}
 	f.mu.Unlock()
 	if f.keep {
@@ -375,12 +389,13 @@ func TestDeregistersOnStopAndAfterARestartThatKeptTheEntry(t *testing.T) {
 	waitRegistered(t, s, "HmIP-RF")
 	r := newRecorder()
 	s.Attach(r)
-	// the daemon restarts and calls listDevices on its own: restored, and the reader is told
+	// the daemon restarts and calls listDevices on its own: restored, the reader is told, and
+	// the entry is registered afresh (B-286)
 	hmip.restart()
 	if m := r.next(t, "interface"); m.State != "restarted" {
 		t.Fatalf("restarted %+v", m)
 	}
-	waitFor(t, "restored", func() bool { return s.Status()[0].Restored })
+	waitFor(t, "the fresh init", func() bool { return hmip.initCount("occulited_HmIP-RF") == 2 })
 	stop()
 	// the removal came after a fresh init (measured: the plain removal did nothing then)
 	hmip.mu.Lock()
@@ -391,6 +406,44 @@ func TestDeregistersOnStopAndAfterARestartThatKeptTheEntry(t *testing.T) {
 	}
 	if len(hmip.registrations()) != 0 {
 		t.Fatalf("still registered: %v", hmip.registrations())
+	}
+}
+
+// openccu-lite B-286: hmipserver keeps a subscriber's entry over its restart and calls
+// listDevices on it, but delivers no events to it until a fresh init - on a lab system the feed
+// counted nothing for five minutes after a restart, and events came within seconds of an init.
+// The subscriber registers a kept entry afresh, and the events flow; the stop's re-init before
+// the removal is then the fresh one.
+func TestReinitsAKeptEntryAfterTheDaemonsRestart(t *testing.T) {
+	hmip := newFakeDaemon(t)
+	hmip.keep = true
+	s, _ := startSub(t, Config{})
+	s.Set([]Entry{{Name: "HmIP-RF", URL: hmip.url()}})
+	waitRegistered(t, s, "HmIP-RF")
+	r := newRecorder()
+	s.Attach(r)
+	hmip.restart()
+	if m := r.next(t, "interface"); m.State != "restarted" {
+		t.Fatalf("restarted %+v", m)
+	}
+	// until the fresh init the kept entry is mute: what the daemon sends now is lost to it
+	hmip.send([][3]string{{"0000000000000A:1", "PRESS_SHORT", "1"}}, false)
+	waitFor(t, "the fresh init", func() bool { return hmip.initCount("occulited_HmIP-RF") == 2 })
+	waitFor(t, "the entry inited afresh", func() bool {
+		st := s.Status()[0]
+		return st.Registered && !st.Restored && st.State == "up"
+	})
+	hmip.send([][3]string{{"0000000000000A:1", "PRESS_SHORT", "2"}}, false)
+	if e := r.next(t, "event"); e.Interface != "HmIP-RF" || e.Key != "PRESS_SHORT" || e.Value != "2" {
+		t.Fatalf("event after the fresh init %+v", e)
+	}
+	if st := s.Status()[0]; st.Events != 1 {
+		t.Fatalf("the mute entry's event was counted: %+v", st)
+	}
+	// one restart, one fresh init: the daemon's newDevices after our init is not a second restart
+	time.Sleep(200 * time.Millisecond)
+	if n := hmip.initCount("occulited_HmIP-RF"); n != 2 {
+		t.Fatalf("%d inits", n)
 	}
 }
 

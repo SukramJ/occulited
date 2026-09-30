@@ -80,15 +80,23 @@ func (s *Subscriber) handlerFor(i *iface) *xmlrpc.Handler {
 	}
 	// a daemon that calls listDevices or listMethods while we are not in an init has restarted
 	// and kept our entry (hmipserver, VirtualDevices) or is looking us up (rfd at its start)
+	//
+	// A kept entry is registered again at the next tick (openccu-lite B-286): hmipserver calls
+	// listDevices and newDevices on the entries it restores from its handlers file, and answers
+	// pings to them, but delivers no events to them until a fresh init - measured on a lab
+	// system, where five minutes after its restart the kept entry had seen nothing and a fresh
+	// init brought the events back within seconds. rfd's lookup at its start costs one cheap
+	// init the same way.
 	unsolicited := func() {
 		s.mu.Lock()
-		restarted := !i.inInit && i.registered && s.now().Sub(i.lastInit) > s.cfg.InitGrace
+		restarted := !i.inInit && i.registered && !i.reinit && s.now().Sub(i.lastInit) > s.cfg.InitGrace
 		if restarted {
 			i.restored = true
+			i.reinit = true
 		}
 		s.mu.Unlock()
 		if restarted {
-			s.log.Info("rpc: the daemon called us on its own - it restarted and kept the entry", "interface", i.name)
+			s.log.Info("rpc: the daemon called us on its own - it restarted and kept the entry; registering afresh, a kept entry gets no events", "interface", i.name)
 			s.bus.publish(Message{Type: "interface", Interface: i.name, State: "restarted"})
 		}
 	}
