@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/hobbyquaker/occulited/internal/radio"
@@ -35,6 +36,13 @@ func radioMain(args []string) error {
 	if len(args) < 1 {
 		return fmt.Errorf("usage: occulited radio run|stop|hotplug|lgw-firmware|lgw-keys|prep <daemon>|ready <daemon>|stopped <daemon>|check|detect|plan|oracle [--root <dir>] [--out <dir>]")
 	}
+	// The steps run inside the daemons' units and inherit their UMask= - hmipserver's 0077 is for
+	// the server's own files (its device files, the access point's identity and key) - while what
+	// the steps write under /run/occulite/radio and /var/status is read by the daemon as its own
+	// user (openccu-lite B-284: the rejection marker came out 0600 and the pages saw no rejection).
+	// The steps write with the run step's umask; a file that must stay closed gets its mode set
+	// explicitly (the network key, rfd.conf).
+	syscall.Umask(0o022)
 	cmd := args[0]
 	daemon := ""
 	switch cmd {

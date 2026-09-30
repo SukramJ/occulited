@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -201,6 +202,10 @@ func TestReadyHmIPServerFailsFastOnAKnownError(t *testing.T) {
 	if _, err := Run(context.Background(), root, d, logf); err != nil {
 		t.Fatal(err)
 	}
+	// openccu-lite B-284: the ready step runs inside hmipserver's unit with its UMask=0077, and
+	// the marker came out 0600 root - unreadable for the daemon, which then saw no rejection
+	oldUmask := syscall.Umask(0o077)
+	t.Cleanup(func() { syscall.Umask(oldUmask) })
 	rec.answers["journalctl"] = "Init Hardware Info\nde.eq3.cbcs.server.local.base.internal.HMIPTRXInitialResponseListener [vert.x-eventloop-thread-0] Adapter exchange was rejected by key server.\n"
 	err := Ready(context.Background(), d, "hmipserver", 4242, logf)
 	if err == nil || !strings.Contains(err.Error(), "adapter-exchange-rejected") {
@@ -212,6 +217,17 @@ func TestReadyHmIPServerFailsFastOnAKnownError(t *testing.T) {
 	f := ReadHmIPFatal(root)
 	if f == nil || f.Code != "adapter-exchange-rejected" || f.Adapter != "3014F711A0001F0000000A03" || !strings.Contains(f.Line, "rejected by key server") || f.Cause != CauseRefused {
 		t.Fatalf("marker: %+v", f)
+	}
+	// the daemon reads the marker as its own user: world-readable whatever the unit's umask
+	if st, err := os.Stat(FatalPath(root)); err != nil || st.Mode().Perm() != 0o644 {
+		t.Fatalf("marker mode: %v %v", err, st)
+	}
+	// a marker the daemon cannot read is no marker to it - the shape of the bug
+	if err := os.Chmod(FatalPath(root), 0); err == nil && os.Getuid() != 0 {
+		if ReadHmIPFatal(root) != nil {
+			t.Fatal("a closed marker was read")
+		}
+		_ = os.Chmod(FatalPath(root), 0o644)
 	}
 	// the next run of the stack clears it
 	rec.answers["systemctl"] = "inactive\ninactive\ninactive\ninactive\ninactive\n"

@@ -111,9 +111,16 @@ func ReadHmIPFatal(root string) *HmIPFatal {
 	return &f
 }
 
+// writeHmIPFatal writes the marker world-readable whatever the umask (openccu-lite B-284): the
+// ready step runs inside hmipserver's unit, whose UMask=0077 is meant for what the server writes,
+// and left the marker root's alone (0600) - the daemon, reading it as its own user, saw no
+// rejection and the Interfaces page offered neither the retry nor the fresh start. The mode is set
+// explicitly after the write, as the security counter state's is (task 299).
 func writeHmIPFatal(root string, f HmIPFatal) {
 	b, _ := json.MarshalIndent(f, "", "  ")
-	_ = os.WriteFile(shadowPath(root, FatalFile), b, 0o644)
+	p := shadowPath(root, FatalFile)
+	_ = os.WriteFile(p, b, 0o644)
+	_ = os.Chmod(p, 0o644)
 }
 
 // --- a declined inclusion (task 201) ---------------------------------------------------------
