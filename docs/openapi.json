@@ -8932,6 +8932,26 @@
         ],
         "type": "object"
       },
+      "SystemImportHmIPOutcome": {
+        "properties": {
+          "cause": {
+            "type": "string"
+          },
+          "line": {
+            "type": "string"
+          },
+          "module_now": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "type": "object"
+      },
       "SystemImportOutcome": {
         "properties": {
           "bidcos_rf": {
@@ -8958,24 +8978,7 @@
             "type": "object"
           },
           "hmip": {
-            "properties": {
-              "cause": {
-                "type": "string"
-              },
-              "line": {
-                "type": "string"
-              },
-              "module_now": {
-                "type": "string"
-              },
-              "state": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "state"
-            ],
-            "type": "object"
+            "$ref": "#/components/schemas/SystemImportHmIPOutcome"
           }
         },
         "required": [
@@ -9055,6 +9058,16 @@
               "module_changed"
             ],
             "type": "object"
+          },
+          "hmip_final": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SystemImportHmIPOutcome"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "version": {
             "type": "string"

@@ -135,6 +135,37 @@ func TestImportRecordOutcome(t *testing.T) {
 	if out.HmIP.State != ImportDone || out.HmIP.Line != "Adapter exchange successful." {
 		t.Errorf("done: %+v", out.HmIP)
 	}
+	// openccu-lite B-281: done is final - the HmIP half is kept in the record, the journal is not
+	// read again (the line stays), while the BidCos half is rfd's fresh answer
+	kept := rec0.Read()
+	if kept == nil || kept.HmIPFinal == nil || kept.HmIPFinal.State != ImportDone || kept.HmIPFinal.Line != "Adapter exchange successful." {
+		t.Fatalf("kept: %+v", kept)
+	}
+	journalReads := 0
+	rec0.Journal = func(context.Context, time.Time) []string {
+		journalReads++
+		return []string{"Adapter exchange failed later"}
+	}
+	write(rec.HmIP.FromSGTIN + ".ap") // the files would say pending again
+	out = rec0.Outcome(context.Background(), *kept)
+	if journalReads != 0 || out.HmIP.State != ImportDone || out.HmIP.Line != "Adapter exchange successful." || out.BidCosRF.Took == nil || !*out.BidCosRF.Took {
+		t.Errorf("final: %d journal reads, %+v %+v", journalReads, out.HmIP, out.BidCosRF)
+	}
+	// the retry forgets it: the files are read again
+	if err := rec0.ClearFinal(); err != nil {
+		t.Fatal(err)
+	}
+	if kept = rec0.Read(); kept.HmIPFinal != nil {
+		t.Fatal("the final half stays after ClearFinal")
+	}
+	if out = rec0.Outcome(context.Background(), *kept); journalReads != 1 || out.HmIP.State != ImportPending {
+		t.Errorf("after the retry: %d journal reads, %+v", journalReads, out.HmIP)
+	}
+	if err := (*ImportRecord)(nil).ClearFinal(); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.Remove(filepath.Join(data, rec.HmIP.FromSGTIN+".ap"))
+	rec0.Journal = func(context.Context, time.Time) []string { return lines }
 
 	// rejected: the marker, written after the import
 	f := radio.HmIPFatal{Code: "adapter-exchange-rejected", Line: "Adapter exchange was rejected by key server.", Cause: radio.CauseUnreachable, At: at.Add(time.Minute)}

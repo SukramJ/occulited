@@ -607,7 +607,10 @@ func DefaultPolicy(root, stateDir string) Policy {
 			// openccu-lite task 231: the CA bundle rebuilt after the Trust stores page changed the
 			// userfs additions or the distrust file (the same script the boot runs)
 			"/usr/libexec/occu/lite-ca-certificates",
-			"/bin/detect_radio_module"}, // task 41: the coprocessor's running version, read off the raw-uart
+			"/bin/detect_radio_module", // task 41: the coprocessor's running version, read off the raw-uart
+			// openccu-lite B-281: the device import's one journal read (hmipserver's adapter exchange
+			// lines; the shape fixes the unit, the pattern and the date's form)
+			"journalctl"},
 		ProgramDirs: []string{"/etc/init.d", "/usr/local/etc/config/rc.d"},
 		Paths: []string{"/etc/config/", "/usr/local/etc/config/", "/usr/local/tmp/", "/usr/local/.firmwareUpdate", "/usr/local/.recoveryMode", "/usr/local/.doFactoryReset",
 			// an addon's monit file, removed at its uninstall (system.RemoveAddon)

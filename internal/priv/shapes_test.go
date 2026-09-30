@@ -133,6 +133,8 @@ func TestProgramShapes(t *testing.T) {
 		{"kill", "-KILL 5000"},
 		// the clock, the key, the module's version, the scripts
 		{"date", "-u\x00-s\x002026-09-26 10:00:00"},
+		// openccu-lite B-281: the import outcome's journal read, the pattern fixed, the date validated
+		{"journalctl", "-u\x00hmipserver.service\x00-o\x00cat\x00-q\x00--no-pager\x00-g\x00Adapter exchange\x00--since\x002026-09-27 21:38:16"},
 		{"/sbin/hwclock", "-wu"},
 		{"/bin/SetInterfaceClock", "127.0.0.1:2001"},
 		{"/bin/crypttool", "-v -t 0"},
@@ -264,6 +266,11 @@ func TestProgramShapes(t *testing.T) {
 		{"date", "-u\x00-s\x002026-09-26 10:00:00\x00+%s"},
 		{"date", "-u -s now"},
 		{"date", "-u -s 2026-09-26 10:00:00"}, // the time split into two arguments
+		{"journalctl", "-u\x00hmipserver.service\x00-o\x00cat\x00-q\x00--no-pager\x00-g\x00Adapter exchange\x00--since\x00yesterday"},
+		{"journalctl", "-u\x00rfd.service\x00-o\x00cat\x00-q\x00--no-pager\x00-g\x00Adapter exchange\x00--since\x002026-09-27 21:38:16"},
+		{"journalctl", "-u\x00hmipserver.service\x00-o\x00cat\x00-q\x00--no-pager\x00-g\x00.*\x00--since\x002026-09-27 21:38:16"},
+		{"journalctl", "-u\x00hmipserver.service\x00-o\x00cat\x00-q\x00--no-pager\x00-g\x00Adapter exchange\x00--since\x002026-09-27 21:38:16\x00-D\x00/tmp"},
+		{"journalctl", "-b"},
 		{"/sbin/hwclock", "-s"},
 		{"/sbin/hwclock", "-wu -f /dev/rtc9"},
 		{"/bin/SetInterfaceClock", "192.0.2.1:2001"},

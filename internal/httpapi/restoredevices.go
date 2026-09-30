@@ -294,6 +294,11 @@ func (a *SystemAPI) radioImportRetry(w http.ResponseWriter, r *http.Request) {
 	if !a.localKeyReady(w) {
 		return
 	}
+	// openccu-lite B-281: the kept final outcome goes; the next read looks at the files again
+	if err := a.ImportRecord.ClearFinal(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, apiError{Error: "record", Message: err.Error()})
+		return
+	}
 	if err := a.HmIPLocalKey.RestartExchange(); err != nil {
 		localKeyError(w, err)
 		return

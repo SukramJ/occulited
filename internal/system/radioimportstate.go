@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -56,6 +57,9 @@ type ImportedRadio struct {
 		// "" in a record from before); the passphrase itself is nowhere
 		KeyCheck string `json:"key_check,omitempty"`
 	} `json:"bidcos_rf"`
+	// HmIPFinal is the HmIP half of the outcome once it was final (done or rejected), kept so the
+	// journal is not read at every poll (openccu-lite B-281); nil while the move is pending.
+	HmIPFinal *ImportHmIPOutcome `json:"hmip_final,omitempty"`
 }
 
 // The outcomes of the HmIP identity's move, as ImportOutcome.HmIP.State says them.
@@ -78,17 +82,20 @@ const (
 	ImportUnknown = "unknown"
 )
 
+// ImportHmIPOutcome is the HmIP half of the outcome: the identity's move.
+type ImportHmIPOutcome struct {
+	State string `json:"state"`
+	// Cause: the rejection's cause (unreachable, refused) when State is rejected
+	Cause string `json:"cause,omitempty"`
+	// ModuleNow is the HmIP module in use now (the plan's), which may differ from the import's
+	ModuleNow string `json:"module_now,omitempty"`
+	// Line is hmipserver's own word on the exchange since the import, when the journal has one
+	Line string `json:"line,omitempty"`
+}
+
 // ImportOutcome is what the page shows after the reboot.
 type ImportOutcome struct {
-	HmIP struct {
-		State string `json:"state"`
-		// Cause: the rejection's cause (unreachable, refused) when State is rejected
-		Cause string `json:"cause,omitempty"`
-		// ModuleNow is the HmIP module in use now (the plan's), which may differ from the import's
-		ModuleNow string `json:"module_now,omitempty"`
-		// Line is hmipserver's own word on the exchange since the import, when the journal has one
-		Line string `json:"line,omitempty"`
-	} `json:"hmip"`
+	HmIP     ImportHmIPOutcome `json:"hmip"`
 	BidCosRF struct {
 		// Interface is rfd's local radio entry of listBidcosInterfaces: rfd names it by the serial
 		// it runs with, so Took says whether that is the imported one. nil when rfd did not answer
@@ -177,6 +184,12 @@ func NewImportedRadio(now time.Time, file string, b RadioBackup, p radio.Plan, h
 
 // Outcome reads how the import went so far: the HmIP identity's move from hmipserver's files, the
 // marker and its journal lines, and rfd's local radio entry for the BidCos side.
+//
+// openccu-lite B-281: once the move is final - done, or rejected - its half is kept in the record
+// (HmIPFinal) and not read again: the pages and the Status warnings poll the outcome every few
+// minutes, and each poll was a journal read through the privilege helper. The retry (a restart of
+// hmipserver, which attempts the exchange again) clears the kept half. The BidCos half is rfd's
+// own answer and is read every time.
 func (r *ImportRecord) Outcome(ctx context.Context, rec ImportedRadio) ImportOutcome {
 	var out ImportOutcome
 	root := ""
@@ -187,6 +200,11 @@ func (r *ImportRecord) Outcome(ctx context.Context, rec ImportedRadio) ImportOut
 	now := ""
 	if ok && p.HmIP != nil {
 		now = strings.ToUpper(p.HmIP.SGTIN)
+	}
+	if rec.HmIPFinal != nil {
+		out.HmIP = *rec.HmIPFinal
+		r.bidcosOutcome(ctx, rec, p, ok, &out)
+		return out
 	}
 	out.HmIP.ModuleNow = now
 	// hmipserver's data directory is its own (0700, B-253): the names come through readDir, which
@@ -228,10 +246,22 @@ func (r *ImportRecord) Outcome(ctx context.Context, rec ImportedRadio) ImportOut
 				out.HmIP.Line = strings.TrimSpace(l)
 			}
 		}
+		if (out.HmIP.State == ImportDone || out.HmIP.State == ImportRejected) && r != nil && r.Path != "" {
+			final := out.HmIP
+			rec.HmIPFinal = &final
+			if err := r.Write(rec); err != nil {
+				slog.Warn("device import: the final outcome was not kept", "err", err)
+			}
+		}
 	}
-	// BidCos-RF: rfd names its local radio entry by the serial it runs with (the plan's transmitter
-	// mapping: a CCU2 entry, or the HM-CFG-USB-2's serial), so the imported serial there is the
-	// imported identity in use
+	r.bidcosOutcome(ctx, rec, p, ok, &out)
+	return out
+}
+
+// bidcosOutcome fills the BidCos-RF half: rfd names its local radio entry by the serial it runs
+// with (the plan's transmitter mapping: a CCU2 entry, or the HM-CFG-USB-2's serial), so the
+// imported serial there is the imported identity in use.
+func (r *ImportRecord) bidcosOutcome(ctx context.Context, rec ImportedRadio, p radio.Plan, ok bool, out *ImportOutcome) {
 	if r != nil && r.Interfaces != nil && rec.BidCosRF.Serial != "" {
 		timeout := r.InterfacesTimeout
 		if timeout <= 0 {
@@ -248,11 +278,21 @@ func (r *ImportRecord) Outcome(ctx context.Context, rec ImportedRadio) ImportOut
 			if err := errs["BidCos-RF"]; err != nil {
 				out.BidCosRF.Error = err.Error()
 			} else {
-				out.BidCosRF.Took = bidcosTook(list, rec, p, ok, &out)
+				out.BidCosRF.Took = bidcosTook(list, rec, p, ok, out)
 			}
 		}
 	}
-	return out
+}
+
+// ClearFinal forgets the kept HmIP half of the outcome, so that the next read looks again (the
+// retry restarts hmipserver, which attempts the exchange once more).
+func (r *ImportRecord) ClearFinal() error {
+	rec := r.Read()
+	if rec == nil || rec.HmIPFinal == nil {
+		return nil
+	}
+	rec.HmIPFinal = nil
+	return r.Write(*rec)
 }
 
 // bidcosTook says whether rfd runs with the imported BidCos identity, from its

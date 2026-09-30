@@ -81,12 +81,31 @@ func defaultProgramShapes() map[string]argShape {
 		// upstream's detection script, both on one raw-uart node
 		"/bin/eq3configcmd":        templates("update-coprocessor -p <copronode> -t HM-MOD-UART -c -v"),
 		"/bin/detect_radio_module": templates("<copronode>"),
+		// the device import's outcome (radioimportstate.go): hmipserver's lines about the adapter
+		// exchange since the import (openccu-lite B-281)
+		"journalctl": importJournalShape,
 		// the fork's scripts: the addon-rc adopter (28.8), the writable device descriptions' reset
 		// (D-66) and the CA bundle's rebuild (task 231)
 		"/usr/libexec/occu/lite-addon-rc":        adoptShape,
 		"/usr/libexec/occu/lite-extension-dirs":  templates("reset /firmware/rftypes"),
 		"/usr/libexec/occu/lite-ca-certificates": noArgs,
 	}
+}
+
+// importJournalShape is the one journalctl form the daemon runs as root: hmipserver's unit, the
+// message alone, quiet, the fixed pattern "Adapter exchange", since a date (openccu-lite B-281).
+// Everything else journald has to say the daemon reads as its own user.
+func importJournalShape(p Policy, args []string) bool {
+	want := []string{"-u", "hmipserver.service", "-o", "cat", "-q", "--no-pager", "-g", "Adapter exchange", "--since", "<datetime>"}
+	if len(args) != len(want) {
+		return false
+	}
+	for i, tok := range want {
+		if !p.placeholder(tok, args[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 // dirScriptActions are the one word an init script or an rc.d script may be run with as root:
