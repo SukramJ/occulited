@@ -686,6 +686,75 @@ func readOnlyEtcHint(err error) string {
 	return msg
 }
 
+// addonPolicySuffixes are the files occulited keeps under AddonPolicyDir for an addon, <id> plus
+// one of these: the stored manifest (D-119), the policy, the rendered drop-in, the start order
+// (task 94), the early start (task 119) and the "full walk needed" marker (task 110). Anything
+// else in the directory is not touched. The manifest's suffix comes first: an id may carry dots,
+// and "<id>.manifest.json" cut at ".json" would read as the id "<id>.manifest" - on a lab system
+// that took the stored manifests of three installed addons for stale files.
+var addonPolicySuffixes = []string{AddonManifestSuffix, ".json", ".conf", ".needs", ".start", FullWalkSuffix}
+
+// removeAddonPolicyFiles removes every file of the addon under AddonPolicyDir (openccu-lite
+// B-283) and returns their paths on the box, in the order removed; a file that was not there is
+// not listed. The id is matched whole, so "foo" never takes "foo.bar"'s files.
+func (r Root) removeAddonPolicyFiles(id string) []string {
+	if !addonIDRe.MatchString(id) {
+		return nil
+	}
+	var removed []string
+	for _, suffix := range addonPolicySuffixes {
+		box := AddonPolicyDir + "/" + id + suffix
+		if _, err := os.Lstat(r.join(box)); err != nil {
+			continue // not there (the helper's remove would say done all the same)
+		}
+		if err := remove(r.join(box)); err == nil {
+			removed = append(removed, box)
+		} else {
+			slog.Warn("addon policy: a file could not be removed", "addon", id, "file", box, "err", err)
+		}
+	}
+	return removed
+}
+
+// SweepStalePolicyFiles removes the policy files of every id that has no rc.d entry (openccu-lite
+// B-283): what an uninstall before this binary left behind, or an addon removed by other means
+// (mediola's NEO Server switched off at the first boot). The boot's addon-users step would
+// otherwise recreate a user for an addon that is gone, and a reinstall under the same name would
+// start from the old policy instead of its new manifest. Run at occulited's start, before the
+// policy refreshes, when no install can be under way; returns the ids swept, sorted.
+func (a *SystemdAddons) SweepStalePolicyFiles() []string {
+	root := a.Scripts.Root
+	entries, err := os.ReadDir(root.join(AddonPolicyDir))
+	if err != nil {
+		return nil
+	}
+	installed := a.rcd()
+	stale := map[string]bool{}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		for _, suffix := range addonPolicySuffixes {
+			id, ok := strings.CutSuffix(e.Name(), suffix)
+			if !ok {
+				continue
+			}
+			if addonIDRe.MatchString(id) && !installed[id] {
+				stale[id] = true
+			}
+			break // the first suffix that fits names the id; a shorter one would cut it wrong
+		}
+	}
+	var ids []string
+	for id := range stale {
+		if len(root.removeAddonPolicyFiles(id)) > 0 {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
 // PolicyIDs returns the addons with a stored policy, sorted.
 func (r Root) PolicyIDs() []string {
 	var ids []string

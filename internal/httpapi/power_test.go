@@ -43,7 +43,9 @@ func (m *powerManager) setErr(err error) {
 func (m *powerManager) Install(context.Context, io.Reader) (*system.InstallResult, error) {
 	return nil, errors.New("not here")
 }
-func (m *powerManager) Uninstall(context.Context, string) (string, error) { return "", nil }
+func (m *powerManager) Uninstall(context.Context, string) (system.UninstallResult, error) {
+	return system.UninstallResult{}, nil
+}
 func (m *powerManager) CheckUpdate(context.Context, system.Addon, string) system.UpdateInfo {
 	return system.UpdateInfo{}
 }

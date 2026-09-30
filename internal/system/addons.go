@@ -125,17 +125,33 @@ func (b AddonScripts) Install(ctx context.Context, archive io.Reader) (*InstallR
 	return res, nil
 }
 
+// UninstallResult is what an uninstall answers: the script's own output, unchanged, and what the
+// system removed after it (openccu-lite B-283). A confined addon's uninstall runs as its user
+// and its `rm` of the rc.d entry, the www link and its directories is refused - root owns the
+// parents - so its output carries "permission denied" lines that read as a failure; the list says
+// the system did that removal.
+type UninstallResult struct {
+	Output string `json:"output"`
+	// SystemRemoved are the paths the system removed after the script, in the order it did: the
+	// rc.d entry, the www link, the emptied standard directories, the monit fragment, the
+	// hm_addons.cfg entry (named as "hm_addons.cfg: <id>"), and on systemd the addon's policy
+	// files. Only what was there and went.
+	SystemRemoved []string `json:"system_removed,omitempty"`
+}
+
 // Uninstall runs the addon's rc.d script with `uninstall` and removes the rc.d entry, exactly as
 // cp_software.cgi does, then what an addon commonly leaves behind: its hm_addons.cfg entry and a
-// monit fragment. Returns the script output; a failing script is reported as the WebUI reports
-// it (which writes /var/log/addon-uninstall-error.log — here the output goes to the caller).
-func (b AddonScripts) Uninstall(ctx context.Context, id string) (string, error) {
+// monit fragment. Returns the script output and what was removed after it; a failing script is
+// reported as the WebUI reports it (which writes /var/log/addon-uninstall-error.log — here the
+// output goes to the caller).
+func (b AddonScripts) Uninstall(ctx context.Context, id string) (UninstallResult, error) {
+	var res UninstallResult
 	if strings.ContainsAny(id, "/\\ ") || id == "" {
-		return "", errInvalidAddonID
+		return res, errInvalidAddonID
 	}
 	script := b.Root.join("/usr/local/etc/config/rc.d/" + id)
 	if _, err := os.Lstat(script); err != nil {
-		return "", errUnknownAddon
+		return res, errUnknownAddon
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
@@ -149,31 +165,44 @@ func (b AddonScripts) Uninstall(ctx context.Context, id string) (string, error) 
 	} else {
 		out, runErr = b.command(ctx, script, "uninstall")
 	}
+	// what went is recorded for the answer (B-283): a path that was not there is not a removal
+	// (the helper's remove treats a missing path as done, so it is looked at first)
+	rm := func(box string) {
+		if _, err := os.Lstat(b.Root.join(box)); err != nil {
+			return
+		}
+		if err := remove(b.Root.join(box)); err == nil {
+			res.SystemRemoved = append(res.SystemRemoved, box)
+		}
+	}
 	// the WebUI removes the rc.d entry unconditionally after `uninstall` (cp_software.cgi:
 	// `exec rm -rf $script`), and so do we — otherwise a half-removed addon keeps a ghost row
-	_ = remove(script)
-	_ = remove(script + ".script") // 28.8: the addon's own script behind the addon-rc wrapper
+	rm("/usr/local/etc/config/rc.d/" + id)
+	rm("/usr/local/etc/config/rc.d/" + id + ".script") // 28.8: the addon's own script behind the addon-rc wrapper
 	// B-119: what the script could not remove as the addon's user, because root owns the parent:
 	// its www link (or directory) and its standard directories - the latter only once the script
 	// emptied them, never with anything left inside (an addon that keeps its configuration for a
 	// reinstall keeps it). Root's uninstall did all this itself; for it these are no-ops.
-	_ = remove(b.Root.join("/usr/local/etc/config/addons/www/" + id))
-	_ = remove(b.Root.join("/usr/local/addons/" + id))
-	_ = remove(b.Root.join("/usr/local/etc/config/addons/" + id))
-	_ = remove(b.Root.join("/usr/local/etc/monit-" + id + ".cfg"))
+	rm("/usr/local/etc/config/addons/www/" + id)
+	rm("/usr/local/addons/" + id)
+	rm("/usr/local/etc/config/addons/" + id)
+	rm("/usr/local/etc/monit-" + id + ".cfg")
 	cfgPath := b.Root.join("/usr/local/etc/config/hm_addons.cfg")
 	if entries := ParseHMAddonsCfg(readFile(cfgPath)); entries[id].ConfigURL != "" || entries[id].Name != "" {
 		delete(entries, id)
-		_ = writeFileAtomic(cfgPath, []byte(WriteHMAddonsCfg(entries)), 0o664)
+		if writeFileAtomic(cfgPath, []byte(WriteHMAddonsCfg(entries)), 0o664) == nil {
+			res.SystemRemoved = append(res.SystemRemoved, "hm_addons.cfg: "+id)
+		}
 	}
 	ForgetAddonScans(id)
+	res.Output = strings.TrimSpace(string(out))
 	if runErr != nil {
-		return strings.TrimSpace(string(out)), fmt.Errorf("uninstall script: %w", runErr)
+		return res, fmt.Errorf("uninstall script: %w", runErr)
 	}
 	if _, err := lighttpdDropinsAfterChange(ctx, b.Root); err != nil {
 		slog.Warn("addons: the lighttpd drop-ins after the uninstall", "err", err)
 	}
-	return strings.TrimSpace(string(out)), nil
+	return res, nil
 }
 
 // WriteHMAddonsCfg serialises entries in the Tcl `array get` form the firmware reads.

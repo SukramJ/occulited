@@ -337,8 +337,11 @@
     async function uninstall(a: Addon) {
         if (!(await ask({message: t('Uninstall {name}? Its configuration under /usr/local may be left behind by the addon itself.', {name: a.name || a.id}), confirm: t('Uninstall'), danger: true}))) return;
         await withBusy(a.id, async () => {
-            const r = await api.post<{output: string}>(`/api/system/v1/addons/${encodeURIComponent(a.id)}/uninstall`);
-            notice = `${t('Uninstalled')}: ${a.name || a.id}${r.output ? ` — ${r.output}` : ''}`;
+            const r = await api.post<{output: string; system_removed?: string[]}>(`/api/system/v1/addons/${encodeURIComponent(a.id)}/uninstall`);
+            // B-283: a confined addon's script cannot remove the rc.d entry and its directories itself
+            // (root owns the parents) and says "permission denied"; the system did that, and says so
+            const removed = r.system_removed?.length ? ` — ${t('The system removed the remaining files: {list}.', {list: r.system_removed.join(', ')})}` : '';
+            notice = `${t('Uninstalled')}: ${a.name || a.id}${r.output ? ` — ${r.output}` : ''}${removed}`;
         });
     }
     async function setLegacy(a: Addon, enabled: boolean) {

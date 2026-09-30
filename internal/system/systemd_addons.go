@@ -532,10 +532,10 @@ func (a *SystemdAddons) stoppedAddons(ctx context.Context, ranBefore map[string]
 }
 
 // Uninstall stops the addon's unit (the whole cgroup), runs the rc.d uninstall, removes the
-// entry and reloads the generator so the unit disappears.
-func (a *SystemdAddons) Uninstall(ctx context.Context, id string) (string, error) {
+// entry and reloads the generator so the unit disappears, and removes the addon's policy files.
+func (a *SystemdAddons) Uninstall(ctx context.Context, id string) (UninstallResult, error) {
 	if strings.ContainsAny(id, "/\\ ") || id == "" {
-		return "", fmt.Errorf("invalid addon id")
+		return UninstallResult{}, fmt.Errorf("invalid addon id")
 	}
 	unit := "addon-" + id + ".service"
 	if sout, serr := a.Systemd.run(ctx, "stop", "--no-pager", "--", unit); serr != nil {
@@ -545,20 +545,19 @@ func (a *SystemdAddons) Uninstall(ctx context.Context, id string) (string, error
 	}
 	scope := a.scopeName()
 	out, err := a.Scripts.Uninstall(context.WithValue(ctx, scopeKey{}, scope), id)
-	a.journalUninstall(id, out, err)
+	a.journalUninstall(id, out.Output, err)
 	// the scope is not stopped (B-3, see Install)
 	_, _ = a.Systemd.run(ctx, "daemon-reload")
 	// B-236: a unit that ended failed (its stop exited non-zero) stays listed after its file is
 	// gone - "not-found", "failed" on the Services page and in systemctl --failed - until systemd
 	// is told to forget the failure. Harmless when the unit is not failed or already gone.
 	_, _ = a.Systemd.run(ctx, "reset-failed", "--no-pager", "--", unit)
-	// D-47: the policy file outlives the addon (it reserves the uid), its opened ports do not -
-	// the firewall closes them now, and a later reinstall starts with every port closed (D-29);
-	// nor does its manifest: a package installed later brings its own or none (D-119)
-	if a.Scripts.Root.ReadAddonPolicy(id) != nil {
-		_, _ = a.Scripts.Root.SetAddonOpenPorts(id, nil, nil)
-	}
-	a.Scripts.Root.removeAddonManifest(id)
+	// openccu-lite B-283 (maintainer, 2026-09-30): every addon-policy/<id>.* goes with the addon -
+	// the policy, its drop-in, the start order, the early start and the stored manifest - so a
+	// reinstall starts clean from its new manifest (D-119), with every port closed (D-29, D-47) and
+	// a uid nextUID hands out afresh; until then the policy file outlived the addon to reserve its
+	// uid. The firewall follows: the opened ports were the policy's.
+	out.SystemRemoved = append(out.SystemRemoved, a.Scripts.Root.removeAddonPolicyFiles(id)...)
 	a.regenerateFirewall(ctx)
 	// its tokens go with it (28.8, task 66), and what was learned about its daemon (B-158)
 	a.Tokens.forget(a.Scripts.Root, id)

@@ -95,7 +95,7 @@ type Firmware interface {
 // AddonManager installs, removes and checks addons (task 10).
 type AddonManager interface {
 	Install(ctx context.Context, archive io.Reader) (*system.InstallResult, error)
-	Uninstall(ctx context.Context, id string) (string, error)
+	Uninstall(ctx context.Context, id string) (system.UninstallResult, error)
 	CheckUpdate(ctx context.Context, a system.Addon, base string) system.UpdateInfo
 	Reboot(ctx context.Context) error
 }
@@ -1046,14 +1046,16 @@ func (a *SystemAPI) uninstall(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err := a.Manager.Uninstall(r.Context(), r.PathValue("id"))
 	if err != nil {
-		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": "uninstall-failed", "message": err.Error(), "output": out})
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": "uninstall-failed", "message": err.Error(), "output": out.Output, "system_removed": out.SystemRemoved})
 		return
 	}
 	if a.Updates != nil {
 		// an update of an addon that is gone is not waiting any more
 		a.Updates.Forget(r.PathValue("id"))
 	}
-	writeJSON(w, 200, map[string]any{"ok": true, "output": out})
+	// B-283: the script's output as it was, and what the system removed after it - a confined
+	// script's refused rm lines are expected, and the page says the system did the rest
+	writeJSON(w, 200, map[string]any{"ok": true, "output": out.Output, "system_removed": out.SystemRemoved})
 }
 
 func (a *SystemAPI) update(w http.ResponseWriter, r *http.Request) {

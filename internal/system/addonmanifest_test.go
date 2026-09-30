@@ -125,6 +125,12 @@ func TestInstallAppliesThePackageManifest(t *testing.T) {
 	if r.ReadAddonManifest("mosq") != nil {
 		t.Error("the stored manifest outlived the addon")
 	}
+	// B-283: and so do the policy, its drop-in and the start order - a reinstall starts clean
+	for _, f := range []string{"mosq.json", "mosq.conf", "mosq.needs"} {
+		if _, err := os.Stat(r.join(AddonPolicyDir + "/" + f)); !os.IsNotExist(err) {
+			t.Errorf("%s outlived the addon", f)
+		}
+	}
 }
 
 // root: true runs the addon as root, as declared, and a manifest without a runtime block leaves

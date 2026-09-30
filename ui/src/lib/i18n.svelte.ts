@@ -1102,6 +1102,7 @@ const CATALOGUE: Record<string, {de: string; en?: string}> = {
         de: '{name} deinstallieren? Die Konfiguration unter /usr/local bleibt möglicherweise erhalten — das entscheidet die Zusatzsoftware selbst.',
     },
     Uninstalled: {de: 'Deinstalliert'},
+    'The system removed the remaining files: {list}.': {de: 'Die restlichen Dateien hat das System entfernt: {list}.'},
     Uninstall: {de: 'Deinstallieren'},
     'Check for update': {de: 'Auf Update prüfen'},
     'up to date': {de: 'aktuell'},

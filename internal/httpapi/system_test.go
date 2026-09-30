@@ -136,8 +136,12 @@ func TestInstallUninstallRoutes(t *testing.T) {
 		t.Fatalf("empty: %d %v", st, bad)
 	}
 	st, out2, _ := do(t, srv, "POST", "/api/system/v1/addons/mosquitto/uninstall", "", nil)
-	if st != 200 || out2["ok"] != true {
+	if st != 200 || out2["ok"] != true || out2["output"] != "mosquitto uninstall" {
 		t.Fatalf("uninstall: %d %v", st, out2)
+	}
+	// B-283: the answer names what the system removed after the script - what was there
+	if removed, _ := out2["system_removed"].([]any); len(removed) != 1 || removed[0] != "/usr/local/etc/config/rc.d/mosquitto" {
+		t.Fatalf("system_removed: %v", out2["system_removed"])
 	}
 	st, _, _ = do(t, srv, "POST", "/api/system/v1/addons/mosquitto/uninstall", "", nil)
 	if st != 422 {
@@ -613,7 +617,9 @@ type updatesManager struct{ box *updatesBox }
 func (m updatesManager) Install(context.Context, io.Reader) (*system.InstallResult, error) {
 	return &system.InstallResult{Exit: 0, Meaning: "installed"}, nil
 }
-func (m updatesManager) Uninstall(context.Context, string) (string, error) { return "removed", nil }
+func (m updatesManager) Uninstall(context.Context, string) (system.UninstallResult, error) {
+	return system.UninstallResult{Output: "removed", SystemRemoved: []string{"/usr/local/etc/config/rc.d/mosquitto", "/usr/local/etc/config/addon-policy/mosquitto.json"}}, nil
+}
 func (m updatesManager) CheckUpdate(ctx context.Context, a system.Addon, base string) system.UpdateInfo {
 	return m.box.CheckUpdate(ctx, a, base)
 }

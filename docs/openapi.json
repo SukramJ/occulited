@@ -19659,11 +19659,21 @@
                     },
                     "output": {
                       "type": "string"
+                    },
+                    "system_removed": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": [
+                        "array",
+                        "null"
+                      ]
                     }
                   },
                   "required": [
                     "ok",
-                    "output"
+                    "output",
+                    "system_removed"
                   ],
                   "type": "object"
                 }

@@ -614,6 +614,11 @@ func run(opts daemonOptions) error {
 		if catSvc != nil {
 			sa.FallbackManifest = catSvc.ManifestAt
 		}
+		// openccu-lite B-283: the policy files of an addon that is gone (an uninstall before this
+		// binary, NEO Server switched off) go first, so the refreshes below see installed addons only
+		if ids := sa.SweepStalePolicyFiles(); len(ids) > 0 {
+			log.Info("addon policies: files of addons that are no longer installed removed", "addons", ids)
+		}
 		// a policy follows its stored manifest, and an installed addon without one adopts the
 		// catalogue's adapter when there is one; the drop-in below is rendered from that
 		if ids := sa.RefreshManifestRuntimes(); len(ids) > 0 {

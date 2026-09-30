@@ -92,11 +92,16 @@ func TestUninstallAndCfgWriter(t *testing.T) {
 	// mosquitto's rc.d script from fakeRoot handles "uninstall" by echoing; add a monit fragment
 	_ = os.WriteFile(r.join("/usr/local/etc/monit-mosquitto.cfg"), []byte("check process"), 0o644)
 	out, err := b.Uninstall(t.Context(), "mosquitto")
-	if err != nil || out != "mosquitto uninstall" {
-		t.Fatalf("uninstall: %q %v", out, err)
+	if err != nil || out.Output != "mosquitto uninstall" {
+		t.Fatalf("uninstall: %+v %v", out, err)
 	}
 	if _, err := os.Stat(r.join("/usr/local/etc/monit-mosquitto.cfg")); !os.IsNotExist(err) {
 		t.Fatal("monit fragment must be removed")
+	}
+	// B-283: the answer names what the system removed - what was there, in order - so the
+	// confined script's refused rm lines do not read as a failure
+	if got := strings.Join(out.SystemRemoved, " "); !strings.HasPrefix(got, "/usr/local/etc/config/rc.d/mosquitto ") || !strings.Contains(got, "/usr/local/etc/monit-mosquitto.cfg") || !strings.HasSuffix(got, "hm_addons.cfg: mosquitto") {
+		t.Fatalf("system_removed: %v", out.SystemRemoved)
 	}
 	cfg := readFile(r.join("/usr/local/etc/config/hm_addons.cfg"))
 	if strings.Contains(cfg, "mosquitto") {

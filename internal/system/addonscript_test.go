@@ -83,8 +83,8 @@ func TestUninstallConfinedRunsAsTheAddonUser(t *testing.T) {
 	}
 	a := NewSystemdAddons(r, SystemdServices{Root: r, Run: run})
 	out, err := a.Uninstall(context.Background(), "new")
-	if err != nil || out != "uninstalled as user" {
-		t.Fatalf("%v %q", err, out)
+	if err != nil || out.Output != "uninstalled as user" {
+		t.Fatalf("%v %+v", err, out)
 	}
 	if fp.last.cred.UID != 30000 || fp.last.cred.GID != 30000 || len(fp.last.cred.Groups) != 1 || fp.last.cred.Groups[0] != 30000 {
 		t.Errorf("the credential must be the addon's uid, gid and its one group: %+v", fp.last.cred)
@@ -119,8 +119,8 @@ func TestUninstallConfinedRunsAsTheAddonUser(t *testing.T) {
 	fp.last.name = ""
 	// (with a recorder Runner the scope is left out and the script runs plainly, as root)
 	out, err = a.Uninstall(context.Background(), "rooty")
-	if err != nil || out != "root uninstall" || fp.last.name != "" {
-		t.Errorf("a root addon's uninstall: out=%q err=%v RunAs=%q", out, err, fp.last.name)
+	if err != nil || out.Output != "root uninstall" || fp.last.name != "" {
+		t.Errorf("a root addon's uninstall: out=%+v err=%v RunAs=%q", out, err, fp.last.name)
 	}
 }
 

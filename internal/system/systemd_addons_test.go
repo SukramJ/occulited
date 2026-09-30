@@ -53,9 +53,16 @@ func TestSystemdAddonsInstallUninstall(t *testing.T) {
 		t.Errorf("the install scope must not be stopped (B-3):\n%s", joined)
 	}
 	calls = nil
+	// B-283: every policy file of the addon goes with it - the policy, the drop-in, the start
+	// order, the early start, the stored manifest - and nothing of another addon's
+	pd := r.join(AddonPolicyDir)
+	_ = os.MkdirAll(pd, 0o755)
+	for _, f := range []string{"new.json", "new.conf", "new.needs", "new.start", "new.manifest.json", "new.fullwalk", "new.other", "newer.json", "old.json"} {
+		_ = os.WriteFile(filepath.Join(pd, f), []byte("{}\n"), 0o644)
+	}
 	out, err := a.Uninstall(context.Background(), "new")
-	if err != nil || out != "uninstalled" {
-		t.Fatalf("%v %q", err, out)
+	if err != nil || out.Output != "uninstalled" {
+		t.Fatalf("%v %+v", err, out)
 	}
 	joined = strings.Join(calls, "\n")
 	if !strings.HasPrefix(calls[0], "systemctl stop --no-pager -- addon-new.service") || !strings.Contains(joined, "daemon-reload") {
@@ -63,6 +70,17 @@ func TestSystemdAddonsInstallUninstall(t *testing.T) {
 	}
 	if _, err := os.Stat(rc); !os.IsNotExist(err) {
 		t.Error("rc.d entry kept")
+	}
+	left, _ := os.ReadDir(pd)
+	var names []string
+	for _, e := range left {
+		names = append(names, e.Name())
+	}
+	if strings.Join(names, " ") != "new.other newer.json old.json" {
+		t.Errorf("policy files left: %v", names)
+	}
+	if got := strings.Join(out.SystemRemoved, " "); got != "/usr/local/etc/config/rc.d/new "+AddonPolicyDir+"/new.manifest.json "+AddonPolicyDir+"/new.json "+AddonPolicyDir+"/new.conf "+AddonPolicyDir+"/new.needs "+AddonPolicyDir+"/new.start "+AddonPolicyDir+"/new.fullwalk" {
+		t.Errorf("system_removed: %v", out.SystemRemoved)
 	}
 	// B-236: the unit's failure is forgotten once its file is gone, or it stays listed not-found
 	if !strings.HasSuffix(joined, "systemctl daemon-reload\nsystemctl reset-failed --no-pager -- addon-new.service") {
@@ -86,8 +104,8 @@ func TestSystemdAddonsUninstallAfterAFailedStop(t *testing.T) {
 	}
 	a := NewSystemdAddons(r, SystemdServices{Root: r, Run: run})
 	out, err := a.Uninstall(context.Background(), "red")
-	if err != nil || out != "uninstalled" {
-		t.Fatalf("%v %q", err, out)
+	if err != nil || out.Output != "uninstalled" {
+		t.Fatalf("%v %+v", err, out)
 	}
 	want := []string{"systemctl stop --no-pager -- addon-red.service", "systemctl daemon-reload", "systemctl reset-failed --no-pager -- addon-red.service"}
 	var got []string
@@ -101,6 +119,50 @@ func TestSystemdAddonsUninstallAfterAFailedStop(t *testing.T) {
 	}
 	if _, err := os.Stat(r.join("/usr/local/etc/config/rc.d/red")); !os.IsNotExist(err) {
 		t.Error("rc.d entry kept")
+	}
+}
+
+// B-283: the policy files of an id with no rc.d entry - an uninstall before this binary, NEO
+// Server switched off - are swept at start; an installed addon's stay, whatever their mode, and
+// files of another shape in the directory are not touched
+func TestSweepStalePolicyFiles(t *testing.T) {
+	r := rootWith(t, map[string]string{
+		"usr/local/etc/config/rc.d/here":                       "#!/bin/sh\nexit 0\n",
+		"usr/local/etc/config/addon-policy/here.json":          `{"id":"here","mode":"confined","uid":30000}` + "\n",
+		"usr/local/etc/config/addon-policy/here.conf":          "[Service]\nUser=addon-here\n",
+		"usr/local/etc/config/addon-policy/here.manifest.json": `{"format":1,"id":"here"}` + "\n",
+		"usr/local/etc/config/addon-policy/gone.json":          `{"id":"gone","mode":"root"}` + "\n",
+		"usr/local/etc/config/addon-policy/gone.conf":          "# root\n",
+		"usr/local/etc/config/addon-policy/gone.needs":         "none\n",
+		"usr/local/etc/config/addon-policy/97NeoServer.json":   `{"id":"97NeoServer","mode":"root"}` + "\n",
+		"usr/local/etc/config/addon-policy/97NeoServer.conf":   "# root\n",
+		"usr/local/etc/config/addon-policy/gone.start":         "early\n",
+		"usr/local/etc/config/addon-policy/gone.manifest.json": "{}\n",
+		"usr/local/etc/config/addon-policy/gone.fullwalk":      "policy\n",
+		"usr/local/etc/config/addon-policy/README":             "not a policy\n",
+		"usr/local/etc/config/addon-policy/gone.tokens":        "not one of ours\n",
+	})
+	a := NewSystemdAddons(r, SystemdServices{Root: r, Run: func(context.Context, string, ...string) ([]byte, error) { return nil, nil }})
+	if ids := a.SweepStalePolicyFiles(); strings.Join(ids, " ") != "97NeoServer gone" {
+		t.Fatalf("swept %v", ids)
+	}
+	left, _ := os.ReadDir(r.join(AddonPolicyDir))
+	var names []string
+	for _, e := range left {
+		names = append(names, e.Name())
+	}
+	// here.manifest.json stays: cut at ".json" it would read as the stale id "here.manifest"
+	if strings.Join(names, " ") != "README gone.tokens here.conf here.json here.manifest.json" {
+		t.Fatalf("left: %v", names)
+	}
+	// a second run has nothing to do
+	if ids := a.SweepStalePolicyFiles(); len(ids) != 0 {
+		t.Fatalf("swept again: %v", ids)
+	}
+	// no directory: nothing, quietly
+	b := NewSystemdAddons(rootWith(t, nil), SystemdServices{Run: func(context.Context, string, ...string) ([]byte, error) { return nil, nil }})
+	if ids := b.SweepStalePolicyFiles(); ids != nil {
+		t.Fatalf("without the directory: %v", ids)
 	}
 }
 

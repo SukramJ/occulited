@@ -141,8 +141,12 @@ func TestPolicyChangeAndUninstallCloseAddonPorts(t *testing.T) {
 	if _, err := a.Uninstall(t.Context(), "mosq"); err != nil {
 		t.Fatal(err)
 	}
-	if p := r.ReadAddonPolicy("mosq"); p == nil || len(p.OpenPorts) != 0 {
-		t.Errorf("the policy stays, its ports do not: %+v", p)
+	// B-283 (maintainer, 2026-09-30): the policy goes with the addon, and with it its opened ports
+	if p := r.ReadAddonPolicy("mosq"); p != nil {
+		t.Errorf("the policy outlived the addon: %+v", p)
+	}
+	if got := a.Firewall.AddonOwners()["addon:mosq"]; len(got) != 0 {
+		t.Errorf("owned rules after the uninstall: %+v", got)
 	}
 	if *told < 2 {
 		t.Errorf("the firewall was told %d times, want the prune and the uninstall", *told)
