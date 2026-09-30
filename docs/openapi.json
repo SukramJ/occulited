@@ -2100,6 +2100,7 @@
               "null"
             ]
           },
+          "network": {},
           "previous": {
             "anyOf": [
               {

@@ -68,6 +68,7 @@ func (a *SystemAPI) bootTimeline(w http.ResponseWriter, r *http.Request) {
 	}
 	if a.BootSnapshots != nil {
 		answer.Previous = a.BootSnapshots.Previous(answer.BootID)
+		answer.Network = a.BootSnapshots.Network(answer.BootID) // B-249
 	}
 	writeJSON(w, http.StatusOK, answer)
 }

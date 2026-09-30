@@ -78,6 +78,63 @@ func (s *Store) log() *slog.Logger {
 
 func (s *Store) path(id string) string { return filepath.Join(s.Dir, id+".json.gz") }
 
+func (s *Store) netPath(id string) string { return filepath.Join(s.Dir, id+".net.json") }
+
+// SaveNetwork keeps a boot's no-link record (openccu-lite B-249) beside its timeline, replacing an
+// earlier one of the same boot: the watch writes it at its decision and again at its end. It is
+// written whether or not the boot's timeline is ever kept - a boot without a network may never get
+// a trusted clock - and goes with the boot when that is pruned.
+func (s *Store) SaveNetwork(id string, v any) error {
+	if !snapshotID.MatchString(id) {
+		return errors.New("not a boot id")
+	}
+	b, err := json.MarshalIndent(v, "", " ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(s.Dir, 0o750); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(s.Dir, ".nobackup"), nil, 0o644); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(s.Dir, ".net-*.tmp")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(append(b, '\n')); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp.Name(), 0o640); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp.Name(), s.netPath(id)); err != nil {
+		return err
+	}
+	return s.prune()
+}
+
+// Network is a boot's no-link record, nil when it has none.
+func (s *Store) Network(id string) json.RawMessage {
+	if !snapshotID.MatchString(id) {
+		return nil
+	}
+	b, err := os.ReadFile(s.netPath(id))
+	if err != nil || !json.Valid(b) {
+		return nil
+	}
+	return json.RawMessage(b)
+}
+
 // Has tells whether a boot's timeline is kept.
 func (s *Store) Has(id string) bool {
 	if !snapshotID.MatchString(id) {
@@ -105,6 +162,7 @@ func (s *Store) Save(t *Timeline) error {
 	snap := snapshot{Timeline: *t, RecordedMS: s.now().UnixMilli()}
 	snap.Snapshot = false
 	snap.Previous = nil
+	snap.Network = nil // kept beside it (SaveNetwork)
 	tmp, err := os.CreateTemp(s.Dir, ".boot-*.tmp")
 	if err != nil {
 		return err
@@ -170,6 +228,7 @@ func (s *Store) Load(id string) (*Timeline, error) {
 	}
 	t := snap.Timeline
 	t.Snapshot = true
+	t.Network = s.Network(id)
 	return &t, nil
 }
 
@@ -222,8 +281,36 @@ func (s *Store) Previous(id string) *Kept {
 func (s *Store) prune() error {
 	list := s.List()
 	var errs []error
+	kept := map[string]bool{}
+	for _, k := range list[:min(len(list), s.keep())] {
+		kept[k.BootID] = true
+	}
 	for _, k := range list[min(len(list), s.keep()):] {
-		if err := os.Remove(s.path(k.BootID)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		for _, p := range []string{s.path(k.BootID), s.netPath(k.BootID)} {
+			if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
+				errs = append(errs, err)
+			}
+		}
+	}
+	// no-link records of boots whose timeline was never kept: the newest Keep of them stay
+	type rec struct {
+		path string
+		mod  time.Time
+	}
+	var orphans []rec
+	entries, _ := os.ReadDir(s.Dir)
+	for _, e := range entries {
+		id, ok := strings.CutSuffix(e.Name(), ".net.json")
+		if !ok || kept[id] {
+			continue
+		}
+		if fi, err := e.Info(); err == nil {
+			orphans = append(orphans, rec{filepath.Join(s.Dir, e.Name()), fi.ModTime()})
+		}
+	}
+	sort.Slice(orphans, func(i, j int) bool { return orphans[i].mod.After(orphans[j].mod) })
+	for _, o := range orphans[min(len(orphans), s.keep()):] {
+		if err := os.Remove(o.path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			errs = append(errs, err)
 		}
 	}

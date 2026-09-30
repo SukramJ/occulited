@@ -193,3 +193,67 @@ func TestRecord(t *testing.T) {
 		t.Error("did not give up")
 	}
 }
+
+// openccu-lite B-249: a boot's no-link record beside its timeline - replaced, loaded with the boot,
+// pruned with it, and kept (the newest Keep) for boots whose timeline never was.
+func TestStoreNetworkRecord(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "boots")
+	now := time.Date(2026, 9, 29, 20, 0, 0, 0, time.UTC)
+	s := &Store{Dir: dir, Keep: 2, Now: func() time.Time { return now }}
+	if err := s.SaveNetwork("not-an-id", map[string]any{}); err == nil {
+		t.Error("a bad id was taken")
+	}
+	if err := s.SaveNetwork(bootID(0), map[string]any{"final": false}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveNetwork(bootID(0), map[string]any{"final": true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Save(finished(bootID(0), 1000)); err != nil {
+		t.Fatal(err)
+	}
+	tl, err := s.Load(bootID(0))
+	if err != nil || !strings.Contains(string(tl.Network), `"final": true`) {
+		t.Fatalf("load: %v %s", err, tl.Network)
+	}
+	if st, _ := os.Stat(filepath.Join(dir, bootID(0)+".net.json")); st.Mode().Perm() != 0o640 {
+		t.Errorf("mode %v", st.Mode())
+	}
+	if s.Network(bootID(1)) != nil {
+		t.Error("a boot without a record has one")
+	}
+	// the timeline file itself does not carry it
+	f, _ := os.Open(filepath.Join(dir, bootID(0)+".json.gz"))
+	zr, _ := gzip.NewReader(f)
+	var raw map[string]any
+	_ = json.NewDecoder(zr).Decode(&raw)
+	f.Close()
+	if _, ok := raw["network"]; ok {
+		t.Error("the record went into the timeline file")
+	}
+	// two newer boots: the first one goes, its record with it
+	for i := 1; i <= 2; i++ {
+		now = now.Add(time.Minute)
+		if err := s.Save(finished(bootID(i), 1000)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, bootID(0)+".net.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the pruned boot's record stays: %v", err)
+	}
+	// records of boots that were never kept: the newest two stay
+	for i := 10; i < 13; i++ {
+		if err := s.SaveNetwork(bootID(i), map[string]any{"n": i}); err != nil {
+			t.Fatal(err)
+		}
+		old := time.Now().Add(time.Duration(i-20) * time.Minute)
+		_ = os.Chtimes(filepath.Join(dir, bootID(i)+".net.json"), old, old)
+	}
+	if err := s.SaveNetwork(bootID(13), map[string]any{"n": 13}); err != nil {
+		t.Fatal(err)
+	}
+	m, _ := filepath.Glob(filepath.Join(dir, "*.net.json"))
+	if len(m) != 2 || s.Network(bootID(13)) == nil || s.Network(bootID(12)) == nil {
+		t.Errorf("orphans left: %v", m)
+	}
+}

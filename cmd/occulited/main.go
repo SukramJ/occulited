@@ -31,6 +31,7 @@ import (
 	"github.com/hobbyquaker/occulited/internal/health"
 	"github.com/hobbyquaker/occulited/internal/journald"
 	"github.com/hobbyquaker/occulited/internal/led"
+	"github.com/hobbyquaker/occulited/internal/linkwatch"
 	"github.com/hobbyquaker/occulited/internal/literpc"
 	"github.com/hobbyquaker/occulited/internal/logctl"
 	"github.com/hobbyquaker/occulited/internal/mqttpub"
@@ -1114,6 +1115,47 @@ func run(opts daemonOptions) error {
 	if bootSnapshots != nil {
 		// task 93: this boot's timeline is kept once it has finished and the clock can be trusted
 		go bootSnapshots.Record(ctx, bootChart, func(c context.Context) bool { return bootexpect.ClockTrusted(c, *rootDir, nil) }, 0, 0)
+		// openccu-lite B-249, occulited B-34: a boot whose network does not work 3 minutes in (no
+		// carrier, the LED's no-network, or the Pi 3's LAN9514 missing) gets a record of it
+		if id := root.BootID(); id != "" {
+			go (&linkwatch.Watcher{Root: *rootDir, Uptime: root.Uptime, Other: func() bool { return wifiCarrier(*rootDir) },
+				Kernel: func(context.Context) []string {
+					var lines []system.LogLine
+					if journal != nil {
+						lines, _ = journal.Read(system.LogQuery{Kernel: true, Boot: "0", Limit: 5000})
+					}
+					if len(lines) == 0 {
+						lines, _ = system.Dmesg{Root: root}.Read(system.LogQuery{Kernel: true, Limit: 5000})
+					}
+					out := make([]string, 0, len(lines))
+					for _, l := range lines {
+						out = append(out, l.Time+" "+l.Message)
+					}
+					return out
+				},
+				Log: func(context.Context) []string {
+					if journal == nil {
+						return nil
+					}
+					var out []string
+					for _, u := range []string{"occu-lan-reset.service", "occu-network.service"} {
+						lines, _ := journal.Read(system.LogQuery{Unit: u, Boot: "0", Limit: 200})
+						for _, l := range lines {
+							out = append(out, l.Time+" "+l.Message)
+						}
+					}
+					return out
+				},
+				Save: func(c linkwatch.Capture) error {
+					err := bootSnapshots.SaveNetwork(id, c)
+					if err != nil {
+						log.Warn("link watch: the no-link record was not written", "err", err)
+					} else {
+						log.Warn("link watch: the network does not work since the boot - a record of it is kept with the boot", "reasons", strings.Join(c.Reasons, ","), "interface", c.Interface, "uptime_s", c.UptimeS, "final", c.Final, "carrier_at_s", c.CarrierAtS)
+					}
+					return err
+				}}).Run(ctx)
+		}
 	}
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Serve(ln) }()
@@ -1872,4 +1914,16 @@ func rpcDropChild(args []string) error {
 		return errors.New("pid and fd are numbers")
 	}
 	return priv.ShutdownForeignSocket(pid, fd)
+}
+
+// wifiCarrier says whether a Wi-Fi interface has a carrier: the system then has its network without
+// the cable, and an Ethernet without a link is no lost link (B-249).
+func wifiCarrier(root string) bool {
+	m, _ := filepath.Glob(filepath.Join(root, "sys/class/net/wlan*/carrier"))
+	for _, p := range m {
+		if b, err := os.ReadFile(p); err == nil && strings.TrimSpace(string(b)) == "1" {
+			return true
+		}
+	}
+	return false
 }

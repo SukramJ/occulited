@@ -6,6 +6,7 @@
 package bootchart
 
 import (
+	"encoding/json"
 	"sort"
 
 	"github.com/hobbyquaker/occulited/internal/unitshow"
@@ -49,6 +50,9 @@ type Timeline struct {
 	Snapshot bool `json:"snapshot,omitempty"`
 	// Previous is the boot kept before this one, which the page compares with
 	Previous *Kept `json:"previous,omitempty"`
+	// Network is the record of a boot whose Ethernet had no link (openccu-lite B-249, package
+	// linkwatch), kept beside the timeline; absent for a boot that had one.
+	Network json.RawMessage `json:"network,omitempty"`
 }
 
 // Timestamps are the manager's milestones in seconds after the kernel started.
