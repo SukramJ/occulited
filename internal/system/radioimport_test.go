@@ -6,11 +6,13 @@ import (
 	"compress/gzip"
 	"context"
 	"errors"
+	"github.com/hobbyquaker/occulited/internal/radio"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hobbyquaker/occulited/internal/priv"
 )
@@ -266,5 +268,38 @@ func TestImportRadio(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root3, "tmp/evil")); !errors.Is(err, os.ErrNotExist) {
 		t.Error("a climbing member landed")
+	}
+}
+
+// openccu-lite task 299: the access point file in a backup foretells the security counter.
+func TestInspectRadioBackupSecurityCounter(t *testing.T) {
+	ap, err := os.ReadFile("../radio/testdata/accesspoint.ap")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := ccuFiles()
+	const c = "usr/local/etc/config/"
+	delete(files, c+"crRFD/data/3014F711A0001F0000000A03.ap")
+	files[c+"crRFD/data/3014F711A000040000000A01.ap"] = string(ap)
+	old := radioNow
+	t.Cleanup(func() { radioNow = old })
+	radioNow = func() time.Time { return time.Date(2026, 9, 30, 9, 5, 8, 0, time.UTC) }
+	b, err := InspectRadioBackup(sbkFixture(t, files, "2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc := b.HmIP.SecurityCounter
+	if b.HmIP.IdentitySGTIN != "3014F711A000040000000A01" || sc == nil || sc.Offset != 2829 || sc.Verdict != radio.CounterFine || sc.Behind || sc.Calc < 7661300 || sc.Calc > 7661310 || sc.WrapsAt.Year() != 2067 {
+		t.Fatalf("outlook: %+v", sc)
+	}
+	// a clock before the first connection
+	radioNow = func() time.Time { return time.Date(2026, 3, 13, 0, 0, 0, 0, time.UTC) }
+	if b, _ := InspectRadioBackup(sbkFixture(t, files, "2")); b.HmIP.SecurityCounter == nil || !b.HmIP.SecurityCounter.Behind || b.HmIP.SecurityCounter.Calc != 2830 {
+		t.Fatalf("behind: %+v", b.HmIP.SecurityCounter)
+	}
+	// a file that is not an access point: the identity is still named, the outlook absent
+	files[c+"crRFD/data/3014F711A000040000000A01.ap"] = "ap"
+	if b, _ := InspectRadioBackup(sbkFixture(t, files, "2")); b.HmIP.IdentitySGTIN != "3014F711A000040000000A01" || b.HmIP.SecurityCounter != nil {
+		t.Fatalf("plain file: %+v", b.HmIP)
 	}
 }

@@ -1704,6 +1704,14 @@ function activeWarnings(jar, warn, st) {
         list.push({id: 'addon-ownership', variant: 'hm2mqtt', severity: 'warning', href: '/services', params: {addons: [{id: 'hm2mqtt', enabled: true, path: '/usr/local/addons/hm2mqtt/var/hm2mqtt.pid'}]}});
     }
     if (jar['stub-key'] === 'default') list.push({id: 'security-key', variant: 'default', severity: 'warning', href: '/system/keys#security-key'});
+    // openccu-lite task 299: the HmIP security counter (stub-counter=near|wrapped|backwards|held)
+    if (jar['stub-counter'] === 'held') {
+        list.push({id: 'hmip-clock-hold', variant: 'timeout', severity: 'error', href: '/system/network', params: {sgtin: '3014F711A000040000000A02', since: '2026-09-30T09:10:00Z', reason: 'the computed security counter has passed 2^32', clock_state: 'timeout', calc: 5319842009}});
+        list.push({id: 'hmip-security-counter', variant: 'wrapped', severity: 'warning', href: '/system/interfaces#connections', params: {sgtin: '3014F711A000040000000A02', calc: 5319842009, at: '2026-09-30T09:10:00Z', source: 'computed', offset: 4031374848, wraps_at: '2026-10-01T00:00:00Z'}});
+    } else if (jar['stub-counter']) {
+        const v = jar['stub-counter'];
+        list.push({id: 'hmip-security-counter', variant: v, severity: v === 'backwards' ? 'error' : 'warning', href: '/system/interfaces#connections', params: {sgtin: '3014F711A000040000000A02', calc: v === 'near' ? 2200000000 : 5319842009, current: 1024874459, written: v === 'near' ? 2200000000 : 1024874713, at: '2026-09-30T09:00:00Z', source: 'journal', offset: 4031374848, wraps_at: '2033-04-01T00:00:00Z'}});
+    }
     // task 173: classic RPC on without a login (stub-rpc=plain|tls|plain,tls)
     if (jar['stub-rpc']) list.push({id: 'classic-rpc-open', variant: jar['stub-rpc'], severity: 'warning', href: '/system/remote-access'});
     // task 193: the Control app public (stub-public-warn=1)
@@ -2661,7 +2669,9 @@ function variant(req, u, res) {
     // timed out and synchronised since
     if (jar['stub-clock'] && key === 'GET /api/system/v1/status') {
         const st = structuredClone(routes[key]);
-        st.clock = {state: 'timeout', synchronised: jar['stub-clock'] === 'synced'};
+        // openccu-lite task 299: the untrusted states beyond the timeout (rtc-implausible names the refused time)
+        const c = jar['stub-clock'];
+        st.clock = c === 'synced' || c === 'timeout' ? {state: 'timeout', synchronised: c === 'synced'} : {state: c, synchronised: false, ...(c === 'rtc-implausible' ? {rtc_implausible: '2041-01-01T00:00:00Z'} : {})};
         sendJSON(res, st);
         return true;
     }

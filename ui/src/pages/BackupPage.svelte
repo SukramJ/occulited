@@ -25,7 +25,8 @@
     // openccu-lite task 251: the paired devices a checked backup holds, and this system's side
     interface RadioBackup {
         bidcos_rf: {devices: number; address?: string; serial?: string; has_key: boolean; gateways: number};
-        hmip: {devices: number; identity_sgtin?: string; local_key: boolean; device_key_map: boolean};
+        // openccu-lite task 299: what the access point file says about the HmIP security counter
+        hmip: {devices: number; identity_sgtin?: string; local_key: boolean; device_key_map: boolean; security_counter?: {first_connect: string; offset: number; calc: number; behind?: boolean; verdict: string; wraps_at: string}};
         bidcos_wired: {devices: number; gateways: number};
         key_index: number;
         files: string[];
@@ -421,6 +422,17 @@
                         </div>
                     {:else if b.hmip.identity_sgtin && !tg.hmip_module}
                         <div class="ol-notice" data-notice="module-change">{t('This system has no HmIP module: the HmIP identity of module {from} is imported and waits for one.', {from: b.hmip.identity_sgtin})}</div>
+                    {/if}
+                    <!-- openccu-lite task 299 (eq-3/occu#134): the access point's security counter as the file
+                         foretells it - a migrating user learns the state of the system he brings -->
+                    {#if b.hmip.security_counter && (b.hmip.security_counter.verdict !== 'fine' || b.hmip.security_counter.behind)}
+                        {@const sc = b.hmip.security_counter}
+                        {@const scp = {first: new Date(sc.first_connect).toLocaleDateString(), offset: String(sc.offset), calc: String(sc.calc), wraps: new Date(sc.wraps_at).toLocaleDateString()}}
+                        <div class={sc.verdict === 'near' && !sc.behind ? 'ol-notice' : 'ol-notice warn'} data-notice="security-counter" data-verdict={sc.behind ? 'behind' : sc.verdict}>
+                            {#if sc.behind}{t('HmIP security counter: the clock of this system is before the access point\'s first connection ({first}). Set the time before the import, or hmipserver computes the counter from the offset alone.', scp)}
+                            {:else if sc.verdict === 'near'}{t('HmIP security counter: the access point was first connected on {first}; with its offset of {offset} the counter computed at the first start here is {calc}, past 2^31. It reaches 2^32, where hmipserver\'s protection against a lower value ends, at about {wraps}. Keep the clock of this system synchronised.', scp)}
+                            {:else}{t('HmIP security counter: the access point was first connected on {first}; with its offset of {offset} the counter computed at the first start here is {calc}, past 2^32. hmipserver\'s protection against a lower value is gone on this access point: a start without a synchronised clock can lock every HmIP device out, and the counter is set below what the devices have seen whenever it passes 2^32 again. This system holds hmipserver back while the clock is not trusted; if the devices stop answering after a start, power-cycle them.', scp)}{/if}
+                        </div>
                     {/if}
                     <!-- openccu-lite task 278 (option B) and 296: the backup's BidCos key store comes along as it is;
                          its passphrase is asked as a check - match, mismatch, skip - and never stops the import -->

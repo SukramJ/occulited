@@ -45,7 +45,7 @@ export interface Warning {
     id: string;
     variant: string;
     severity: Severity;
-    params?: {addons?: WarnAddon[]; account?: string; at?: string; path?: string; days?: number; verdict?: string; reasons?: StorageReason[]; devices?: WarnDevice[]; mode?: string; reason?: string; adapter?: string; cause?: string; line?: string; families?: string[]; unreachable?: number; total?: number; port?: number; addresses?: string; sgtin?: string; address?: string; name?: string; detail?: string; label?: string; dir?: string; target?: string; share?: string; reconnecting?: boolean; interface?: string; kind?: string; since?: string; checked?: boolean; listeners?: StallListener[]; folder?: string; device?: string; running?: string; newest?: string; node?: string; drops_off?: boolean; hosts?: string[]; issuer?: string; store?: string; candidate?: boolean; from?: string; module?: string; count?: number; units?: WarnLoopUnit[]; fails?: number; restarts?: number; result?: string; first?: string; last?: string};
+    params?: {addons?: WarnAddon[]; account?: string; at?: string; path?: string; days?: number; verdict?: string; reasons?: StorageReason[]; devices?: WarnDevice[]; mode?: string; reason?: string; adapter?: string; cause?: string; line?: string; families?: string[]; unreachable?: number; total?: number; port?: number; addresses?: string; sgtin?: string; address?: string; name?: string; detail?: string; label?: string; dir?: string; target?: string; share?: string; reconnecting?: boolean; interface?: string; kind?: string; since?: string; checked?: boolean; listeners?: StallListener[]; folder?: string; device?: string; running?: string; newest?: string; node?: string; drops_off?: boolean; hosts?: string[]; issuer?: string; store?: string; candidate?: boolean; from?: string; module?: string; count?: number; units?: WarnLoopUnit[]; fails?: number; restarts?: number; result?: string; first?: string; last?: string; written?: number; calc?: number; current?: number; offset?: number; wraps_at?: string; clock_state?: string; behind?: boolean; source?: string};
     href?: string;
     /** this administrator's own silence (D-64) */
     silenced?: Silence;
@@ -215,6 +215,16 @@ export function warningText(w: Warning, words: Words): string {
             // task 201: the device's key in the system's key list is not the device's, so hmipserver
             // declines its pairing and the device never appears
             return t('Pairing {sgtin} was declined: the key stored for that device does not match it, so the system cannot let it in. Scan or type the key from its sticker again, apply it, and pair the device once more.', {sgtin: p.sgtin ?? ''});
+        case 'hmip-security-counter': {
+            // openccu-lite task 299 (eq-3/occu#134): the HmIP security counter near, past or below its wrap
+            const sgtin = p.sgtin ?? '';
+            if (w.variant === 'backwards') return t('The HmIP security counter of access point {sgtin} was set below what the devices have seen (the module holds {written}, the start computed {calc}). Every HmIP device refuses this system as a replay until it is power-cycled (battery out and in, fuse off and on) or paired again; a restart of the system does not help.', {sgtin, written: String(p.written ?? ''), calc: String(p.calc ?? '')});
+            if (w.variant === 'wrapped') return t("The HmIP security counter of access point {sgtin} has passed 2^32 (the start computed {calc}): hmipserver's check against a lower value protects nothing any more. A start without a synchronised clock can set the counter below what the devices have seen and lock every HmIP device out; this system holds hmipserver back until the clock is trusted.", {sgtin, calc: String(p.calc ?? '')});
+            return t('The HmIP security counter of access point {sgtin} is past 2^31 (the start computed {calc}) and reaches 2^32, where its protection ends, at about {wraps}. Keep the clock synchronised; a system without a real-time clock needs a time server.', {sgtin, calc: String(p.calc ?? ''), wraps: p.wraps_at ? new Date(p.wraps_at as string).toLocaleDateString() : '?'});
+        }
+        case 'hmip-clock-hold':
+            // openccu-lite task 299: hmipserver held back for a trusted clock on a wrapped access point
+            return t('HmIP-RF is waiting for a trusted clock: {reason} for access point {sgtin}, and the clock came neither from a real-time clock nor from a time server ({state}). A start now could set the HmIP security counter below what the devices have seen and lock every HmIP device out. Connect a time server, or set the time by hand on the Network page; hmipserver starts then.', {sgtin: p.sgtin ?? '', state: p.clock_state ?? w.variant, reason: p.behind ? t("the clock is before the access point's first connection") : t('the computed security counter has passed 2^32')});
         case 'hmip-local-key':
             // task 149: after the switch to local key mode most HmIP devices went silent
             return t("{n} of {total} HmIP devices have not answered since the switch to local key mode: the key was probably not the network's. The way back to eQ-3's key server is on the Interfaces page.", {n: p.unreachable ?? 0, total: p.total ?? 0});
@@ -294,6 +304,8 @@ const LINK_LABELS: Record<string, string> = {
     firewall: 'Firewall',
     'hmip-local-key': 'Local key mode',
     'hmip-key-declined': 'Device keys',
+    'hmip-security-counter': 'Interfaces',
+    'hmip-clock-hold': 'Network',
     'journal-target': 'Journal settings',
     'journal-sync': 'Journal settings',
     'store-target': 'History settings',

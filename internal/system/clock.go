@@ -15,13 +15,21 @@ import (
 // without the gate, and nothing to say.
 const ClockStateFile = "/run/occulite/clock-state"
 
+// ClockRTCImplausibleFile is what the gate writes when the real-time clock's time was outside the
+// window it trusts (openccu-lite task 299): the time it read, RFC 3339, so the page can name it.
+const ClockRTCImplausibleFile = "/run/occulite/clock-rtc-implausible"
+
 // ClockStatus is the Status page's clock notice.
 type ClockStatus struct {
-	// State is the file's word: rtc, ntp or timeout.
+	// State is the file's word: rtc, ntp, manual (set by hand), or an untrusted one - timeout,
+	// rtc-implausible (the real-time clock's time was outside the window and no time server
+	// answered), ntp-implausible (the time server's time was outside it).
 	State string `json:"state"`
-	// Synchronised is false only after a timeout while chrony still reports no synchronisation;
-	// then the page says the clock is not synchronised.
+	// Synchronised is false only after an untrusted state while chrony still reports no
+	// synchronisation; then the page says the clock is not synchronised.
 	Synchronised bool `json:"synchronised"`
+	// RTCImplausible is the time the real-time clock gave and the gate refused, when it did.
+	RTCImplausible string `json:"rtc_implausible,omitempty"`
 }
 
 // ClockCheck answers the clock's state for the Status page. After a timeout it asks chrony
@@ -51,9 +59,12 @@ func (c *ClockCheck) Status(ctx context.Context) *ClockStatus {
 		return nil
 	}
 	st := &ClockStatus{State: state, Synchronised: true}
-	if state == "timeout" {
+	switch state {
+	case "rtc", "ntp", "manual":
+	default:
 		st.Synchronised = c.chronySynced(ctx)
 	}
+	st.RTCImplausible = strings.TrimSpace(readFile(c.Root.join(ClockRTCImplausibleFile)))
 	return st
 }
 

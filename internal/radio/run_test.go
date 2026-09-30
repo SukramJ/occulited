@@ -541,6 +541,12 @@ func TestLog4j2ConfigAndEnvFiles(t *testing.T) {
 	if !strings.Contains(got, "<Root level=\"debug\">") || !strings.Contains(got, "<Logger level=\"debug\">\n") {
 		t.Fatalf("levels:\n%s", got)
 	}
+	// openccu-lite task 299: a marked logger keeps its level whatever LOGLEVEL_HMIP says
+	fixed := tmpl + "<Logger name=\"de.eq3.cbcs.server.local.base.internal.HMIPTRXInitialResponseListener\" level=\"info\"/><!-- occulite:fixed-level -->\n"
+	got = Log4j2Config(fixed, map[string]string{}, map[string]string{"HMIP_LOG_STDOUT": "1"}, "WARN")
+	if !strings.Contains(got, "HMIPTRXInitialResponseListener\" level=\"info\"/>") || !strings.Contains(got, "<Root level=\"warn\">") || strings.Count(got, `level="warn"`) != 2 {
+		t.Fatalf("fixed level:\n%s", got)
+	}
 	// stdout logging: no syslog appender
 	got = Log4j2Config(tmpl, map[string]string{"LOGHOST": "10.0.0.5"}, map[string]string{"HMIP_LOG_STDOUT": "1"}, "WARN")
 	if strings.Contains(got, "SYSLOG\"/>\n") && strings.Count(got, "AppenderRef") != 1 {

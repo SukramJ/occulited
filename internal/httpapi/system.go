@@ -1686,6 +1686,15 @@ func (a *SystemAPI) timeClock(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, apiError{Error: "invalid", Message: err.Error()})
 		return
 	}
+	// openccu-lite task 299: a time set by hand is a trusted clock; a hmipserver held back for one
+	// (its unit in its restart backoff) starts now
+	if radio.ReadCounterHold(string(a.Root)) != nil && a.Run != nil {
+		if out, err := a.Run(r.Context(), "systemctl", "restart", "hmipserver.service"); err != nil {
+			withCaller(r, slog.Default()).Warn("clock set by hand: hmipserver not restarted", "err", err, "out", strings.TrimSpace(string(out)))
+		} else {
+			withCaller(r, slog.Default()).Info("clock set by hand: hmipserver, held back for a trusted clock, restarted")
+		}
+	}
 	writeJSON(w, 200, a.Root.ReadTime())
 }
 

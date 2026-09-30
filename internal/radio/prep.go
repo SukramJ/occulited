@@ -85,6 +85,11 @@ func Prep(ctx context.Context, d Detector, daemon string, p Plan, logf func(stri
 			if !isNode(d, p.HmIPServer.Node) {
 				return fmt.Errorf("%s is missing", p.HmIPServer.Node)
 			}
+			// openccu-lite task 299: what this start would write into the HmIP security counter,
+			// and a hold while the clock is not trusted on a wrapped or at-risk access point
+			if err := counterPreStart(d, p, logf); err != nil {
+				return err
+			}
 		}
 		log4j2(d, logf)
 		measureDir := filepath.Dir(d.path(DiagramPath))
@@ -285,6 +290,10 @@ func Ready(ctx context.Context, d Detector, daemon string, mainPID int, logf fun
 			return fmt.Errorf("the HmIP server did not report itself started in 300 s")
 		}
 		logf("ready hmipserver: started")
+		// openccu-lite task 299: the security counter lines of this start
+		if p, err := LoadPlan(d.Root); err == nil {
+			counterAfterStart(daemonOutput(ctx, d, mainPID), d, p, logf)
+		}
 		// B-89: the shim that holds the HTTP port on the loopback fails open when it cannot load
 		if port, open := HMServerPortOpen(d.Root); len(open) > 0 {
 			logf("ready hmipserver: port %d listens on %s, not only on the loopback - the bind shim did not take (LD_PRELOAD /usr/lib/openccu-lite/libbindlo.so in the unit); the firewall still closes it", port, strings.Join(open, ", "))

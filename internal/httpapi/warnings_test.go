@@ -871,3 +871,46 @@ func TestRadioFirmwareWarnings(t *testing.T) {
 		t.Errorf("no service: %+v", ws)
 	}
 }
+
+// openccu-lite task 299: the security counter's state file and the hold marker become warnings.
+func TestHmIPCounterWarnings(t *testing.T) {
+	mux, r, _ := warnRig(t)
+	write := func(rel, content string) {
+		t.Helper()
+		p := filepath.Join(string(r), rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st, out := warnCall(t, mux, "GET", "/api/system/v1/warnings", "", "admin", auth.RoleAdmin)
+	if st != 200 || warningByID(out, "hmip-security-counter") != nil || warningByID(out, "hmip-clock-hold") != nil {
+		t.Fatalf("nothing recorded: %d %v", st, out)
+	}
+	write(radio.CounterStateFile, `{"access_points":{"3014F711A000040000000A02":{"sgtin":"3014F711A000040000000A02","offset":4031374848,"wraps_at":"2026-10-01T00:00:00Z","seen":4031374849,"verdict":"backwards","starts":[{"at":"2026-09-30T09:00:00Z","current":1024874459,"calc":5319842009,"written":1024874713,"source":"journal","verdict":"backwards"}]},"3014F711A000040000000A01":{"sgtin":"3014F711A000040000000A01","offset":2829,"verdict":"fine","starts":[{"at":"2026-09-30T09:00:00Z","calc":7661307,"source":"computed","verdict":"fine"}]}}}`)
+	write("run/occulite/radio/hmipserver.clock-hold.json", `{"since":"2026-09-30T09:10:00Z","sgtin":"3014F711A000040000000A02","calc":5319842009,"clock_state":"timeout","reason":"the computed security counter has passed 2^32"}`)
+	_, out = warnCall(t, mux, "GET", "/api/system/v1/warnings", "", "admin", auth.RoleAdmin)
+	w := warningByID(out, "hmip-security-counter")
+	if w == nil || w["variant"] != "backwards" || w["severity"] != "error" || w["href"] != "/system/interfaces#connections" {
+		t.Fatalf("counter: %v", w)
+	}
+	if p := w["params"].(map[string]any); p["sgtin"] != "3014F711A000040000000A02" || p["written"] != 1024874713.0 || p["calc"] != 5319842009.0 || p["current"] != 1024874459.0 || p["wraps_at"] != "2026-10-01T00:00:00Z" {
+		t.Fatalf("params: %v", p)
+	}
+	h := warningByID(out, "hmip-clock-hold")
+	if h == nil || h["variant"] != "timeout" || h["severity"] != "error" || h["href"] != "/system/network" || h["params"].(map[string]any)["since"] != "2026-09-30T09:10:00Z" {
+		t.Fatalf("hold: %v", h)
+	}
+	// the fine access point raises nothing: one counter warning
+	n := 0
+	for _, x := range out["warnings"].([]any) {
+		if x.(map[string]any)["id"] == "hmip-security-counter" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("%d counter warnings", n)
+	}
+}

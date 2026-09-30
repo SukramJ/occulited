@@ -151,7 +151,7 @@ export interface Status {
      * task 94: the boot's clock gate (/run/occulite/clock-state): rtc, ntp or timeout; after a
      * timeout `synchronised` says whether chrony has synchronised since. Absent without the gate.
      */
-    clock?: {state: string; synchronised: boolean};
+    clock?: {state: string; synchronised: boolean; rtc_implausible?: string};
 }
 /** task 69: GET /api/system/v1/storage - the storage health panel */
 export type StorageVerdict = 'good' | 'watch' | 'replace';

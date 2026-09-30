@@ -490,3 +490,51 @@ func TestFirewallReadsEveryService(t *testing.T) {
 		t.Errorf("SNMP: %v", byID["SNMP"])
 	}
 }
+
+// openccu-lite task 299: a time set by hand is accepted only between the image's build and 15 years
+// after it; without a /VERSION the old bound (2020-2100) stands; the state file says manual.
+func TestSetClockWindow(t *testing.T) {
+	r := rootWith(t, map[string]string{"VERSION": "VERSION=3.89.11.20260919\n", "run/occulite/clock-state": "timeout\n"})
+	built := time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(r.join("/VERSION"), built, built); err != nil {
+		t.Fatal(err)
+	}
+	if lo, hi := r.ClockWindow(); !lo.Equal(built) || !hi.Equal(built.AddDate(15, 0, 0)) {
+		t.Fatalf("window %s - %s", lo, hi)
+	}
+	rec := &recorder{}
+	for _, tc := range []struct {
+		at time.Time
+		ok bool
+	}{
+		{built.Add(time.Hour), true},
+		{built.AddDate(14, 11, 0), true},
+		{built.Add(-time.Hour), false},
+		{built.AddDate(15, 0, 1), false},
+		{time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC), false},
+		{time.Date(2021, 1, 1, 0, 0, 0, 0, time.UTC), false},
+	} {
+		rec.reset()
+		err := r.SetClock(context.Background(), rec.run, tc.at)
+		if (err == nil) != tc.ok {
+			t.Errorf("SetClock(%s): %v, want ok=%v", tc.at, err, tc.ok)
+		}
+		if !tc.ok && (err == nil || !strings.Contains(err.Error(), "implausible") || len(rec.Calls()) != 0) {
+			t.Errorf("SetClock(%s): %v %v", tc.at, err, rec.Calls())
+		}
+	}
+	if got := strings.TrimSpace(readFile(r.join("/run/occulite/clock-state"))); got != "manual" {
+		t.Fatalf("clock state %q after a manual set", got)
+	}
+	// without /VERSION: the old bound
+	r2 := rootWith(t, nil)
+	if lo, hi := r2.ClockWindow(); lo.Year() != 2020 || hi.Year() != 2100 {
+		t.Fatalf("fallback window %s - %s", lo, hi)
+	}
+	if err := r2.SetClock(context.Background(), rec.run, time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	if err := r2.SetClock(context.Background(), rec.run, time.Date(2101, 1, 1, 0, 0, 0, 0, time.UTC)); err == nil {
+		t.Fatal("2101 accepted")
+	}
+}

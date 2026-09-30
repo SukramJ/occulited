@@ -7888,6 +7888,9 @@
       },
       "SystemClockStatus": {
         "properties": {
+          "rtc_implausible": {
+            "type": "string"
+          },
           "state": {
             "type": "string"
           },
@@ -8153,6 +8156,40 @@
           "devices",
           "plan",
           "restarts"
+        ],
+        "type": "object"
+      },
+      "SystemCounterOutlook": {
+        "properties": {
+          "behind": {
+            "type": "boolean"
+          },
+          "calc": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "first_connect": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "offset": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "verdict": {
+            "type": "string"
+          },
+          "wraps_at": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "calc",
+          "first_connect",
+          "offset",
+          "verdict",
+          "wraps_at"
         ],
         "type": "object"
       },
@@ -10201,6 +10238,16 @@
               },
               "local_key": {
                 "type": "boolean"
+              },
+              "security_counter": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/SystemCounterOutlook"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               }
             },
             "required": [

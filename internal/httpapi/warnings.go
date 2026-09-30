@@ -226,6 +226,9 @@ func (a *SystemAPI) warningSources() []warnings.Source {
 		{IDs: []string{"addon-ownership"}, Lists: true, Eval: a.ownershipWarning},
 		{IDs: []string{"security-key"}, Eval: a.securityKeyWarning},
 		{IDs: []string{"hmip-adapter"}, Eval: a.hmipAdapterWarning},
+		// openccu-lite task 299: the HmIP security counter near, past or below its wrap, and the
+		// hold of hmipserver for a trusted clock
+		{IDs: []string{"hmip-security-counter", "hmip-clock-hold"}, Eval: a.hmipCounterWarnings},
 		{IDs: []string{"devices-import"}, Eval: a.devicesImportWarning},
 		{IDs: []string{"hb-rf-eth"}, Eval: a.hbRFETHWarning},
 		{IDs: []string{"radio-module-unusable", "radio-firmware"}, Eval: a.radioFirmwareWarnings},
@@ -1136,4 +1139,44 @@ func (a *SystemAPI) occulitedCrashLoopWarning(context.Context) ([]warnings.Warni
 		"fails": s.Fails, "restarts": s.Restarts, "result": s.Result,
 		"first": time.Unix(s.FirstFail, 0).UTC().Format(time.RFC3339), "last": last.UTC().Format(time.RFC3339),
 	}}}, true
+}
+
+// hmip-security-counter (openccu-lite task 299; eq-3/occu#134): what hmipserver's last start and the
+// access point file say about the HmIP security counter - near (past 2^31), wrapped (past 2^32: the
+// server's check protects nothing any more), backwards (the module now holds a value below what
+// the devices saw: they refuse the system until they are power-cycled). The variant is the verdict,
+// so a change is a new warning. hmip-clock-hold: the prep step holds hmipserver back on such an
+// access point while the clock is not trusted; the Time page's manual setting releases it.
+func (a *SystemAPI) hmipCounterWarnings(context.Context) ([]warnings.Warning, bool) {
+	root := string(a.Root)
+	var out []warnings.Warning
+	if h := radio.ReadCounterHold(root); h != nil {
+		out = append(out, warnings.Warning{ID: "hmip-clock-hold", Variant: h.ClockState, Severity: warnings.SeverityError, Href: "/system/network", Params: map[string]any{"sgtin": h.SGTIN, "since": h.Since.UTC().Format(time.RFC3339), "reason": h.Reason, "clock_state": h.ClockState, "calc": h.Calc, "behind": h.Behind}})
+	}
+	st := radio.ReadCounterState(root)
+	ids := make([]string, 0, len(st.AccessPoints))
+	for id := range st.AccessPoints {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		ap := st.AccessPoints[id]
+		if ap.Verdict == radio.CounterFine || len(ap.Starts) == 0 {
+			continue
+		}
+		last := ap.Starts[len(ap.Starts)-1]
+		params := map[string]any{"sgtin": ap.SGTIN, "calc": last.Calc, "at": last.At.UTC().Format(time.RFC3339), "source": last.Source, "offset": ap.Offset}
+		if last.Source == "journal" {
+			params["current"], params["written"] = last.Current, last.Written
+		}
+		if !ap.WrapsAt.IsZero() {
+			params["wraps_at"] = ap.WrapsAt.UTC().Format(time.RFC3339)
+		}
+		sev := warnings.SeverityWarning
+		if ap.Verdict == radio.CounterBackwards {
+			sev = warnings.SeverityError
+		}
+		out = append(out, warnings.Warning{ID: "hmip-security-counter", Variant: ap.Verdict, Severity: sev, Href: "/system/interfaces#connections", Params: params})
+	}
+	return out, true
 }

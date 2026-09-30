@@ -5,9 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -233,18 +235,42 @@ func (r Root) SetNTPServers(ctx context.Context, run Runner, svc ServiceManager,
 	return nil
 }
 
-// SetClock sets the system time by hand (a box without NTP), then pushes it to the RTC and rfd.
+// ClockWindowYears is how far past the image's build a clock is still trusted (openccu-lite task
+// 299, the maintainer's choice: systemd's own cap for a clock advanced from its built-in epoch). The
+// same bound holds on every path - the fork's clock gate for a real-time clock and for NTP, and the
+// time set by hand here. A clock far ahead would push the HmIP security counter past 2^32 for good
+// (eq-3/occu#134); one before the build is wrong on its face.
+const ClockWindowYears = 15
+
+// ClockWindow is the range a time set by hand is accepted in: from the image's build (/VERSION's
+// modification time, as the fork's clock gate reads it) to ClockWindowYears after it. Without a
+// plausible /VERSION (a development root) the years 2020 to 2100, as before.
+func (r Root) ClockWindow() (lo, hi time.Time) {
+	if st, err := os.Stat(r.join("/VERSION")); err == nil && st.ModTime().Year() >= 2020 {
+		lo = st.ModTime().UTC()
+		return lo, lo.AddDate(ClockWindowYears, 0, 0)
+	}
+	return time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2100, 12, 31, 23, 59, 59, 0, time.UTC)
+}
+
+// SetClock sets the system time by hand (a box without NTP), then pushes it to the RTC and rfd, and
+// marks the clock trusted (ClockStateFile "manual"), which releases a hmipserver held back for one.
 func (r Root) SetClock(ctx context.Context, run Runner, t time.Time) error {
 	if run == nil {
 		run = ExecRunner
 	}
-	if t.Year() < 2020 || t.Year() > 2100 {
-		return errors.New("time: implausible")
+	if lo, hi := r.ClockWindow(); t.Before(lo) || t.After(hi) {
+		return fmt.Errorf("time: implausible: %s is outside the range this image trusts, %s to %s (from its build to %d years after)", t.UTC().Format(time.RFC3339), lo.Format("2006-01-02"), hi.Format("2006-01-02"), ClockWindowYears)
 	}
 	if out, err := run(ctx, "date", "-u", "-s", t.UTC().Format("2006-01-02 15:04:05")); err != nil {
 		return fmt.Errorf("date: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	r.pushClock(ctx, run)
+	if _, err := os.Stat(r.join(filepath.Dir(ClockStateFile))); err == nil {
+		if err := Priv.WriteFile(r.join(ClockStateFile), []byte("manual\n"), 0o644); err != nil {
+			slog.Warn("clock set by hand: the clock state was not written", "err", err)
+		}
+	}
 	return nil
 }
 

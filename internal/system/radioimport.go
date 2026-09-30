@@ -62,6 +62,9 @@ type RadioBackup struct {
 		IdentitySGTIN string `json:"identity_sgtin,omitempty"`
 		LocalKey      bool   `json:"local_key"`
 		DeviceKeyMap  bool   `json:"device_key_map"`
+		// SecurityCounter is what the access point file says about the HmIP security counter
+		// (openccu-lite task 299): what hmipserver would compute at the first start here.
+		SecurityCounter *CounterOutlook `json:"security_counter,omitempty"`
 	} `json:"hmip"`
 	BidCosWired struct {
 		Devices  int `json:"devices"`
@@ -74,6 +77,31 @@ type RadioBackup struct {
 	// Version is the backup's firmware version.
 	Version string `json:"version,omitempty"`
 }
+
+// CounterOutlook is the HmIP security counter as the access point file foretells it: the first
+// connection and the offset from the file, the value hmipserver would compute now, and the verdict
+// (fine, near, wrapped; behind when the clock is before the first connection).
+type CounterOutlook struct {
+	FirstConnect time.Time `json:"first_connect"`
+	Offset       uint64    `json:"offset"`
+	Calc         uint64    `json:"calc"`
+	Behind       bool      `json:"behind,omitempty"`
+	Verdict      string    `json:"verdict"`
+	WrapsAt      time.Time `json:"wraps_at"`
+}
+
+// counterOutlook judges an access point file's bytes at now; nil when they are not one.
+func counterOutlook(b []byte, now time.Time) *CounterOutlook {
+	ap, err := radio.ParseAccessPoint(b)
+	if err != nil {
+		return nil
+	}
+	calc, behind := ap.Calc(now)
+	return &CounterOutlook{FirstConnect: ap.FirstConnect, Offset: ap.Offset, Calc: calc, Behind: behind, Verdict: radio.CounterVerdict(0, calc, true, 0), WrapsAt: ap.WrapsAt()}
+}
+
+// radioNow is the clock the inspection judges the counter by; a test's seam.
+var radioNow = time.Now
 
 // Empty says whether the backup holds no pairing at all.
 func (b RadioBackup) Empty() bool {
@@ -219,6 +247,7 @@ func InspectRadioBackup(sbk string) (RadioBackup, error) {
 		case strings.HasPrefix(rel, "crRFD/data/"):
 			if m := sgtinFileRe.FindStringSubmatch(path.Base(rel)); m != nil && m[2] == "ap" {
 				b.HmIP.IdentitySGTIN = m[1]
+				b.HmIP.SecurityCounter = counterOutlook([]byte(small(1<<16)), radioNow())
 			}
 		case rel == "crRFD/hmip_user.conf":
 			b.HmIP.LocalKey = radio.ReadLocalKey(small(1 << 20)).Enabled()

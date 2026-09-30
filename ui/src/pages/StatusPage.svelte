@@ -504,10 +504,15 @@
                 </ul>
             {/if}
         {/if}
-        {#if status.clock?.state === 'timeout' && !status.clock.synchronised}
+        {#if status.clock && !status.clock.synchronised}
             <!-- task 94: the boot's clock gate ran out - no RTC and no time server at boot. A quiet notice,
-                 not a warning: the box works and keeps asking; it goes once chrony has synchronised -->
-            <div class="ol-notice" data-notice="clock">{t('The clock is not synchronised.')}<Help>{t('The system started without a time from a real-time clock or a time server, and the radio stack did not wait any longer. It keeps asking its time servers; until one answers, times in the log and on devices may be wrong.')}</Help></div>
+                 not a warning: the box works and keeps asking; it goes once chrony has synchronised.
+                 openccu-lite task 299: a time server whose time lies outside the image's window is not
+                 taken either, and a refused real-time clock is named -->
+            <div class="ol-notice" data-notice="clock" data-clock-state={status.clock.state}>{t('The clock is not synchronised.')}
+                {#if status.clock.state === 'ntp-implausible'}{' '}{t("The time server's time is outside what this image trusts (from its build to 15 years after) and was not taken. Check the time servers on the Network page.")}{/if}
+                {#if status.clock.rtc_implausible}{' '}{t('The real-time clock said {time}, outside what this image trusts (from its build to 15 years after), and was not used.', {time: new Date(status.clock.rtc_implausible).toLocaleString()})}{/if}
+                <Help>{t('The system started without a time from a real-time clock or a time server, and the radio stack did not wait any longer. It keeps asking its time servers; until one answers, times in the log and on devices may be wrong.')}</Help></div>
         {/if}
     </div>
 

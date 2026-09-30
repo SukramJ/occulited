@@ -269,8 +269,21 @@ func Log4j2Config(tmpl string, syslog, defaults map[string]string, level string)
 		}
 		out = strings.Join(with, "\n")
 	}
-	return log4jLevelRe.ReplaceAllString(out, `level="`+strings.ToLower(level)+`"`)
+	// openccu-lite task 299: a logger line the template marks keeps its own level whatever
+	// LOGLEVEL_HMIP says - the one that writes the HmIP security counter lines at every start
+	lines := strings.Split(out, "\n")
+	for i, l := range lines {
+		if strings.Contains(l, Log4j2FixedLevelMarker) {
+			continue
+		}
+		lines[i] = log4jLevelRe.ReplaceAllString(l, `level="`+strings.ToLower(level)+`"`)
+	}
+	return strings.Join(lines, "\n")
 }
+
+// Log4j2FixedLevelMarker marks a logger line of the template whose level the render leaves alone
+// (an XML comment on the line: <!-- occulite:fixed-level -->).
+const Log4j2FixedLevelMarker = "occulite:fixed-level"
 
 // log4jLevelRe is upstream's s/level=".*"/.../g: greedy within a line.
 var log4jLevelRe = regexp.MustCompile(`level=".*"`)
