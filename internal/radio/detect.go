@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -46,6 +47,14 @@ type Module struct {
 	HmRFAddress string `json:"hmrf_address,omitempty"`
 	HmIPAddress string `json:"hmip_address,omitempty"`
 	Version     string `json:"version,omitempty"`
+	// Application is the coprocessor's firmware line, as detect_radio_module tells the lines apart
+	// (openccu-lite B-282): DualCoPro_App - BidCos-RF and HmIP (an RPI-RF-MOD, an HmIP-RFUSB with
+	// firmware 4.x); HMIP_TRX_App - HmIP only (an HmIP-RFUSB below firmware 4, e.g. 1.8.3, for which
+	// the tool reports no BidCos address); Co_CPU_App - the HM-MOD-RPI-PCB's legacy coprocessor.
+	// The tool prints the name of no line, so it is derived from the hardware and the version by
+	// the tool's own rule; empty where the line is not known (the Telekom stick, a module without
+	// a serial).
+	Application string `json:"application,omitempty"`
 	// Probe is ok, none (nothing answered), timeout (the limit hit) or error (the probe failed
 	// otherwise); Detail carries the probe's message when it is not ok.
 	Probe  string `json:"probe"`
@@ -522,7 +531,7 @@ func (d Detector) probe(ctx context.Context, m *Module, limit time.Duration, log
 	start := d.now()
 	out, err := d.run()(pctx, d.tool("/bin/detect_radio_module"), d.path(m.Node))
 	took := d.now().Sub(start).Round(10 * time.Millisecond)
-	m.Hardware, m.Serial, m.SGTIN, m.HmRFAddress, m.HmIPAddress, m.Version = "", "", "", "", "", ""
+	m.Hardware, m.Serial, m.SGTIN, m.HmRFAddress, m.HmIPAddress, m.Version, m.Application = "", "", "", "", "", "", ""
 	text := strings.TrimSpace(string(out))
 	switch {
 	case pctx.Err() != nil && errors.Is(pctx.Err(), context.DeadlineExceeded):
@@ -553,7 +562,42 @@ func (d Detector) probe(ctx context.Context, m *Module, limit time.Duration, log
 		m.Serial, m.SerialFromSGTIN = m.SGTIN[len(m.SGTIN)-10:], true
 		logf("%s: no serial reported; %s from the SGTIN (an HmIP-only stick)", m.Node, m.Serial)
 	}
+	m.Application = applicationOf(m.Hardware, m.Version, m.SGTIN, m.SerialFromSGTIN)
+	if m.Application == AppHmIPOnly {
+		logf("%s: %s serial %s firmware %s, %s: HmIP only (%s)", m.Node, m.Hardware, m.Serial, m.Version, m.Application, took)
+		return
+	}
 	logf("%s: %s serial %s firmware %s (%s)", m.Node, m.Hardware, m.Serial, m.Version, took)
+}
+
+// The coprocessor firmware lines (Module.Application).
+const (
+	AppDualCoPro = "DualCoPro_App"
+	AppHmIPOnly  = "HMIP_TRX_App"
+	AppLegacy    = "Co_CPU_App"
+)
+
+// applicationOf derives the firmware line from the probe's fields, by detect_radio_module's own
+// rule: an HmIP-RFUSB below firmware 4 runs the HmIP-only line and reports no BidCos address, one
+// at 4.x the dual line; an RPI-RF-MOD is always dual; an HM-MOD-RPI-PCB that reports no SGTIN is
+// the legacy coprocessor. Unknown (empty) for the Telekom stick and a module without a serial.
+func applicationOf(hardware, version, sgtin string, serialFromSGTIN bool) string {
+	switch hardware {
+	case "HMIP-RFUSB":
+		if major, _, ok := strings.Cut(version, "."); ok {
+			if n, err := strconv.Atoi(major); err == nil && n < 4 {
+				return AppHmIPOnly
+			}
+		}
+		return AppDualCoPro
+	case "RPI-RF-MOD":
+		return AppDualCoPro
+	case "HM-MOD-RPI-PCB":
+		if !serialFromSGTIN && (sgtin == "" || sgtin == "n/a" || sgtin == "-") {
+			return AppLegacy
+		}
+	}
+	return ""
 }
 
 // factoryReset resets the HmIP modules once when the marker is there, as S47 did, then removes

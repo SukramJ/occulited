@@ -26,7 +26,10 @@
     import DevicesImportNotice from './DevicesImportNotice.svelte';
 
     // paths (task 150): how hmipserver can reach an HmIP option - "direct" on its node, "multimacd" through /dev/mmd_hmip
-    interface Option { id: string; hardware: string; node?: string; device_type?: string; sgtin?: string; version?: string; paths?: string[] }
+    // hmip_only (openccu-lite B-282): the module carries HmIP alone - an HmIP-RFUSB on the HmIP-only
+    // firmware line (application HMIP_TRX_App, firmware below 4), the Telekom stick, a module
+    // without a serial: not offered for BidCos-RF, reached directly only
+    interface Option { id: string; hardware: string; node?: string; device_type?: string; sgtin?: string; version?: string; paths?: string[]; application?: string; hmip_only?: boolean }
     interface Daemon { run: boolean; node?: string; reason: string }
     interface Role { hardware: string; node?: string; serial: string; sgtin?: string }
     interface Plan {
@@ -168,7 +171,11 @@
     }
     /** the HmIP dropdown's entries: one per module and path, the path's /dev node named */
     function hmipEntries(list: Option[]): {value: string; label: string}[] {
-        return list.flatMap((o) => (o.paths?.length ? o.paths : ['']).map((path) => ({value: `${o.id}|${path}`, label: `${o.hardware} · ${o.id} · ${pathText(o, path, '/dev/mmd_hmip')}`})));
+        return list.flatMap((o) => (o.paths?.length ? o.paths : ['']).map((path) => ({value: `${o.id}|${path}`, label: `${o.hardware} · ${o.id} · ${pathText(o, path, '/dev/mmd_hmip')}${o.hmip_only ? ' · ' + t('HmIP only - firmware {version}', {version: o.version ?? '?'}) : ''}`})));
+    }
+    /** the HmIP-only sticks among the options (B-282): the page says why they are HmIP only and where the dual firmware is flashed */
+    function hmipOnlySticks(list: Option[]): Option[] {
+        return list.filter((o) => o.hmip_only && o.hardware === 'HMIP-RFUSB');
     }
     /** BidCos-RF reaches a module on the header or an HB-RF-USB/ETH through multimacd, the HM-CFG-USB-2 over USB */
     function bidcosLabel(o: Option): string {
@@ -344,6 +351,9 @@
                                 {/if}
                             </select>
                         </label>
+                        {#each hmipOnlySticks(st.options.hmip) as o (o.id)}
+                            <p class="ol-muted meta conn-hmip-only" data-hmip-only={o.id}>{t('{hardware} {id} runs the HmIP-only firmware {version}: BidCos-RF cannot use it, and hmipserver reaches it directly only, not through multimacd. The DualCoPro firmware adds BidCos-RF; the radio firmware section flashes it.', {hardware: o.hardware, id: o.id, version: o.version ?? '?'})} <a href="/system/updates#radio-firmware" use:link>{t('Radio firmware')}</a></p>
+                        {/each}
                     {/if}
                 </div>
                 {/snippet}

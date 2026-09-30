@@ -2477,6 +2477,9 @@ const CATALOGUE: Record<string, {de: string; en?: string}> = {
     Chosen: {de: 'Gewählt'},
     'path automatic': {de: 'Weg automatisch'},
     '{mmd} through multimacd on {node}': {de: '{mmd} über multimacd an {node}'},
+    // openccu-lite B-282: an HmIP-RFUSB on the HmIP-only firmware line
+    'HmIP only - firmware {version}': {de: 'nur HmIP - Firmware {version}'},
+    '{hardware} {id} runs the HmIP-only firmware {version}: BidCos-RF cannot use it, and hmipserver reaches it directly only, not through multimacd. The DualCoPro firmware adds BidCos-RF; the radio firmware section flashes it.': {de: '{hardware} {id} läuft mit der reinen HmIP-Firmware {version}: BidCos-RF kann es nicht nutzen, und hmipserver erreicht es nur direkt, nicht über multimacd. Die DualCoPro-Firmware ergänzt BidCos-RF; der Abschnitt Funk-Firmware flasht sie.'},
     'through multimacd': {de: 'über multimacd'},
     directly: {de: 'direkt'},
     'shares one module between rfd and hmipserver': {de: 'teilt ein Modul zwischen rfd und hmipserver'},

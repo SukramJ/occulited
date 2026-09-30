@@ -728,6 +728,9 @@ function cookieJar(req) {
 const CONN_MODULE = {id: '0000000A02', hardware: 'HMIP-RFUSB', node: '/dev/raw-uart', device_type: 'eQ-3 HmIP-RFUSB@usb-0000:02:1b.0-1', sgtin: '3014F711A000040000000A02', version: '4.4.18'};
 // task 150: the HmIP option names the paths hmipserver can take to it; BidCos-RF's has none
 const CONN_HMIP = {...CONN_MODULE, paths: ['direct', 'multimacd']};
+// openccu-lite B-282: stub-conn-trx=1 - the same stick on the HmIP-only firmware line (HMIP_TRX_App,
+// firmware 1.8.3): HmIP directly only, not offered for BidCos-RF, no routing flags
+const CONN_TRX = {...CONN_MODULE, version: '1.8.3', paths: ['direct'], application: 'HMIP_TRX_App', hmip_only: true};
 // task 150: the conflicts the box refuses at the preview (plan.go's Conflict)
 function connConflict(ch) {
     if (ch.hmip_path === 'direct' && ch.bidcos !== 'none') return 'HmIP cannot open the module directly while BidCos-RF uses it through the multiplexer';
@@ -736,15 +739,16 @@ function connConflict(ch) {
 const connState = new Map();
 // task 199: `basic` is a module that carries HmIP but cannot route for HmIP-HAPs and DRAPs (an
 // HM-MOD-RPI-PCB against an RPI-RF-MOD) - the red mark before the routing sentence
-function connPlan(ch, missing, basic) {
-    const stick = {hardware: 'HMIP-RFUSB', node: '/dev/raw-uart', device_type: CONN_MODULE.device_type, address: '0xBC0A08', serial: '0000000A02', sgtin: CONN_MODULE.sgtin, version: '4.4.18', module: 0};
+function connPlan(ch, missing, basic, trx) {
+    const stick = {hardware: 'HMIP-RFUSB', node: '/dev/raw-uart', device_type: CONN_MODULE.device_type, address: '0xBC0A08', serial: '0000000A02', sgtin: CONN_MODULE.sgtin, version: trx ? '1.8.3' : '4.4.18', module: 0};
     // B-272: the board's module when it is the choice (stub-conn-board=detected)
     const board = {hardware: 'HM-MOD-RPI-PCB', node: '/dev/raw-uart1', device_type: BOARD_MODULE.device_type, address: '0x3D0A01', serial: BOARD_MODULE.id, sgtin: BOARD_MODULE.sgtin, version: '2.8.6', module: 1};
     const hmrf = ch.bidcos === BOARD_MODULE.id ? board : stick;
     const hmip = ch.hmip === BOARD_MODULE.id ? board : stick;
-    const none = ch.bidcos === 'none';
+    // B-282: the HmIP-only stick carries no BidCos-RF and takes no multimacd path
+    const none = ch.bidcos === 'none' || trx;
     // HmIP through multimacd: with BidCos-RF on the module, or by choice (task 150)
-    const mmdHmIP = !missing && (!none || ch.hmip_path === 'multimacd');
+    const mmdHmIP = !missing && !trx && (!none || ch.hmip_path === 'multimacd');
     const mmd = !none || mmdHmIP;
     const mmdNode = none ? hmip.node : hmrf.node;
     return {
@@ -752,7 +756,7 @@ function connPlan(ch, missing, basic) {
         rfd: none ? {run: true, reason: 'BidCos-RF: a LAN gateway'} : {run: true, node: '/dev/mmd_bidcos', reason: 'BidCos-RF: the module through /dev/mmd_bidcos, a LAN gateway'},
         hmipserver: missing ? {run: true, reason: 'no HmIP module: the VirtualDevices half alone'} : !mmdHmIP ? {run: true, node: hmip.node, reason: `HmIP on ${hmip.node} directly`} : {run: true, node: '/dev/mmd_hmip', reason: `HmIP on ${mmdNode} through the multiplexer`},
         ...(none ? {} : {hmrf}), ...(missing ? {missing_hmip: missing} : {hmip}),
-        rfd_local: !none, rfd_usb_adapter: false, rfd_lan_gateway: true, hmip_advanced: !missing && !basic,
+        rfd_local: !none, rfd_usb_adapter: false, rfd_lan_gateway: true, hmip_advanced: !missing && !basic && !trx,
         interfaces: missing ? ['BidCos-RF', 'VirtualDevices'] : ['BidCos-RF', 'VirtualDevices', 'HmIP-RF'], notes: [],
     };
 }
@@ -796,8 +800,9 @@ function connStatus(jar) {
     const fatal = connFatal(jar);
     const board = connBoard(jar);
     const withBoard = !!board?.detected;
-    const options = {hmip: missing ? [] : [CONN_HMIP, ...(withBoard ? [{...BOARD_MODULE, paths: ['multimacd']}] : [])], bidcos: missing ? [] : [CONN_MODULE, ...(withBoard ? [BOARD_MODULE] : [])]};
-    const plan = connPlan(choices, missing, jar['stub-conn-basic'] === '1');
+    const trx = jar['stub-conn-trx'] === '1';
+    const options = {hmip: missing ? [] : [trx ? CONN_TRX : CONN_HMIP, ...(withBoard ? [{...BOARD_MODULE, paths: ['multimacd']}] : [])], bidcos: missing || trx ? [] : [CONN_MODULE, ...(withBoard ? [BOARD_MODULE] : [])]};
+    const plan = connPlan(choices, missing, jar['stub-conn-basic'] === '1', trx);
     const rolesOf = (id) => [...(plan.hmrf?.serial === id ? ['BidCos-RF'] : []), ...(plan.hmip?.serial === id ? ['HmIP-RF'] : [])];
     const modules = [...(missing ? [] : [connModule(CONN_MODULE, rolesOf(CONN_MODULE.id))]), ...(withBoard ? [connModule(BOARD_MODULE, rolesOf(BOARD_MODULE.id))] : [])];
     return {available: true, choices, options, plan, mode: 'NORMAL', ...(fatal ? {hmip_fatal: fatal} : {}), modules, ...(board ? {hb_rf_eth: board} : {}), running: null, last: s.last};

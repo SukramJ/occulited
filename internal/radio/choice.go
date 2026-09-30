@@ -132,26 +132,34 @@ func (m Module) HmIPCapable() bool {
 	return m.OK() && !m.USBAdapter && m.Serial != "" && m.HmIPAddress != "" && m.HmIPAddress != "0x000000"
 }
 
+// HmIPOnly: the module carries HmIP and nothing else - the Telekom stick (S47's exclusion), a
+// module that reported no serial (deviation 16), or an HmIP-RFUSB on the HmIP-only firmware line
+// (HMIP_TRX_App, firmware below 4; openccu-lite B-282, deviation 17). rfd cannot use it, and
+// multimacd refuses its coprocessor ("Please install DualCoPro Firmware"), so hmipserver opens it
+// directly.
+func (m Module) HmIPOnly() bool {
+	return m.Hardware == "HMIP-RFUSB-TK" || m.SerialFromSGTIN || m.Application == AppHmIPOnly
+}
+
 // BidCosCapable: the module can carry rfd - the HM-CFG-USB-2, or a module with a serial and a
-// BidCos address that is not the Telekom stick (S47's exclusion) nor a module that reported no serial
-// (deviation 16).
+// BidCos address that is not HmIP-only.
 func (m Module) BidCosCapable() bool {
 	if m.USBAdapter {
 		return m.Serial != ""
 	}
-	return m.OK() && m.Serial != "" && m.HmRFAddress != "" && m.Hardware != "HMIP-RFUSB-TK" && !m.SerialFromSGTIN
+	return m.OK() && m.Serial != "" && m.HmRFAddress != "" && !m.HmIPOnly()
 }
 
 // HmIPPaths are the ways hmipserver can reach the module (task 150): a dual-protocol
-// HM-MOD-RPI-PCB only through multimacd (deviation 15), an HmIP-only stick (the TK, a module
-// without a serial) only directly (multimacd refuses its coprocessor), the others either way.
+// HM-MOD-RPI-PCB only through multimacd (deviation 15), an HmIP-only module (HmIPOnly) only
+// directly (multimacd refuses its coprocessor), the others either way.
 func (m Module) HmIPPaths() []string {
 	switch {
 	case !m.HmIPCapable():
 		return nil
 	case m.Hardware == "HM-MOD-RPI-PCB" && m.HmRFAddress != "" && m.HmRFAddress != "0x000000" && !m.SerialFromSGTIN:
 		return []string{PathMultimacd}
-	case m.Hardware == "HMIP-RFUSB-TK" || m.SerialFromSGTIN || m.Hardware == "HM-MOD-RPI-PCB":
+	case m.HmIPOnly() || m.Hardware == "HM-MOD-RPI-PCB":
 		return []string{PathDirect}
 	}
 	return []string{PathDirect, PathMultimacd}
@@ -168,6 +176,11 @@ type Option struct {
 	Version    string `json:"version,omitempty"`
 	// Paths: for HmIP, how hmipserver can reach it (HmIPPaths)
 	Paths []string `json:"paths,omitempty"`
+	// Application is the coprocessor's firmware line (Module.Application); HmIPOnly says the
+	// module carries HmIP alone (openccu-lite B-282) - the page says why it is not offered for
+	// BidCos-RF or through multimacd, and where the dual firmware is flashed.
+	Application string `json:"application,omitempty"`
+	HmIPOnly    bool   `json:"hmip_only,omitempty"`
 }
 
 // Options are the modules each process can be pinned to on this detection.
@@ -180,7 +193,7 @@ type Options struct {
 func ChoiceOptions(det Detection) Options {
 	o := Options{HmIP: []Option{}, BidCos: []Option{}}
 	for _, m := range det.Modules {
-		opt := Option{ID: m.Serial, Hardware: m.Hardware, Node: m.Node, DeviceType: m.DeviceType, SGTIN: m.SGTIN, Version: m.Version}
+		opt := Option{ID: m.Serial, Hardware: m.Hardware, Node: m.Node, DeviceType: m.DeviceType, SGTIN: m.SGTIN, Version: m.Version, Application: m.Application, HmIPOnly: m.OK() && !m.USBAdapter && m.HmIPOnly()}
 		if m.USBAdapter {
 			opt.Hardware, opt.DeviceType = "HM-CFG-USB-2", "USB"
 		}

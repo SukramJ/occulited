@@ -410,7 +410,13 @@ func MakePlan(in Inputs) Plan {
 	p.HmIPServer = Daemon{Run: true, Reason: "VirtualDevices"}
 	if p.HmIP != nil {
 		p.HmIPServerHmIP = true
-		p.HmIPServerAdvanced = p.HmIP.Hardware == "RPI-RF-MOD" || p.HmIP.Hardware == "HMIP-RFUSB"
+		// deviation 17 (openccu-lite B-282): an HmIP-RFUSB on the HmIP-only firmware line takes no
+		// routing flags - hmipserver logs "Routing was enabled in configuration but cannot be
+		// initialized" on firmware 1.8.3 (upstream sets them for every RFUSB)
+		p.HmIPServerAdvanced = p.HmIP.Hardware == "RPI-RF-MOD" || (p.HmIP.Hardware == "HMIP-RFUSB" && in.Detection.Modules[p.HmIP.Module].Application != AppHmIPOnly)
+		if p.HmIP.Hardware == "HMIP-RFUSB" && !p.HmIPServerAdvanced {
+			note("HmIP: the HmIP-RFUSB runs the HmIP-only firmware line (%s); no routing flags (deviation 17)", in.Detection.Modules[p.HmIP.Module].Version)
+		}
 		if p.Multimacd.Run && p.Multimacd.Node == p.HmIP.Node {
 			p.HmIPServer.Node = "/dev/mmd_hmip"
 			p.HmIPServer.Reason = "HmIP on " + p.HmIP.Node + " through the multiplexer"

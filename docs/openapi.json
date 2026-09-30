@@ -6259,11 +6259,17 @@
       },
       "RadioOption": {
         "properties": {
+          "application": {
+            "type": "string"
+          },
           "device_type": {
             "type": "string"
           },
           "hardware": {
             "type": "string"
+          },
+          "hmip_only": {
+            "type": "boolean"
           },
           "id": {
             "type": "string"

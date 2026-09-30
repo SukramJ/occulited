@@ -320,3 +320,83 @@ func TestPlanHmIPPathByChoice(t *testing.T) {
 		t.Fatalf("auto: %q", c)
 	}
 }
+
+// openccu-lite B-282: an HmIP-RFUSB on the HmIP-only firmware line (HMIP_TRX_App, firmware
+// below 4 - detect_radio_module reports no BidCos address for it) carries HmIP alone, directly:
+// not offered for BidCos-RF, no multimacd path, no routing flags.
+func TestHmIPOnlyRFUSB(t *testing.T) {
+	for _, tc := range []struct {
+		hardware, version, sgtin string
+		fromSGTIN                bool
+		want                     string
+	}{
+		{"RPI-RF-MOD", "4.4.22", "3014F711A0001F0000000A03", false, AppDualCoPro},
+		{"HMIP-RFUSB", "4.4.18", "3014F711A000040000000A01", false, AppDualCoPro},
+		{"HMIP-RFUSB", "2.8.6", "3014F711A000040000000A01", false, AppHmIPOnly},
+		{"HMIP-RFUSB", "1.8.3", "3014F711A000040000000A07", false, AppHmIPOnly},
+		{"HMIP-RFUSB", "", "", false, AppDualCoPro},
+		{"HMIP-RFUSB-TK", "4.2.14", "3014F5AC940004000000TK01", false, ""},
+		{"HM-MOD-RPI-PCB", "2.8.6", "n/a", false, AppLegacy},
+		{"HM-MOD-RPI-PCB", "2.8.6", "-", false, AppLegacy},
+		{"HM-MOD-RPI-PCB", "2.8.6", "3014F711A0000000AB12CD34", true, ""},
+	} {
+		if got := applicationOf(tc.hardware, tc.version, tc.sgtin, tc.fromSGTIN); got != tc.want {
+			t.Errorf("applicationOf(%s %s %s %v) = %q, want %q", tc.hardware, tc.version, tc.sgtin, tc.fromSGTIN, got, tc.want)
+		}
+	}
+	root := sandbox(t, map[string]string{"raw-uart1": "eQ-3 HmIP-RFUSB@usb-0000:01:00.0-1.3"})
+	fp := &fakeProbe{answers: map[string]string{"raw-uart1": "HMIP-RFUSB 0000000A07 3014F711A000040000000A07 0x000000 0x7F7A57 1.8.3"}}
+	det := Detector{Root: root, Run: fp.run, Sleep: func(time.Duration) {}}.Detect(context.Background())
+	var m Module
+	for _, x := range det.Modules {
+		if x.Name == "raw-uart1" {
+			m = x
+		}
+	}
+	if !m.OK() || m.Serial != "0000000A07" || m.Version != "1.8.3" || m.Application != AppHmIPOnly || !m.HmIPOnly() {
+		t.Fatalf("module: %+v", m)
+	}
+	if !m.HmIPCapable() || m.BidCosCapable() || fmt.Sprint(m.HmIPPaths()) != "[direct]" {
+		t.Fatalf("HmIP only: %v %v %v", m.HmIPCapable(), m.BidCosCapable(), m.HmIPPaths())
+	}
+	if !strings.Contains(strings.Join(det.Log, "\n"), "HMIP_TRX_App: HmIP only") {
+		t.Fatalf("log: %q", det.Log)
+	}
+	dual := rfusb("/dev/raw-uart2")
+	dual.Application = AppDualCoPro
+	o := ChoiceOptions(Detection{Modules: []Module{m, dual}})
+	if len(o.HmIP) != 2 || !o.HmIP[0].HmIPOnly || o.HmIP[0].Application != AppHmIPOnly || fmt.Sprint(o.HmIP[0].Paths) != "[direct]" || o.HmIP[1].HmIPOnly || fmt.Sprint(o.HmIP[1].Paths) != "[direct multimacd]" {
+		t.Fatalf("hmip options: %+v", o.HmIP)
+	}
+	if len(o.BidCos) != 1 || o.BidCos[0].ID != dual.Serial || o.BidCos[0].HmIPOnly {
+		t.Fatalf("bidcos options (the dual stick alone): %+v", o.BidCos)
+	}
+	// alone, automatic: HmIP on it directly, no BidCos-RF role, no multimacd, no routing flags
+	p := MakePlan(inputs(m))
+	if p.HmIP == nil || p.HmIP.Serial != "0000000A07" || p.HmRF != nil || p.RFD.Run || p.Multimacd.Run || p.HmIPServer.Node != m.Node || p.HmIPServerAdvanced {
+		t.Fatalf("plan: %+v %+v %+v %+v advanced=%v", p.HmIP, p.HmRF, p.Multimacd, p.HmIPServer, p.HmIPServerAdvanced)
+	}
+	if !strings.Contains(strings.Join(p.Notes, "\n"), "deviation 17") {
+		t.Fatalf("notes: %q", p.Notes)
+	}
+	// the dual stick keeps its routing flags
+	if p := MakePlan(inputs(dual)); !p.HmIPServerAdvanced {
+		t.Fatal("the dual stick: routing flags")
+	}
+	// pinned for BidCos-RF it is missing; through multimacd it is a conflict; directly it is fine
+	path := func(in Inputs, v string) Inputs {
+		in.HmIPUserConf = SetHmIPPath(in.HmIPUserConf, v)
+		return in
+	}
+	in := inputs(m)
+	in.RFDConf, in.RFDConfExists = SetBidCosChoice(rfdTemplate, "0000000A07"), true
+	if p := MakePlan(in); p.HmRF != nil || p.MissingBidCos != "0000000A07" {
+		t.Fatalf("pinned for BidCos-RF: %+v missing=%q", p.HmRF, p.MissingBidCos)
+	}
+	if p := MakePlan(path(inputs(m), PathMultimacd)); p.Conflict == "" || p.Multimacd.Run {
+		t.Fatalf("through multimacd: %q %+v", p.Conflict, p.Multimacd)
+	}
+	if p := MakePlan(path(inputs(m), PathDirect)); p.Conflict != "" || p.HmIPServer.Node != m.Node {
+		t.Fatalf("direct: %q", p.Conflict)
+	}
+}

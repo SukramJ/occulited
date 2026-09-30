@@ -366,3 +366,20 @@ test('a user sees the pending board without Try now', async ({page, baseURL}) =>
     await expect(notice).toContainText('does not answer yet');
     await expect(notice.getByRole('button')).toHaveCount(0);
 });
+
+// openccu-lite B-282: an HmIP-RFUSB on the HmIP-only firmware line (HMIP_TRX_App, 1.8.3) is offered
+// for HmIP-RF directly only, with the reason in the entry; not for BidCos-RF; the card says where the
+// dual firmware is flashed, and that the stick cannot route
+test('an HmIP-only stick: HmIP directly, not for BidCos-RF, the reason and the firmware hint', async ({page, baseURL}) => {
+    await page.context().addCookies([{name: 'stub-conn', value: `conn-${Math.random().toString(36).slice(2)}`, url: baseURL!}, {name: 'stub-conn-trx', value: '1', url: baseURL!}]);
+    await page.goto('/radio');
+    const hmip = page.locator('[data-process="hmipserver"]');
+    await expect(hmip.locator('.conn-now')).toHaveText('Automatic: HMIP-RFUSB 0000000A02, directly on /dev/raw-uart');
+    await expect(hmip).toContainText('No routing through HmIP-HAPs or DRAPs');
+    await expect(page.getByLabel('Module for HmIP-RF').locator('option')).toHaveText(['Automatic', 'HMIP-RFUSB · 0000000A02 · /dev/raw-uart · HmIP only - firmware 1.8.3']);
+    await expect(page.getByLabel('Module for BidCos-RF').locator('option')).toHaveText(['Automatic', 'No local radio (LAN gateways only)']);
+    const why = hmip.locator('[data-hmip-only="0000000A02"]');
+    await expect(why).toContainText('HMIP-RFUSB 0000000A02 runs the HmIP-only firmware 1.8.3: BidCos-RF cannot use it, and hmipserver reaches it directly only, not through multimacd. The DualCoPro firmware adds BidCos-RF; the radio firmware section flashes it.');
+    await expect(why.getByRole('link', {name: 'Radio firmware'})).toHaveAttribute('href', '/system/updates#radio-firmware');
+    await expect(page.locator('[data-process="multimacd"]')).toContainText('not needed');
+});
