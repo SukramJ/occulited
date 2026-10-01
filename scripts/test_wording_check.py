@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Tests for scripts/wording-check.py: the "box" words (task 160) and the du-forms (B-23).
+"""Tests for scripts/wording-check.py: the "box" words (task 160), the du-forms (B-23) and
+"Netzschlüssel" (task 305).
 
     python3 scripts/test_wording_check.py
 """
@@ -69,6 +70,21 @@ class DuTest(unittest.TestCase):
         ]:
             with self.subTest(text=text):
                 self.assertFalse(wc.has_du_form(text))
+
+
+class NetzTest(unittest.TestCase):
+    def test_netzschluessel(self):
+        for text, want in [
+            ("HmIP-Geräte teilen sich einen Netzschlüssel.", True),
+            ("Der HmIP-Netzschlüssel", True),
+            ("des Netzschlüssels", True),
+            ("Netzschlüssel", True),
+            ("HmIP-Geräte teilen sich einen Netzwerkschlüssel.", False),
+            ("Der HmIP-Netzwerkschlüssel", False),
+            ("Sicherheitsschlüssel des Netzes", False),
+        ]:
+            with self.subTest(text=text):
+                self.assertEqual(wc.has_old_netz(text), want)
 
 
 class TreeTest(unittest.TestCase):
