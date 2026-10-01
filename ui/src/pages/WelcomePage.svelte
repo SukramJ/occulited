@@ -112,7 +112,8 @@
     {#if lkChoice === 'local'}
         <div class="ol-notice" data-notice="lk-backup">{t('The key then lies in a file on this system and in every backup - whoever has it can join the network, so protecting the backups becomes crucial.')} <a href="/system/backup">{t('Backup')}</a></div>
     {/if}
-    <p class="ol-muted">{t('Either way this can be changed later on the Interfaces page, under Local key mode. Generating the key restarts HmIP-RF.')}</p>
+    <!-- B-290: the section is the Keys page's since task 183, no longer the Interfaces page's -->
+    <p class="ol-muted" data-welcome-lk-later>{t('Either way this can be changed later on the Keys page, under Local key mode. Generating the key restarts HmIP-RF.')} <a href="/system/keys#local-key" use:link>{t('Keys')}</a></p>
 {/if}
 
 <h2>{lkStep ? 4 : 3} · {t('A frontend')}</h2>

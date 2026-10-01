@@ -107,6 +107,19 @@ test('the welcome page: a step on an empty HmIP network, an explicit choice befo
     await expect(page.getByRole('button', {name: 'Open the catalogue'})).toBeDisabled();
     await expect(page.getByLabel('Generate a local key now')).not.toBeChecked();
     await expect(page.getByLabel("Keep eQ-3's key server")).not.toBeChecked();
+    // B-290: local key mode is on the Keys page (task 183), not on the Interfaces page
+    const later = page.locator('[data-welcome-lk-later]');
+    await expect(later).toContainText('Either way this can be changed later on the Keys page, under Local key mode.');
+    await expect(later).not.toContainText('Interfaces');
+    await expect(later.getByRole('link', {name: 'Keys'})).toHaveAttribute('href', '/system/keys#local-key');
+    await page.addInitScript(() => localStorage.setItem('ol.language', 'de'));
+    await page.reload();
+    await expect(later).toContainText('So oder so lässt sich das später auf der Seite Schlüssel unter „Lokaler Schlüssel" ändern.');
+    await expect(later.getByRole('link', {name: 'Schlüssel'})).toHaveAttribute('href', '/system/keys#local-key');
+    await page.evaluate(() => localStorage.setItem('ol.language', 'en'));
+    await page.addInitScript(() => localStorage.setItem('ol.language', 'en'));
+    await page.reload();
+    await expect(later).toContainText('on the Keys page');
     await page.getByLabel('Generate a local key now').check();
     await expect(page.locator('[data-notice="lk-backup"]')).toContainText('protecting the backups becomes crucial');
     await expect(page.locator('[data-notice="lk-backup"]').getByRole('link', {name: 'Backup'})).toHaveAttribute('href', '/system/backup');
