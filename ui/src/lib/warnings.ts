@@ -226,8 +226,9 @@ export function warningText(w: Warning, words: Words): string {
             // openccu-lite task 299: hmipserver held back for a trusted clock on a wrapped access point
             return t('HmIP-RF is waiting for a trusted clock: {reason} for access point {sgtin}, and the clock came neither from a real-time clock nor from a time server ({state}). A start now could set the HmIP security counter below what the devices have seen and lock every HmIP device out. Connect a time server, or set the time by hand on the Network page; hmipserver starts then.', {sgtin: p.sgtin ?? '', state: p.clock_state ?? w.variant, reason: p.behind ? t("the clock is before the access point's first connection") : t('the computed security counter has passed 2^32')});
         case 'hmip-local-key':
-            // task 149: after the switch to local key mode most HmIP devices went silent
-            return t("{n} of {total} HmIP devices have not answered since the switch to local key mode: the key was probably not the network's. The way back to eQ-3's key server is on the Interfaces page.", {n: p.unreachable ?? 0, total: p.total ?? 0});
+            // task 149: after the switch to local key mode most HmIP devices went silent; the way back is
+            // on the Keys page since task 183 (B-291)
+            return t("{n} of {total} HmIP devices have not answered since the switch to local key mode: the key was probably not the network's. The way back to eQ-3's key server is on the Keys page, under Local key mode.", {n: p.unreachable ?? 0, total: p.total ?? 0});
         case 'journal-target': {
             // task 216: the USB stick that is ram-sync's target is not plugged in
             if (w.variant === 'usb')

@@ -91,6 +91,13 @@ test('a wrong key: the devices go silent, the page and the Status page say so, w
     const w = page.locator('[data-warnings] [data-notice="hmip-local-key"]');
     await expect(w).toContainText('3 of 3 HmIP devices have not answered');
     await expect(w.getByRole('link', {name: 'Local key mode'})).toHaveAttribute('href', '/system/keys#local-key');
+    // B-291: the way back is on the Keys page (task 183), not on the Interfaces page
+    await expect(w).toContainText("The way back to eQ-3's key server is on the Keys page, under Local key mode.");
+    await expect(w).not.toContainText('Interfaces');
+    await page.addInitScript(() => localStorage.setItem('ol.language', 'de'));
+    await page.reload();
+    await expect(w).toContainText('Der Weg zurück zum Schlüsselserver von eQ-3 ist auf der Seite Schlüssel unter „Lokaler Schlüssel".');
+    await expect(w).not.toContainText('Schnittstellen');
 });
 
 test('the welcome page: a step on an empty HmIP network, an explicit choice before Done', async ({page, baseURL}) => {
