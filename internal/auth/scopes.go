@@ -3,6 +3,7 @@ package auth
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -72,8 +73,35 @@ const (
 	ScopeSelf Scope = "self"
 )
 
+// The addon ingress scope (openccu-lite task 307, GitHub issue #3): "addon:<id>" opens lighttpd's
+// session gate in front of /addons/<id>/ for a token sent as Authorization: Bearer, and nothing
+// else - no API route needs it, and no other scope implies it (addons:write manages addons, it does
+// not open their pages). Full access covers it like every scope. The id is an installed addon's;
+// the scope is well-formed when the id has the manifest's shape, and the API checks the addon is
+// installed when a token is made or a pairing asks for it. An addon's own token never gets one
+// (AddonScopes). The gate finds a token's addons in the store's token mirror (auth.go).
+
+// AddonScopePrefix is what an addon ingress scope starts with.
+const AddonScopePrefix = "addon:"
+
+// addonScopeID is the addon id rule (internal/manifest's idRe): a scope with another id is unknown.
+var addonScopeID = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,31}$`)
+
+// AddonScope is the ingress scope of addon id.
+func AddonScope(id string) Scope { return Scope(AddonScopePrefix + id) }
+
+// AddonOf answers the addon id of an ingress scope, and whether s is a well-formed one.
+func AddonOf(s Scope) (string, bool) {
+	id, ok := strings.CutPrefix(string(s), AddonScopePrefix)
+	if !ok || !addonScopeID.MatchString(id) {
+		return "", false
+	}
+	return id, true
+}
+
 // Grantable are the scopes a token can be given, in the order the pages list them. ScopeAll is
-// offered beside them; ScopeSelf is nobody's to give.
+// offered beside them; ScopeSelf is nobody's to give. The addon ingress scopes are grantable too,
+// one per installed addon: the API lists them beside this list (GET /tokens answers addons).
 var Grantable = []Scope{
 	ScopeMetaRead, ScopeMetaWrite,
 	ScopeSystemRead, ScopeLogsRead, ScopeSystemWrite, ScopeAddonsWrite,
@@ -99,9 +127,13 @@ var AddonNever = []Scope{ScopeAll, ScopeAuthAdmin, ScopePower, ScopeBackup, Scop
 // ErrBadScope is a scope name that does not exist, or one a token cannot carry.
 var ErrBadScope = errors.New("unknown scope")
 
-// Known reports whether s names a scope a token can carry (Grantable or ScopeAll).
+// Known reports whether s names a scope a token can carry (Grantable, ScopeAll, or a well-formed
+// addon ingress scope).
 func Known(s Scope) bool {
 	if s == ScopeAll {
+		return true
+	}
+	if _, ok := AddonOf(s); ok {
 		return true
 	}
 	for _, g := range Grantable {
@@ -268,13 +300,14 @@ func LevelScopes(level Level) Scopes {
 }
 
 // AddonScopes filters a catalogue entry's runtime.api_scopes into what an addon's token gets:
-// every known scope except the ones in AddonNever. refused names what was left out - the
+// every known scope except the ones in AddonNever and the addon ingress scopes (an addon does
+// not reach another addon's pages through its own token). refused names what was left out - the
 // caller logs it - and granted is normalized, empty when nothing stands.
 func AddonScopes(declared []string) (granted Scopes, refused []string) {
 	for _, n := range declared {
 		n = strings.TrimSpace(n)
 		s := Scope(n)
-		if n == "" || !Known(s) || contains(AddonNever, s) {
+		if _, ingress := AddonOf(s); n == "" || !Known(s) || contains(AddonNever, s) || ingress {
 			refused = append(refused, n)
 			continue
 		}

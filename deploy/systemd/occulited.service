@@ -28,8 +28,10 @@ SupplementaryGroups=systemd-journal
 # mirror and the legacy alias mirror through RuntimeDirectory= (0711: the gate and
 # addon CGIs open a sid they hold, nobody lists), the state dir through tmpfiles.d/occulited.conf
 # (in every backup). An ExecStartPre cannot do it - ProtectSystem=strict needs ReadWritePaths= to
-# exist first. occulite/wpa is the daemon's end of wpa_supplicant's control protocol.
-RuntimeDirectory=occulite/sessions occulite/legacy-sessions occulite/wpa
+# exist first. occulite/wpa is the daemon's end of wpa_supplicant's control protocol;
+# occulite/gate-tokens is the gate's token mirror (an API token with the scope addon:<id> opens
+# that addon's pages as Authorization: Bearer).
+RuntimeDirectory=occulite/sessions occulite/legacy-sessions occulite/gate-tokens occulite/wpa
 RuntimeDirectoryMode=0711
 RuntimeDirectoryPreserve=yes
 # lighttpd's waiting page says whether this service is starting,
@@ -56,7 +58,7 @@ SyslogIdentifier=occulited
 NoNewPrivileges=yes
 ProtectHome=yes
 ProtectSystem=strict
-ReadWritePaths=/usr/local/etc/occulite /run/occulite/sessions /run/occulite/legacy-sessions
+ReadWritePaths=/usr/local/etc/occulite /run/occulite/sessions /run/occulite/legacy-sessions /run/occulite/gate-tokens
 PrivateTmp=yes
 # The sandbox. Everything root does for the daemon goes through occulited-helper.service, so
 # this process and the programs it starts (journalctl, systemctl's read-only verbs,

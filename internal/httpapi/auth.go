@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -124,6 +125,12 @@ type AuthAPI struct {
 	// FQDN answers the system's full name, <host>.<domain> (task 262: the name security keys are
 	// made on); nil or "" when it is not known.
 	FQDN func() string
+	// The addon ingress scope addon:<id> (openccu-lite task 307): Addons answers the installed
+	// addons, id → display name - what a token may be given the scope for and what GET /tokens
+	// lists; AddonForSegment answers the addon behind /addons/<segment>/, for RequireSession's
+	// token check. nil: no ingress scope can be given, and a token opens no addon page.
+	Addons          func() map[string]string
+	AddonForSegment func(segment string) string
 
 	swMu   sync.Mutex
 	swInfo os.FileInfo // ConfigFile as the switch was last read from it
@@ -428,7 +435,9 @@ func (a *AuthAPI) Middleware(mux *http.ServeMux) http.Handler {
 // its role - the same rule as lighttpd's gate, which also takes the session's legacy alias from
 // ?sid= there (task 125: the CCU convention the CGIs live by; not from a cookie, and nowhere on
 // the API) - and a token with system:read (the daemon's own update check goes through here,
-// B-2). Browsers get the login page, API callers 401.
+// B-2) or with the ingress scope of the addon behind the path (openccu-lite task 307: the gate
+// let the Bearer token through for /addons/<segment>/, and the CGI or static file is served here).
+// Browsers get the login page, API callers 401.
 func (a *AuthAPI) RequireSession(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sess := a.session(r)
@@ -455,8 +464,14 @@ func (a *AuthAPI) RequireSession(next http.Handler) http.Handler {
 			return
 		}
 		if sess.IsToken() && !sess.Has(auth.ScopeSystemRead) {
-			forbiddenScope(w, auth.ScopeSystemRead)
-			return
+			need := auth.ScopeSystemRead
+			if id := a.addonOfPath(r.URL.Path); id != "" {
+				need = auth.AddonScope(id)
+			}
+			if !sess.Has(need) {
+				forbiddenScope(w, need)
+				return
+			}
 		}
 		// task 213: the gate's rule for the addon pages - refused from elsewhere, and a link
 		// from another site opens the page without its query (a state change cannot ride on it)
@@ -474,6 +489,65 @@ func (a *AuthAPI) RequireSession(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, sess)))
 	})
+}
+
+// addonOfPath is the addon whose pages a request under /addons/<segment>/ asks for, "" when the
+// path is elsewhere, the segment is nobody's or the system has no addons to ask.
+func (a *AuthAPI) addonOfPath(path string) string {
+	rest, ok := strings.CutPrefix(path, "/addons/")
+	if !ok || a.AddonForSegment == nil {
+		return ""
+	}
+	seg, _, _ := strings.Cut(rest, "/")
+	if seg == "" {
+		return ""
+	}
+	return a.AddonForSegment(seg)
+}
+
+// checkAddonScopes refuses an ingress scope of an addon that is not installed (task 307): the
+// token page and the console offer the installed ones, and a program asking for another gets the
+// name of the missing addon.
+func (a *AuthAPI) checkAddonScopes(scopes auth.Scopes) error {
+	var names map[string]string
+	for _, s := range scopes {
+		id, ok := auth.AddonOf(s)
+		if !ok {
+			continue
+		}
+		if names == nil {
+			if a.Addons != nil {
+				names = a.Addons()
+			} else {
+				names = map[string]string{}
+			}
+		}
+		if _, installed := names[id]; !installed {
+			return fmt.Errorf("%w: no addon %q is installed", auth.ErrBadScope, id)
+		}
+	}
+	return nil
+}
+
+// addonScopeList is GET /tokens' addons: the installed addons' ingress scopes with their names,
+// sorted by id, for the token page's grid.
+func (a *AuthAPI) addonScopeList() []map[string]string {
+	out := []map[string]string{}
+	if a.Addons == nil {
+		return out
+	}
+	names := a.Addons()
+	ids := make([]string, 0, len(names))
+	for id := range names {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		if _, ok := auth.AddonOf(auth.AddonScope(id)); ok {
+			out = append(out, map[string]string{"id": id, "name": names[id], "scope": string(auth.AddonScope(id))})
+		}
+	}
+	return out
 }
 
 // remote is the address the request came from: lighttpd's element of X-Forwarded-For on a
@@ -1154,10 +1228,11 @@ func (a *AuthAPI) patchUser(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
-// tokens lists the API tokens (auth:admin) and the scopes a token can be given, in the order
-// the page shows them. Secrets are never listed.
+// tokens lists the API tokens (auth:admin), the scopes a token can be given, in the order the
+// page shows them, and the installed addons' ingress scopes (addons: {id, name, scope}, task 307).
+// Secrets are never listed.
 func (a *AuthAPI) tokens(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, 200, map[string]any{"tokens": a.Store.Tokens(), "scopes": auth.Grantable})
+	writeJSON(w, 200, map[string]any{"tokens": a.Store.Tokens(), "scopes": auth.Grantable, "addons": a.addonScopeList()})
 }
 
 // createToken makes a token {name, scopes, expires?, ips?} and answers with the secret exactly
@@ -1180,6 +1255,10 @@ func (a *AuthAPI) createToken(w http.ResponseWriter, r *http.Request) {
 	case len(b.Scopes) > 0:
 		var err error
 		if scopes, err = auth.ParseScopes(b.Scopes); err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, apiError{Error: "invalid-scope", Message: err.Error()})
+			return
+		}
+		if err := a.checkAddonScopes(scopes); err != nil {
 			writeJSON(w, http.StatusUnprocessableEntity, apiError{Error: "invalid-scope", Message: err.Error()})
 			return
 		}

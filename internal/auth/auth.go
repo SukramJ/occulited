@@ -322,6 +322,16 @@ type Options struct {
 	// the alias, holding the user name and, on a second line, the hash of the session it belongs
 	// to. Empty with a SessionDir: its sibling "legacy-sessions". Empty without one: no mirror.
 	LegacyDir string
+	// GateTokenDir mirrors the stored API tokens for the gate the same way (openccu-lite task 307):
+	// a file per token named by the sha256 of its secret, holding the token's name, the URL
+	// segments under /addons/ its ingress scopes open, its expiry and its address ranges (the
+	// format at syncGateTokens). Empty with a SessionDir: its sibling "gate-tokens". Empty without
+	// one: no mirror.
+	GateTokenDir string
+	// AddonSegments answers the URL segments under /addons/ that belong to the addon id besides
+	// the id itself - the path its lighttpd drop-in proxies (redmatic's /addons/red/) - for the
+	// token mirror. nil: the id alone.
+	AddonSegments func(id string) []string
 	// SessionFile, when set, is the session store on the userfs (B-102, D-67): the sessions by
 	// hash, written on a login, a logout and an expiry, and a last-seen time at most every
 	// LastSeenEvery. Its directory is the store's own and carries .nobackup. Empty: sessions live
@@ -358,6 +368,9 @@ func (o *Options) defaults() {
 	}
 	if o.LegacyDir == "" && o.SessionDir != "" {
 		o.LegacyDir = filepath.Join(filepath.Dir(filepath.Clean(o.SessionDir)), "legacy-sessions")
+	}
+	if o.GateTokenDir == "" && o.SessionDir != "" {
+		o.GateTokenDir = filepath.Join(filepath.Dir(filepath.Clean(o.SessionDir)), "gate-tokens")
 	}
 }
 
@@ -443,8 +456,24 @@ func Open(dir string, opt Options) (*Store, error) {
 		}
 		s.syncMirror()
 	}
+	if opt.GateTokenDir != "" {
+		// a directory the daemon creates itself under its unit's UMask=0077 would be 0700, and
+		// lighttpd's gate could open nothing in it: the mode is set, not left to the umask. A
+		// directory that cannot be made (a unit from before the mirror, whose sandbox does not
+		// open it) costs the mirror, not the start: GateTokenMirror answers "" then.
+		if err := os.MkdirAll(opt.GateTokenDir, 0o711); err != nil {
+			s.opt.GateTokenDir = ""
+		} else {
+			_ = os.Chmod(opt.GateTokenDir, 0o711)
+			s.syncGateTokens()
+		}
+	}
 	return s, nil
 }
+
+// GateTokenMirror is the directory the gate's token mirror is written to, "" when there is none
+// (no session directory, or one that could not be made - the caller logs that).
+func (s *Store) GateTokenMirror() string { return s.opt.GateTokenDir }
 
 // usersDoc is the content of users.json.
 type usersDoc struct {
@@ -504,6 +533,7 @@ func (s *Store) reload() error {
 		}
 	}
 	s.synced(st)
+	s.syncGateTokens() // a console-made token opens the gate as soon as the daemon has seen it
 	return nil
 }
 
@@ -592,6 +622,7 @@ func (s *Store) save() error {
 		return err
 	}
 	s.synced(st)
+	s.syncGateTokens()
 	if s.opt.Changed != nil {
 		go s.opt.Changed() // off the lock: the listener reads the accounts back
 	}
@@ -1630,10 +1661,130 @@ func (s *Store) syncMirror() {
 	}
 }
 
+// ---- the token mirror for the gate (openccu-lite task 307, GitHub issue #3) -------------------
+//
+// lighttpd's gate accepts an API token as Authorization: Bearer in front of /addons/<segment>/
+// when the token holds the ingress scope of that addon (addon:<id>, or Full access). The gate has
+// no subrequest, so it reads a mirror like the sessions': one file per stored token in
+// GateTokenDir, named by the sha256 of the secret (the hash users.json keeps), 0644 so lighttpd can
+// open it. The file is lines of "key value":
+//
+//	name <token name>          always
+//	addons <seg> <seg> …       the URL segments under /addons/ the token opens; "*" for Full access;
+//	                           the line is absent when the token opens none
+//	expires <unix seconds>     when the token has an expiry
+//	ip <cidr>                  one line per allowed range
+//
+// A rotation's previous secret keeps a file until its grace minute ends (expires says when); an
+// ephemeral token (an addon's, the daemon's own) is never mirrored. The mirror is rewritten on every
+// token change, after a merge of users.json (a console-made token), at every sweep, and when the
+// addons change (SyncGateTokens from the addon token lifecycle: a drop-in may have moved an
+// addon's path). Nothing in it is a credential: a hash opens no gate.
+
+// gateSegmentRe is what a segment may look like in the file: no whitespace, no slash.
+var gateSegmentRe = regexp.MustCompile(`^[^\s/]+$`)
+
+// gateTokenFiles is the mirror as it should be: file name → content.
+func (s *Store) gateTokenFiles() map[string]string {
+	now := s.opt.Now()
+	out := map[string]string{}
+	for _, t := range s.tokens {
+		if t.Expires != nil && !now.Before(*t.Expires) {
+			continue
+		}
+		out[t.Hash] = s.gateTokenBody(t, t.Expires)
+		if t.PrevHash != "" && t.PrevUntil != nil && now.Before(*t.PrevUntil) {
+			until := *t.PrevUntil
+			if t.Expires != nil && t.Expires.Before(until) {
+				until = *t.Expires
+			}
+			out[t.PrevHash] = s.gateTokenBody(t, &until)
+		}
+	}
+	return out
+}
+
+func (s *Store) gateTokenBody(t *Token, expires *time.Time) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "name %s\n", t.Name)
+	if segs := s.gateSegments(t.Scopes); len(segs) > 0 {
+		fmt.Fprintf(&b, "addons %s\n", strings.Join(segs, " "))
+	}
+	if expires != nil {
+		fmt.Fprintf(&b, "expires %d\n", expires.Unix())
+	}
+	for _, ip := range t.IPs {
+		fmt.Fprintf(&b, "ip %s\n", ip)
+	}
+	return b.String()
+}
+
+// gateSegments is the sorted list of URL segments the scopes open at the gate: "*" for Full
+// access, else each ingress scope's addon id and the segments AddonSegments adds for it.
+func (s *Store) gateSegments(scopes Scopes) []string {
+	if scopes.Full() {
+		return []string{"*"}
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, sc := range scopes {
+		id, ok := AddonOf(sc)
+		if !ok {
+			continue
+		}
+		segs := []string{id}
+		if s.opt.AddonSegments != nil {
+			segs = append(segs, s.opt.AddonSegments(id)...)
+		}
+		for _, seg := range segs {
+			if seg != "*" && gateSegmentRe.MatchString(seg) && !seen[seg] {
+				seen[seg] = true
+				out = append(out, seg)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// syncGateTokens makes GateTokenDir hold exactly gateTokenFiles: stale files go, changed ones are
+// written, unchanged ones are left alone. The lock is held.
+func (s *Store) syncGateTokens() {
+	dir := s.opt.GateTokenDir
+	if dir == "" {
+		return
+	}
+	want := s.gateTokenFiles()
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if _, ok := want[e.Name()]; !ok {
+			_ = os.Remove(filepath.Join(dir, e.Name()))
+		}
+	}
+	for name, body := range want {
+		p := filepath.Join(dir, name)
+		if cur, err := os.ReadFile(p); err == nil && string(cur) == body {
+			continue
+		}
+		writeMirror(p, body)
+	}
+}
+
+// SyncGateTokens rewrites the gate's token mirror from users.json as it is now; the addon token
+// lifecycle calls it when an addon came, went or changed, since the segments a token opens follow
+// the addons' lighttpd drop-ins.
+func (s *Store) SyncGateTokens() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_ = s.reload()
+	s.syncGateTokens()
+}
+
 // Sweep drops expired sessions; call it periodically.
 func (s *Store) Sweep() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	_ = s.reload() // a token the console made since reaches the gate's mirror by the next sweep at the latest
 	now := s.opt.Now()
 	n := 0
 	for key, x := range s.sessions {
@@ -1646,6 +1797,7 @@ func (s *Store) Sweep() {
 	if n > 0 {
 		s.saveSessions(true)
 	}
+	s.syncGateTokens() // an expired token, or a rotation's previous secret past its minute, leaves the gate
 }
 
 // Close writes the last-seen times the session store does not have yet; call it at a clean
@@ -1985,7 +2137,9 @@ type TokenClient struct {
 	// Fingerprint is the certificate (hex SHA-256) the code was bound to, "" over plain HTTP
 	Fingerprint string            `json:"fingerprint,omitempty"`
 	Access      map[string]string `json:"access,omitempty"`
-	LastAddress string            `json:"last_address,omitempty"`
+	// Addons are the addon ids whose ingress the pairing asked for (openccu-lite task 307)
+	Addons      []string `json:"addons,omitempty"`
+	LastAddress string   `json:"last_address,omitempty"`
 }
 
 // migrate turns a record from before task 66 - a role, no scopes - into its scopes. A record

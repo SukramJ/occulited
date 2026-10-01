@@ -18,10 +18,14 @@
     // A token carries scopes, an optional expiry and optional allowed address ranges; the box
     // answers the scopes it offers, in its order, and the page keeps their labels.
     // task 219: a paired program's record
-    interface TokenClient { app: string; app_version?: string; instance?: string; label: string; paired_at: string; paired_by: string; address: string; last_address?: string }
+    interface TokenClient { app: string; app_version?: string; instance?: string; label: string; paired_at: string; paired_by: string; address: string; last_address?: string; addons?: string[] }
     interface Token { name: string; scopes: string[]; prefix: string; created: string; last_used?: string; expires?: string; ips?: string[]; client?: TokenClient }
+    // openccu-lite task 307: the installed addons' ingress scopes (addon:<id>) - a program with one
+    // reaches that addon's pages through the system as Authorization: Bearer, and nothing else
+    interface AddonScope { id: string; name: string; scope: string }
     let tokens = $state<Token[]>([]);
     let scopeList = $state<string[]>([]);
+    let addonList = $state<AddonScope[]>([]);
     let tokName = $state('');
     let tokFull = $state(false);
     let tokScopes = $state<Record<string, boolean>>({});
@@ -30,7 +34,7 @@
     let newSecret = $state('');
     let tokNotice = $state('');
     let addTokenOpen = $state(false);
-    const chosenScopes = $derived(tokFull ? ['*'] : scopeList.filter((s) => tokScopes[s]));
+    const chosenScopes = $derived(tokFull ? ['*'] : [...scopeList, ...addonList.map((a) => a.scope)].filter((s) => tokScopes[s]));
     const SCOPE_LABEL: Record<string, string> = {
         '*': 'Full access (includes future permissions)',
         'meta:read': 'Names and rooms: read',
@@ -49,12 +53,19 @@
         'rpc:configure': 'RPC: configure',
         'rpc:admin': 'RPC: administer',
     };
-    const scopeLabel = (s: string) => (SCOPE_LABEL[s] ? t(SCOPE_LABEL[s]) : s);
+    const scopeLabel = (s: string) => {
+        if (SCOPE_LABEL[s]) return t(SCOPE_LABEL[s]);
+        const addon = addonList.find((a) => a.scope === s);
+        if (addon) return t('Addon {name}: its pages through the system', {name: addon.name});
+        if (s.startsWith('addon:')) return t('Addon {name}: its pages through the system', {name: s.slice(6)});
+        return s;
+    };
     async function loadTokens() {
         try {
-            const r = await api.get<{tokens: Token[]; scopes?: string[]}>('/api/auth/v1/tokens');
+            const r = await api.get<{tokens: Token[]; scopes?: string[]; addons?: AddonScope[]}>('/api/auth/v1/tokens');
             tokens = r.tokens;
             scopeList = r.scopes ?? [];
+            addonList = r.addons ?? [];
         } catch (e) {
             tokNotice = (e as Error).message;
         }
@@ -183,6 +194,14 @@
                             <label><input type="checkbox" checked={tokFull || !!tokScopes[s]} disabled={tokFull} onchange={(e) => (tokScopes = {...tokScopes, [s]: (e.currentTarget as HTMLInputElement).checked})} /> {scopeLabel(s)} <code class="ol-muted">{s}</code></label>
                         {/each}
                     </div>
+                    {#if addonList.length > 0}
+                        <p class="ol-muted ol-scope-hint ol-scope-addons-hint" data-addon-scopes-hint>{t("An addon scope lets a program reach that addon's pages through the system (Authorization: Bearer), and nothing else.")}</p>
+                        <div class="ol-scope-grid" data-addon-scopes>
+                            {#each addonList as a (a.scope)}
+                                <label><input type="checkbox" checked={tokFull || !!tokScopes[a.scope]} disabled={tokFull} onchange={(e) => (tokScopes = {...tokScopes, [a.scope]: (e.currentTarget as HTMLInputElement).checked})} /> {scopeLabel(a.scope)} <code class="ol-muted">{a.scope}</code></label>
+                            {/each}
+                        </div>
+                    {/if}
                 </fieldset>
                 <label for="ol-tok-expires">{t('Expires')}</label>
                 <div><input id="ol-tok-expires" class="hmm-input" type="date" bind:value={tokExpires} /> <span class="ol-muted">{t('optional; empty means never')}</span></div>
@@ -200,6 +219,7 @@
     .ol-tokform > label, .ol-tokform > span { padding-top: 4px; }
     .ol-scopepick { border: 1px solid var(--hmm-border-muted); border-radius: 4px; padding: 8px 10px; margin: 0; }
     .ol-scope-hint { margin: 4px 0 8px; font-size: 0.9em; }
+    .ol-scope-addons-hint { margin-top: 10px; }
     .ol-scope-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 4px 12px; }
     .ol-scope-grid label { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
     .ol-scope-grid code { font-size: 0.85em; }

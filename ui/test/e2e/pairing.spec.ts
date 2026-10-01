@@ -39,6 +39,23 @@ test('the card: code, access, approve with the code', async ({page}) => {
     await expect(page.locator('[data-pair="a1b2c3"]')).toHaveCount(0);
 });
 
+// openccu-lite task 307: a request that asks for an addon's pages through the system (the scope
+// addon:<id>) names the addon on the card, alone or beside the areas, in both languages.
+test('the card names the addons asked for', async ({page}) => {
+    await withRequests(page, [{...REQ, id: 'f0f0f0', name: 'homematicip-local on ha', access: {}, purpose: {}, scopes: ['addon:openccu-loom'], addons: [{id: 'openccu-loom', name: 'OpenCCU-Loom'}]}]);
+    await page.goto('/');
+    const card = page.locator('[data-pair="f0f0f0"]');
+    await expect(card).toContainText('homematicip-local on ha asks for access');
+    await expect(card.locator('[data-pair-area="devices"] dd')).toHaveText('none');
+    await expect(card.locator('[data-pair-addon="openccu-loom"] dt')).toHaveText('Addon');
+    await expect(card.locator('[data-pair-addon="openccu-loom"] dd')).toContainText('OpenCCU-Loom: its pages through the system');
+    await expect(card.locator('[data-pair-addon="openccu-loom"] dd')).toContainText('addon:openccu-loom');
+    await page.addInitScript(() => localStorage.setItem('ol.language', 'de'));
+    await page.goto('/');
+    await expect(page.locator('[data-pair="f0f0f0"] [data-pair-addon="openccu-loom"] dt')).toHaveText('Zusatzsoftware');
+    await expect(page.locator('[data-pair="f0f0f0"] [data-pair-addon="openccu-loom"] dd')).toContainText('OpenCCU-Loom: ihre Seiten über das System');
+});
+
 test('no request, no card; German', async ({page}) => {
     await page.goto('/');
     await expect(page.locator('[data-notice="pairing"]')).toHaveCount(0);

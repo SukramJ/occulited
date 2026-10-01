@@ -81,12 +81,31 @@ func (r Root) AddonFrontends() map[string]string {
 
 // frontendPath returns the first /addons/… path a lighttpd drop-in maps, or "".
 func frontendPath(conf string) string {
+	if ps := frontendPaths(conf); len(ps) > 0 {
+		return ps[0]
+	}
+	return ""
+}
+
+// frontendPaths returns every distinct /addons/… path a lighttpd drop-in maps, in the order of its
+// proxy.server statements. The menu takes the first; the addon ingress scope opens all of them
+// (openccu-lite task 307, AddonIngressSegments).
+func frontendPaths(conf string) []string {
 	conf = stripLighttpdComments(conf)
 	blocks := lighttpdURLBlockRe.FindAllStringSubmatchIndex(conf, -1)
+	var out []string
+	seen := map[string]bool{}
+	add := func(p string) {
+		if p != "" && !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
 	for _, m := range lighttpdProxyRe.FindAllStringSubmatchIndex(conf, -1) {
 		cand := conf[m[2]:m[3]]
 		if p := cleanFrontendPath(cand); p != "" {
-			return p
+			add(p)
+			continue
 		}
 		// A catch-all key ("" or "/") proxies whatever the enclosing block matched, so the path is
 		// in that block's regex instead. Take the nearest one that opens before this line.
@@ -94,13 +113,11 @@ func frontendPath(conf string) string {
 			if blocks[i][0] >= m[0] {
 				continue
 			}
-			if p := cleanFrontendPath(regexLiteralPrefix(conf[blocks[i][2]:blocks[i][3]])); p != "" {
-				return p
-			}
+			add(cleanFrontendPath(regexLiteralPrefix(conf[blocks[i][2]:blocks[i][3]])))
 			break
 		}
 	}
-	return ""
+	return out
 }
 
 // cleanFrontendPath accepts a path only if it is an ordinary absolute path under /addons/, and

@@ -266,11 +266,16 @@ func run(opts daemonOptions) error {
 		slog.Warn("auth: the session limits in the configuration are out of bounds; the defaults stay", "idle", idle, "max", maxAge, "bounds", auth.ErrSessionLimits)
 		idle, maxAge = 0, 0
 	}
-	users, err := auth.Open(cfg.StateDir, auth.Options{SessionDir: *sessionDir, SessionFile: auth.SessionStorePath(cfg.StateDir), RestoreMethods: sessionMethods(cfg.Auth), IdleTimeout: idle, MaxAge: maxAge, Changed: func() {
+	// task 307: the gate's token mirror lists, per token, the URL segments its addon:<id> scopes
+	// open - the addon's id and what its lighttpd drop-in proxies
+	users, err := auth.Open(cfg.StateDir, auth.Options{SessionDir: *sessionDir, SessionFile: auth.SessionStorePath(cfg.StateDir), RestoreMethods: sessionMethods(cfg.Auth), IdleTimeout: idle, MaxAge: maxAge, AddonSegments: system.Root(*rootDir).AddonIngressSegments, Changed: func() {
 		if syncFavorites != nil {
 			syncFavorites()
 		}
 	}})
+	if err == nil && *sessionDir != "" && users.GateTokenMirror() == "" {
+		log.Warn("auth: the gate's token mirror could not be made - API tokens open no addon page until the unit lists /run/occulite/gate-tokens (RuntimeDirectory=, ReadWritePaths=)")
+	}
 	if err == nil {
 		// the box's own read token for programs running on it (addons): <state>/local-token
 		if lerr := users.EnsureLocalToken(filepath.Join(cfg.StateDir, "local-token")); lerr != nil {
@@ -316,9 +321,17 @@ func run(opts daemonOptions) error {
 			log.Warn("auth.oidc: the trust anchors could not be applied", "err", err)
 		}
 	})
+	// task 307: the addon ingress scope - the installed addons a token may be given it for, and the
+	// addon behind /addons/<segment>/ for the guard of the addon pages
+	authAPI.Addons = system.Root(*rootDir).InstalledAddonNames
+	authAPI.AddonForSegment = system.Root(*rootDir).AddonForIngressSegment
 	// task 219: a program asks for access, an administrator approves it on Status
 	authAPI.Pairing = &pairing.Manager{Minter: users, Log: area("auth"), Local: pairingLocal,
-		Enabled: func() bool { return httpapi.PairingEnabled(*cfgPath) }}
+		Enabled: func() bool { return httpapi.PairingEnabled(*cfgPath) },
+		AddonName: func(id string) (string, bool) {
+			name, ok := system.Root(*rootDir).InstalledAddonNames()[id]
+			return name, ok
+		}}
 	authAPI.CertFingerprint = certFingerprint(system.Root(*rootDir))
 	// task 262: the name security keys are made on - <host>.<domain>, or the host alone without a domain
 	authAPI.FQDN = func() string {

@@ -634,6 +634,10 @@ const CATALOGUE: Record<string, {de: string; en?: string}> = {
     'Another program asks under this name or from this address: compare the code carefully.': {de: 'Ein weiteres Programm fragt unter diesem Namen oder von dieser Adresse: den Code sorgfältig vergleichen.'},
     'Names and rooms': {de: 'Namen und Räume'},
     'may pair and delete devices': {de: 'darf Geräte anlernen und löschen'},
+    // openccu-lite task 307: the addon ingress scope on the token page and the pairing card
+    'Addon {name}: its pages through the system': {de: 'Zusatzsoftware {name}: ihre Seiten über das System'},
+    '{name}: its pages through the system': {de: '{name}: ihre Seiten über das System'},
+    "An addon scope lets a program reach that addon's pages through the system (Authorization: Bearer), and nothing else.": {de: 'Ein Zusatzsoftware-Scope lässt ein Programm die Seiten dieser Zusatzsoftware über das System erreichen (Authorization: Bearer), und sonst nichts.'},
     'The code is bound to the certificate the program sees ({fp}).': {de: 'Der Code ist an das Zertifikat gebunden, das das Programm sieht ({fp}).'},
     'Plain HTTP: the code proves the request, not the connection.': {de: 'Unverschlüsseltes HTTP: Der Code belegt die Anfrage, nicht die Verbindung.'},
     'What the levels mean': {de: 'Was die Stufen bedeuten'},

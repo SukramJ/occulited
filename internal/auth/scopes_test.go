@@ -120,6 +120,63 @@ func TestAddonScopes(t *testing.T) {
 	}
 }
 
+// openccu-lite task 307: the addon ingress scope addon:<id> is known when its id has the manifest's
+// shape, is covered by Full access and by nothing else, survives Normalize beside the fixed scopes,
+// and is never granted to an addon's own token.
+func TestAddonIngressScope(t *testing.T) {
+	for _, tc := range []struct {
+		scope Scope
+		id    string
+		ok    bool
+	}{
+		{"addon:openccu-loom", "openccu-loom", true},
+		{"addon:hmm", "hmm", true},
+		{"addon:jp-hb-devices-addon", "jp-hb-devices-addon", true},
+		{"addon:", "", false},
+		{"addon:Hmm", "", false},
+		{"addon:a/b", "", false},
+		{"addon:-x", "", false},
+		{Scope("addon:" + strings.Repeat("a", 33)), "", false},
+		{"addons:write", "", false},
+		{"meta:read", "", false},
+	} {
+		id, ok := AddonOf(tc.scope)
+		if ok != tc.ok || id != tc.id {
+			t.Errorf("AddonOf(%s) = %q %v, want %q %v", tc.scope, id, ok, tc.id, tc.ok)
+		}
+		if Known(tc.scope) != (tc.ok || tc.scope == ScopeAddonsWrite || tc.scope == ScopeMetaRead) {
+			t.Errorf("Known(%s) = %v", tc.scope, Known(tc.scope))
+		}
+	}
+	if AddonScope("hmm") != "addon:hmm" {
+		t.Error("AddonScope")
+	}
+	loom := AddonScope("openccu-loom")
+	if !(Scopes{ScopeAll}).Has(loom) {
+		t.Error("Full access does not cover the ingress scope")
+	}
+	for _, have := range []Scopes{{ScopeAddonsWrite}, {ScopeSystemWrite, ScopeAuthAdmin, ScopeRPCAdmin}, {AddonScope("hmm")}} {
+		if have.Has(loom) {
+			t.Errorf("%v covers %s", have, loom)
+		}
+	}
+	if !(Scopes{loom}).Has(loom) || (Scopes{loom}).Has(ScopeSystemRead) || (Scopes{loom}).Has(ScopeMetaRead) {
+		t.Error("the ingress scope stands for itself and nothing else")
+	}
+	got, err := ParseScopes([]string{"addon:hmm", "meta:read", "addon:hmm", "addon:openccu-loom"})
+	if err != nil || strings.Join(got.Strings(), ",") != "addon:hmm,addon:openccu-loom,meta:read" {
+		t.Errorf("parse: %v %v", got, err)
+	}
+	if _, err := ParseScopes([]string{"addon:Nope"}); err == nil {
+		t.Error("a malformed ingress scope parsed")
+	}
+	// an addon's catalogue declaration cannot ask for another addon's ingress
+	granted, refused := AddonScopes([]string{"addon:hmm", "meta:read"})
+	if strings.Join(granted.Strings(), ",") != "meta:read" || strings.Join(refused, ",") != "addon:hmm" {
+		t.Errorf("addon token: granted %v refused %v", granted, refused)
+	}
+}
+
 // A users.json from before task 66 loads with each token's role turned into its scopes, and the
 // next save writes scopes and no role.
 func TestTokenMigration(t *testing.T) {

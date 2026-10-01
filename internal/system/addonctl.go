@@ -34,6 +34,9 @@ type APITokenMinter interface {
 	// the scopes granted and the names refused; "" when nothing was granted.
 	MintAddonToken(id string, declared []string) (secret string, granted, refused []string, err error)
 	DropAddonToken(id string)
+	// SyncGateTokens rewrites the gate's token mirror (openccu-lite task 307): the URL segments an
+	// addon ingress scope opens follow the addons' drop-ins, so every addon change is followed by it.
+	SyncGateTokens()
 }
 
 // addonAPIToken is what the box holds of one addon's API token: the secret (to write the file
@@ -109,7 +112,11 @@ func (t *AddonTokens) ensure(root Root, id string, uid int, declared []string) e
 	if err := writeOwned(path, tok, uid); err != nil {
 		return err
 	}
-	return t.ensureAPI(root, id, uid, declared)
+	err := t.ensureAPI(root, id, uid, declared)
+	if t.Minter != nil {
+		t.Minter.SyncGateTokens()
+	}
+	return err
 }
 
 // ensureAPI is the API token's half of ensure; the lock is held.
@@ -177,6 +184,9 @@ func (t *AddonTokens) forget(root Root, id string) {
 	}
 	_ = Priv.Remove(root.join(filepath.Join(AddonTokenDir, id)))
 	_ = Priv.Remove(root.join(filepath.Join(AddonTokenDir, id+".api")))
+	if t.Minter != nil {
+		t.Minter.SyncGateTokens() // a token's addon:<id> opens nothing for a gone addon's segments
+	}
 }
 
 // RefreshAddonTokens mints or rewrites the tokens of every addon in rc.d, owned by the user its

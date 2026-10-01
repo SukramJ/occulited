@@ -1148,6 +1148,21 @@
         ],
         "type": "object"
       },
+      "PairingAddonRef": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object"
+      },
       "PairingView": {
         "properties": {
           "access": {
@@ -1156,6 +1171,15 @@
             },
             "type": [
               "object",
+              "null"
+            ]
+          },
+          "addons": {
+            "items": {
+              "$ref": "#/components/schemas/PairingAddonRef"
+            },
+            "type": [
+              "array",
               "null"
             ]
           },

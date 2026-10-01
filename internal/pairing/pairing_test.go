@@ -105,6 +105,84 @@ func itoa(n uint32) string {
 	return string(b)
 }
 
+// openccu-lite task 307: an ask may name installed addons whose ingress the program wants - the
+// scope addon:<id> each, alone or beside the areas; the card names them, the token's client record
+// and the approved answer carry the ids; an addon that is not installed, a bad id, a system without
+// the hook, or more than MaxAddons is refused as invalid.
+func TestAddons(t *testing.T) {
+	m, f, _ := newMgr()
+	m.AddonName = func(id string) (string, bool) {
+		names := map[string]string{"openccu-loom": "OpenCCU-Loom", "hmm": "Homematic Manager"}
+		n, ok := names[id]
+		return n, ok
+	}
+	cn, commit := clientHalf(9)
+	// addons alone, one of them twice
+	a := Ask{App: "homematicip-local", Instance: "ha", Addons: []string{"openccu-loom", " openccu-loom", "hmm"}, Commit: commit}
+	ans, err := m.Request(a, "192.168.1.60", nil)
+	if err != nil {
+		t.Fatalf("addons alone: %v", err)
+	}
+	if _, err := m.Poll(context.Background(), ans.ID, ans.Poll, cn, 0); err != nil {
+		t.Fatal(err)
+	}
+	p := m.Pending()
+	if len(p) != 1 || len(p[0].Addons) != 2 || p[0].Addons[0] != (AddonRef{ID: "openccu-loom", Name: "OpenCCU-Loom"}) || p[0].Addons[1].ID != "hmm" {
+		t.Fatalf("card %+v", p)
+	}
+	if strings.Join(p[0].Scopes, " ") != "addon:hmm addon:openccu-loom" || len(p[0].Access) != 0 {
+		t.Fatalf("scopes %v access %v", p[0].Scopes, p[0].Access)
+	}
+	client, _, err := m.Approve(ans.ID, p[0].Code, "admin")
+	if err != nil || strings.Join(client.Addons, ",") != "openccu-loom,hmm" || strings.Join(f.sc.Strings(), " ") != "addon:hmm addon:openccu-loom" {
+		t.Fatalf("approve: %v %+v minted %v", err, client, f.sc)
+	}
+	r, err := m.Poll(context.Background(), ans.ID, ans.Poll, "", 0)
+	if err != nil || r.State != StateApproved || strings.Join(r.Addons, ",") != "openccu-loom,hmm" {
+		t.Fatalf("answer %v %+v", err, r)
+	}
+	// beside the areas: both sets of scopes
+	cn2, commit2 := clientHalf(10)
+	b := ask("hm2mqtt.js", "nas", commit2)
+	b.Addons = []string{"hmm"}
+	ans2, err := m.Request(b, "192.168.1.61", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Poll(context.Background(), ans2.ID, ans2.Poll, cn2, 0); err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range m.Pending() {
+		if v.ID == ans2.ID && strings.Join(v.Scopes, " ") != "addon:hmm meta:read rpc:operate" {
+			t.Errorf("areas and an addon: %v", v.Scopes)
+		}
+	}
+	// refusals
+	for _, bad := range []Ask{
+		{App: "x", Addons: []string{"mosquitto"}, Commit: commit},                             // not installed
+		{App: "x", Addons: []string{"Bad Id"}, Commit: commit},                                // no addon id
+		{App: "x", Addons: []string{}, Commit: commit},                                        // nothing at all
+		{App: "x", Addons: tooMany(MaxAddons + 1), Commit: commit},                            // more than MaxAddons
+		{App: "x", Access: map[string]string{"devices": "none"}, Addons: nil, Commit: commit}, // explicit none, no addon
+	} {
+		if _, err := m.Request(bad, "192.168.1.70", nil); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%+v: %v", bad.Addons, err)
+		}
+	}
+	m.AddonName = nil
+	if _, err := m.Request(Ask{App: "x", Addons: []string{"hmm"}, Commit: commit}, "192.168.1.71", nil); !errors.Is(err, ErrInvalid) {
+		t.Errorf("without the hook: %v", err)
+	}
+}
+
+func tooMany(n int) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = "hmm" + strings.Repeat("x", i)
+	}
+	return out
+}
+
 // The whole flow: ask, reveal, the card with the code, approve with it, the token once.
 func TestFlow(t *testing.T) {
 	m, f, _ := newMgr()

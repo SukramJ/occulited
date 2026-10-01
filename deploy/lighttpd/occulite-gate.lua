@@ -51,7 +51,14 @@
 
 local SESSION_DIR = "/var/run/occulite/sessions/"
 local LEGACY_DIR = "/var/run/occulite/legacy-sessions/"
+local TOKEN_DIR = "/var/run/occulite/gate-tokens/"
 local SESSION_HEADER = "X-Occulite-Session"
+-- The identity headers (openccu-lite task 307): X-Occulite-Auth says what the gate accepted -
+-- "session" for a session id or its alias, "token" for an API token - and X-Occulite-Token names
+-- the token. Like the session header they are removed from every request first, so an addon sees
+-- them only behind the gate's own decision.
+local AUTH_HEADER = "X-Occulite-Auth"
+local TOKEN_HEADER = "X-Occulite-Token"
 
 local r = lighty.r
 if r == nil then
@@ -79,7 +86,7 @@ end
 local FORWARDING = { X_FORWARDED_FOR = true, X_FORWARDED_PROTO = true, X_FORWARDED_HOST = true, FORWARDED = true }
 local function is_stripped(name)
     local cgi = (name:upper():gsub("[^%w]", "_"))
-    return cgi == "X_OCCULITE_SESSION" or FORWARDING[cgi] == true
+    return cgi == "X_OCCULITE_SESSION" or cgi == "X_OCCULITE_AUTH" or cgi == "X_OCCULITE_TOKEN" or FORWARDING[cgi] == true
 end
 
 -- Names first, removal after: the table is not changed while pairs() walks it. Then a second walk,
@@ -149,13 +156,157 @@ local function live_alias(sid)
     return nil
 end
 
--- accept passes the request on with the session it was accepted for
-local function accept(sid)
-    r.req_header[SESSION_HEADER] = sid
-    if r.req_header[SESSION_HEADER] ~= sid then
+-- accept passes the request on with the credential it was accepted for: a session id or its alias
+-- (X-Occulite-Auth: session), or an API token (X-Occulite-Auth: token, X-Occulite-Token: its name).
+local function accept(cred, kind, token_name)
+    r.req_header[SESSION_HEADER] = cred
+    r.req_header[AUTH_HEADER] = kind
+    if token_name ~= nil then r.req_header[TOKEN_HEADER] = token_name end
+    if r.req_header[SESSION_HEADER] ~= cred or r.req_header[AUTH_HEADER] ~= kind or (token_name ~= nil and r.req_header[TOKEN_HEADER] ~= token_name) then
         return fail_closed()
     end
     return 0
+end
+
+local function urlencode(s)
+    return (s:gsub("[^%w%-%._~/]", function(c) return string.format("%%%02X", string.byte(c)) end))
+end
+
+-- 0. an API token as Authorization: Bearer (openccu-lite task 307, GitHub issue #3). occulited
+-- mirrors every stored token into TOKEN_DIR as the sessions are mirrored: a file named by the
+-- SHA-256 of the secret, with lines "name <token>", "addons <segment> …" (the URL segments under
+-- /addons/ the token's addon:<id> scopes open, "*" for Full access), "expires <unix>" and
+-- "ip <cidr>". A Bearer with a token's shape is final - no fall-through to a cookie: a program that
+-- presents a token gets its own answer. No file, or past its expiry: 401. The request's segment not
+-- among the token's, or the client's address outside its ranges: 403 with a journal line naming the
+-- token and the addon. The token travels to the addon in the session header, as a session does, so
+-- an addon's check against /api/auth/v1/state keeps working; X-Occulite-Auth says it is a token.
+local TOKEN_PATTERN = "^Bearer%s+(olt_" .. string.rep("%x", 32) .. ")%s*$"
+
+-- token_file reads a token's mirror file: nil when there is none, else {name, addons, expires, ips}
+local function token_file(secret)
+    local key = md("sha256", secret)
+    if key == nil then return nil end
+    key = key:lower()
+    if not key:match("^" .. string.rep("%x", 64) .. "$") then return nil end
+    local f = io.open(TOKEN_DIR .. key, "r")
+    if f == nil then return nil end
+    local tok = { name = "-", addons = {}, ips = {} }
+    for line in f:lines() do
+        local k, v = line:match("^(%S+)%s*(.-)%s*$")
+        if k == "name" and v ~= "" then
+            tok.name = v
+        elseif k == "addons" then
+            for seg in v:gmatch("%S+") do tok.addons[seg] = true end
+        elseif k == "expires" then
+            tok.expires = tonumber(v)
+        elseif k == "ip" and v ~= "" then
+            tok.ips[#tok.ips + 1] = v
+        end
+    end
+    f:close()
+    return tok
+end
+
+-- parse_ip turns an address into its 16 bytes - IPv4 as the mapped ::ffff:a.b.c.d, so that a
+-- client lighttpd reports in either form meets a range of either family the way Go's net does.
+-- nil for anything that is no address.
+local function parse_ip(s)
+    s = s:gsub("%%.*$", "") -- a zone id
+    local v4 = { s:match("^(%d+)%.(%d+)%.(%d+)%.(%d+)$") }
+    if #v4 == 4 then
+        local bytes = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff }
+        for _, n in ipairs(v4) do
+            n = tonumber(n)
+            if n == nil or n > 255 then return nil end
+            bytes[#bytes + 1] = n
+        end
+        return bytes
+    end
+    if not s:find(":", 1, true) then return nil end
+    local tail = s:match(":(%d+%.%d+%.%d+%.%d+)$")
+    if tail then
+        local t = parse_ip(tail)
+        if t == nil then return nil end
+        s = s:sub(1, #s - #tail) .. string.format("%x:%x", t[13] * 256 + t[14], t[15] * 256 + t[16])
+    end
+    local groups = {}
+    local function split(part, into)
+        if part == "" then return true end
+        for g in (part .. ":"):gmatch("([^:]*):") do
+            if not g:match("^%x%x?%x?%x?$") then return false end
+            into[#into + 1] = tonumber(g, 16)
+        end
+        return true
+    end
+    local head, rest = s:match("^(.-)::(.*)$")
+    if head ~= nil then
+        local h, t = {}, {}
+        if not split(head, h) or not split(rest, t) or #h + #t > 7 or rest:find("::", 1, true) then return nil end
+        for _, g in ipairs(h) do groups[#groups + 1] = g end
+        for _ = 1, 8 - #h - #t do groups[#groups + 1] = 0 end
+        for _, g in ipairs(t) do groups[#groups + 1] = g end
+    elseif not split(s, groups) or #groups ~= 8 then
+        return nil
+    end
+    local bytes = {}
+    for _, g in ipairs(groups) do
+        bytes[#bytes + 1] = g // 256
+        bytes[#bytes + 1] = g % 256
+    end
+    return bytes
+end
+
+-- ip_in says whether addr lies in the CIDR range; an IPv4 range lives in the mapped space (+96).
+local function ip_in(addr, cidr)
+    local net, bits = cidr:match("^(.*)/(%d+)$")
+    if net == nil then return false end
+    bits = tonumber(bits)
+    local a, n = parse_ip(addr), parse_ip(net)
+    if a == nil or n == nil then return false end
+    if not net:find(":", 1, true) then bits = bits + 96 end
+    if bits > 128 then return false end
+    for i = 1, 16 do
+        local remaining = bits - (i - 1) * 8
+        if remaining <= 0 then return true end
+        local mask = 0xff
+        if remaining < 8 then mask = (0xff << (8 - remaining)) & 0xff end
+        if (a[i] & mask) ~= (n[i] & mask) then return false end
+    end
+    return true
+end
+
+local function refuse_token(name, seg, why)
+    print(string.format("occulite-gate: token refused: token=%s addon=%s method=%s path=%s (%s)", name, seg, r.req_attr["request.method"] or "?", urlencode(r.req_attr["uri.path"] or "/"), why))
+    r.resp_header["Content-Type"] = "application/json"
+    r.resp_body:set({ '{"error":"forbidden","message":"the token does not open this addon\'s pages: ' .. why .. '"}' })
+    return 403
+end
+
+local authz = r.req_header["Authorization"]
+if authz ~= nil and authz:match("^Bearer%s+olt_") then
+    local secret = authz:match(TOKEN_PATTERN)
+    local tok = nil
+    if secret ~= nil then tok = token_file(secret) end
+    if tok == nil or (tok.expires ~= nil and os.time() >= tok.expires) then
+        r.resp_header["Content-Type"] = "application/json"
+        r.resp_body:set({ '{"error":"unauthenticated","message":"the token is not known here or has expired"}' })
+        return 401
+    end
+    local path = r.req_attr["uri.path"] or "/"
+    local seg = path:match("^/addons/([^/]+)")
+    if seg == nil or not (tok.addons["*"] or tok.addons[seg]) then
+        return refuse_token(tok.name, seg or "-", "the scope addon:<id> of this addon is required")
+    end
+    if #tok.ips > 0 then
+        local addr = r.req_attr["request.remote-addr"] or ""
+        local ok = false
+        for _, c in ipairs(tok.ips) do
+            if ip_in(addr, c) then ok = true break end
+        end
+        if not ok then return refuse_token(tok.name, seg, "not accepted from this address") end
+    end
+    return accept(secret, "token", tok.name)
 end
 
 -- 1. the gate cookies: the session id only, never an alias. One name per scheme, because a browser
@@ -199,10 +350,6 @@ local function cross_site()
     return nil
 end
 
-local function urlencode(s)
-    return (s:gsub("[^%w%-%._~/]", function(c) return string.format("%%%02X", string.byte(c)) end))
-end
-
 local function refuse_cross_site(why)
     local path = r.req_attr["uri.path"] or "/"
     local addon = path:match("^/addons/([^/]+)") or "-"
@@ -220,11 +367,11 @@ if cookie ~= nil then
             local live = live_sid(sid)
             if live ~= nil then
                 local why = cross_site()
-                if why == nil then return accept(live) end
+                if why == nil then return accept(live, "session") end
                 if why ~= "navigate" then return refuse_cross_site(why) end
                 -- a link from elsewhere opens the page, never with a query that could change state
                 local query = r.req_attr["uri.query"]
-                if query == nil or query == "" then return accept(live) end
+                if query == nil or query == "" then return accept(live, "session") end
                 r.resp_header["Location"] = urlencode(r.req_attr["uri.path"] or "/")
                 return 302
             end
@@ -240,7 +387,7 @@ local query = r.req_attr["uri.query"]
 if query ~= nil then
     local sid = query:match("^sid=([%w@]+)") or query:match("&sid=([%w@]+)")
     local live = live_sid(sid) or live_alias(sid)
-    if live ~= nil then return accept(live) end
+    if live ~= nil then return accept(live, "session") end
 end
 
 -- 3. nothing: send the browser to the shell's login, and API-style callers a 401

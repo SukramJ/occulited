@@ -90,8 +90,19 @@ var levels = map[string]map[string]auth.Scopes{
 // Areas lists the areas in the card's order.
 var Areas = []string{"devices", "names", "system"}
 
-// ScopesFor maps an access request to scopes; an unknown area or level is ErrInvalid.
+// ScopesFor maps an access request to scopes; an unknown area or level is ErrInvalid, and so is
+// an access that asks for nothing.
 func ScopesFor(access map[string]string) (auth.Scopes, error) {
+	out, err := scopesForAccess(access)
+	if err == nil && len(out) == 0 {
+		return nil, fmt.Errorf("%w: ask for access to at least one area", ErrInvalid)
+	}
+	return out, err
+}
+
+// scopesForAccess is ScopesFor without the "at least one" rule: empty when nothing is asked, for an
+// ask that names addons alone (task 307).
+func scopesForAccess(access map[string]string) (auth.Scopes, error) {
 	var out auth.Scopes
 	for area, level := range access {
 		if level == "" || level == "none" {
@@ -112,11 +123,7 @@ func ScopesFor(access map[string]string) (auth.Scopes, error) {
 		}
 		out = append(out, s...)
 	}
-	out = out.Normalize()
-	if len(out) == 0 {
-		return nil, fmt.Errorf("%w: ask for access to at least one area", ErrInvalid)
-	}
-	return out, nil
+	return out.Normalize(), nil
 }
 
 // Code is the six digits both sides compute.
@@ -137,9 +144,22 @@ type Ask struct {
 	Name       string            `json:"name"`
 	Access     map[string]string `json:"access"`
 	Purpose    map[string]string `json:"purpose"`
+	// Addons are the installed addons whose ingress the program asks for (openccu-lite task 307):
+	// the scope addon:<id> each, which opens that addon's pages behind lighttpd's gate for a
+	// token sent as Authorization: Bearer. An ask may consist of addons alone.
+	Addons []string `json:"addons"`
 	// Commit is hex SHA-256 of the program's client_nonce
 	Commit string `json:"commit"`
 }
+
+// AddonRef names an addon the request asks for, as the card shows it.
+type AddonRef struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// MaxAddons is how many addons one request may ask for.
+const MaxAddons = 8
 
 // Answer is the 202 to a request.
 type Answer struct {
@@ -159,6 +179,7 @@ type Result struct {
 	Name   string            `json:"name,omitempty"`
 	Scopes []string          `json:"scopes,omitempty"`
 	Access map[string]string `json:"access,omitempty"`
+	Addons []string          `json:"addons,omitempty"`
 }
 
 // View is one request as the card shows it: never the poll secret.
@@ -171,6 +192,7 @@ type View struct {
 	Address     string            `json:"address"`
 	Access      map[string]string `json:"access"`
 	Purpose     map[string]string `json:"purpose,omitempty"`
+	Addons      []AddonRef        `json:"addons,omitempty"`
 	Scopes      []string          `json:"scopes"`
 	Code        string            `json:"code"`
 	Fingerprint string            `json:"fingerprint,omitempty"` // colon-separated, for the card's certificate line
@@ -189,6 +211,7 @@ type request struct {
 	clientNonce []byte
 	fp          []byte
 	ask         Ask
+	addons      []AddonRef
 	scopes      auth.Scopes
 	address     string
 	created     time.Time
@@ -211,8 +234,11 @@ type Manager struct {
 	Enabled func() bool
 	// Local says whether an address is on the local networks
 	Local func(addr string) bool
-	Log   *slog.Logger
-	Now   func() time.Time
+	// AddonName answers an installed addon's display name, and whether the addon is installed at
+	// all (openccu-lite task 307: an ask for an addon's ingress). nil: no request may ask for one.
+	AddonName func(id string) (string, bool)
+	Log       *slog.Logger
+	Now       func() time.Time
 	// OnChange is told after every change of the pending list (the card's stream)
 	OnChange func()
 
@@ -339,9 +365,42 @@ func (m *Manager) Request(a Ask, addr string, fingerprint []byte) (Answer, error
 	if !hex64.MatchString(strings.ToLower(a.Commit)) {
 		return Answer{}, fmt.Errorf("%w: commit is the hex SHA-256 of the program's client_nonce", ErrInvalid)
 	}
-	scopes, err := ScopesFor(a.Access)
+	scopes, err := scopesForAccess(a.Access)
 	if err != nil {
 		return Answer{}, err
+	}
+	// the addons' ingress (task 307): installed ones, each once, at most MaxAddons
+	var addons []AddonRef
+	seenAddon := map[string]bool{}
+	for _, id := range a.Addons {
+		id = strings.TrimSpace(id)
+		if seenAddon[id] {
+			continue
+		}
+		if _, ok := auth.AddonOf(auth.AddonScope(id)); !ok {
+			return Answer{}, fmt.Errorf("%w: %q is no addon id", ErrInvalid, clip(id, 40))
+		}
+		if m.AddonName == nil {
+			return Answer{}, fmt.Errorf("%w: this system offers no addon ingress to programs", ErrInvalid)
+		}
+		name, ok := m.AddonName(id)
+		if !ok {
+			return Answer{}, fmt.Errorf("%w: no addon %q is installed", ErrInvalid, id)
+		}
+		if len(addons) >= MaxAddons {
+			return Answer{}, fmt.Errorf("%w: at most %d addons", ErrInvalid, MaxAddons)
+		}
+		seenAddon[id] = true
+		addons = append(addons, AddonRef{ID: id, Name: name})
+		scopes = append(scopes, auth.AddonScope(id))
+	}
+	a.Addons = nil
+	for _, ad := range addons {
+		a.Addons = append(a.Addons, ad.ID)
+	}
+	scopes = scopes.Normalize()
+	if len(scopes) == 0 {
+		return Answer{}, fmt.Errorf("%w: ask for access to at least one area or addon", ErrInvalid)
 	}
 	purpose := map[string]string{}
 	for area, p := range a.Purpose {
@@ -412,12 +471,12 @@ func (m *Manager) Request(a Ask, addr string, fingerprint []byte) (Answer, error
 		return Answer{}, err
 	}
 	commit, _ := hex.DecodeString(strings.ToLower(a.Commit))
-	r := &request{id: id, pollHash: sha256.Sum256([]byte(poll)), nonce: nonce, commit: commit, fp: fingerprint, ask: a, scopes: scopes,
+	r := &request{id: id, pollHash: sha256.Sum256([]byte(poll)), nonce: nonce, commit: commit, fp: fingerprint, ask: a, addons: addons, scopes: scopes,
 		address: addr, created: now, expires: now.Add(Lifetime), state: StatePending, changed: make(chan struct{})}
 	m.reqs[id] = r
 	m.perHour[addr] = append(recent, now)
 	m.mu.Unlock()
-	m.log().Info("pairing: a program asks for access", "app", a.App, "version", a.AppVersion, "instance", a.Instance, "address", addr, "access", a.Access, "scopes", scopes.Strings())
+	m.log().Info("pairing: a program asks for access", "app", a.App, "version", a.AppVersion, "instance", a.Instance, "address", addr, "access", a.Access, "addons", a.Addons, "scopes", scopes.Strings())
 	if listChanged {
 		m.changedList()
 	}
@@ -532,7 +591,7 @@ func (m *Manager) Pending() []View {
 			continue
 		}
 		out = append(out, View{ID: r.id, App: r.ask.App, AppVersion: r.ask.AppVersion, Instance: r.ask.Instance, Name: r.ask.Name, Address: r.address,
-			Access: r.ask.Access, Purpose: r.ask.Purpose, Scopes: r.scopes.Strings(), Code: Code(r.nonce, r.clientNonce, r.fp),
+			Access: r.ask.Access, Purpose: r.ask.Purpose, Addons: r.addons, Scopes: r.scopes.Strings(), Code: Code(r.nonce, r.clientNonce, r.fp),
 			Fingerprint: fingerprintText(r.fp), Created: r.created, Expires: r.expires})
 	}
 	m.mu.Unlock()
@@ -604,7 +663,7 @@ func (m *Manager) Approve(id, code, by string) (auth.TokenClient, string, error)
 	}
 	now := m.now()
 	client := auth.TokenClient{App: r.ask.App, AppVersion: r.ask.AppVersion, Instance: r.ask.Instance, Label: r.ask.Name, PairedAt: now, PairedBy: by,
-		Address: r.address, Fingerprint: hex.EncodeToString(r.fp), Access: r.ask.Access}
+		Address: r.address, Fingerprint: hex.EncodeToString(r.fp), Access: r.ask.Access, Addons: r.ask.Addons}
 	ask, scopes, address := r.ask, r.scopes, r.address
 	m.mu.Unlock()
 	name, secret, err := m.Minter.CreatePairedToken(slug(ask.App, ask.Instance), scopes, client)
@@ -614,7 +673,7 @@ func (m *Manager) Approve(id, code, by string) (auth.TokenClient, string, error)
 	m.mu.Lock()
 	if r2 := m.reqs[id]; r2 == r && r.state == StatePending {
 		r.state = StateApproved
-		r.result = Result{Token: secret, Name: name, Scopes: scopes.Strings(), Access: ask.Access}
+		r.result = Result{Token: secret, Name: name, Scopes: scopes.Strings(), Access: ask.Access, Addons: ask.Addons}
 		m.signalLocked(r)
 	}
 	m.mu.Unlock()

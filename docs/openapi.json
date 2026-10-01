@@ -1121,6 +1121,15 @@
               "null"
             ]
           },
+          "addons": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "address": {
             "type": "string"
           },
@@ -5717,6 +5726,21 @@
         ],
         "type": "object"
       },
+      "PairingAddonRef": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object"
+      },
       "PairingAnswer": {
         "properties": {
           "expires_in": {
@@ -5759,6 +5783,15 @@
               "null"
             ]
           },
+          "addons": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "app": {
             "type": "string"
           },
@@ -5797,6 +5830,15 @@
               "null"
             ]
           },
+          "addons": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "name": {
             "type": "string"
           },
@@ -5829,6 +5871,15 @@
             },
             "type": [
               "object",
+              "null"
+            ]
+          },
+          "addons": {
+            "items": {
+              "$ref": "#/components/schemas/PairingAddonRef"
+            },
+            "type": [
+              "array",
               "null"
             ]
           },
@@ -15245,6 +15296,21 @@
               "application/json": {
                 "schema": {
                   "properties": {
+                    "addons": {
+                      "items": {
+                        "additionalProperties": {
+                          "type": "string"
+                        },
+                        "type": [
+                          "object",
+                          "null"
+                        ]
+                      },
+                      "type": [
+                        "array",
+                        "null"
+                      ]
+                    },
                     "scopes": {
                       "items": {
                         "type": "string"
@@ -15265,6 +15331,7 @@
                     }
                   },
                   "required": [
+                    "addons",
                     "scopes",
                     "tokens"
                   ],

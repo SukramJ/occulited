@@ -78,11 +78,15 @@ test('the token dialog picks scopes, offers Full access with its hint, and posts
     await page.goto('/system/remote-access');
     await page.getByRole('button', {name: 'Create token'}).click();
     const create = page.locator('.ol-tokform').getByRole('button', {name: 'Create token'});
-    // the box's fourteen scopes, each with its label and name; nothing chosen yet
+    // the box's fourteen scopes, each with its label and name, and the one installed addon's
+    // ingress scope (openccu-lite task 307) below them; nothing chosen yet
     const boxes = page.locator('.ol-scope-grid input[type=checkbox]');
-    await expect(boxes).toHaveCount(14);
-    await expect(page.locator('.ol-scope-grid')).toContainText('Names and rooms: read');
-    await expect(page.locator('.ol-scope-grid')).toContainText('rpc:admin');
+    await expect(boxes).toHaveCount(15);
+    await expect(page.locator('.ol-scope-grid').first()).toContainText('Names and rooms: read');
+    await expect(page.locator('.ol-scope-grid').first()).toContainText('rpc:admin');
+    await expect(page.locator('[data-addon-scopes]')).toContainText('Addon RedMatic: its pages through the system');
+    await expect(page.locator('[data-addon-scopes]')).toContainText('addon:redmatic');
+    await expect(page.locator('[data-addon-scopes-hint]')).toContainText('Authorization: Bearer');
     await page.getByPlaceholder('Token name (e.g. hm2mqtt)').fill('hass');
     await expect(create).toBeDisabled();
     // Full access covers the explicit ones and says why explicit is safer

@@ -15,6 +15,8 @@
         id: string; app: string; app_version?: string; instance?: string; name: string; address: string;
         access: Record<string, string>; purpose?: Record<string, string>; scopes: string[]; code: string;
         fingerprint?: string; created: string; expires: string; look_alike?: boolean;
+        // openccu-lite task 307: the addons whose pages the program asks to reach through the system
+        addons?: {id: string; name: string}[];
     }
     let requests = $state<Request[]>([]);
     let busy = $state('');
@@ -98,6 +100,12 @@
                             {levelText(r.access[a.key])}{#if a.key === 'devices' && r.access[a.key] === 'administer'}{' · '}{t('may pair and delete devices')}{/if}
                             {#if r.purpose?.[a.key]}<span class="pr-purpose">“{r.purpose[a.key]}”</span>{/if}
                         </dd>
+                    </div>
+                {/each}
+                {#each r.addons ?? [] as ad (ad.id)}
+                    <div data-pair-addon={ad.id}>
+                        <dt>{t('Addon')}</dt>
+                        <dd>{t('{name}: its pages through the system', {name: ad.name})} <code class="ol-muted">addon:{ad.id}</code></dd>
                     </div>
                 {/each}
             </dl>

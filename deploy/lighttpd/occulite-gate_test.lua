@@ -2,7 +2,8 @@
 --
 -- The gate itself (occulite-gate.lua) needs lighttpd's mod_magnet to run; its patterns do
 -- not. Keep the functions below in step with the gate. The second half runs the gate script
--- itself against a stand-in for lighty.r (B-94). Run it with Lua 5.2 or later:
+-- itself against a stand-in for lighty.r (B-94). Run it with Lua 5.3 or later (the gate's address
+-- check uses the integer bit operators; the fork's lighttpd is built with Lua 5.4):
 --
 --   lua deploy/lighttpd/occulite-gate_test.lua      (the box has /usr/bin/lua, 5.4)
 --
@@ -189,18 +190,24 @@ local function run_gate(headers, query, live_files, broken, lighty_c, alias_file
   local lighty_stub = {
     r = {
       req_header = req_header,
-      req_attr = { ["uri.query"] = query, ["uri.path"] = path or "/addons/x/", ["request.method"] = NEXT.method or "GET", ["uri.authority"] = NEXT.authority or "box.lan" },
+      req_attr = { ["uri.query"] = query, ["uri.path"] = path or "/addons/x/", ["request.method"] = NEXT.method or "GET", ["uri.authority"] = NEXT.authority or "box.lan", ["request.remote-addr"] = NEXT.remote or "192.168.1.50" },
       resp_header = NEXT.resp_header or {},
-      resp_body = { set = function() end },
+      resp_body = { set = function(_, body) NEXT.body = body and body[1] end },
     },
     c = lighty_c or nil,
   }
+  -- task 307: the token mirror's files (NEXT.tokens: file name → content), read line by line
   local io_stub = {
     open = function(p)
       local name = p:match("^/var/run/occulite/sessions/(.*)$")
       if name and live_files[name] then return { close = function() end } end
       local alias = p:match("^/var/run/occulite/legacy%-sessions/(.*)$")
       if alias and alias_files and alias_files[alias] then return { close = function() end } end
+      local tok = p:match("^/var/run/occulite/gate%-tokens/(.*)$")
+      if tok and NEXT.tokens and NEXT.tokens[tok] then
+        local content = NEXT.tokens[tok]
+        return { close = function() end, lines = function() return (content .. "\n"):gmatch("([^\n]*)\n") end }
+      end
       return nil
     end,
   }
@@ -213,7 +220,9 @@ local function run_gate(headers, query, live_files, broken, lighty_c, alias_file
   local rc = chunk()
   local seen = {}
   for _, e in ipairs(sent()) do
-    if (e.name:upper():gsub("[^%w]", "_")) == "X_OCCULITE_SESSION" then seen[#seen + 1] = e.name .. "=" .. e.value end
+    local cgi = (e.name:upper():gsub("[^%w]", "_"))
+    -- the session header as before; the identity headers of task 307 only when a case asks (NEXT.identity)
+    if cgi == "X_OCCULITE_SESSION" or (NEXT.identity and (cgi == "X_OCCULITE_AUTH" or cgi == "X_OCCULITE_TOKEN")) then seen[#seen + 1] = e.name .. "=" .. e.value end
   end
   return rc, (#seen > 0 and table.concat(seen, " | ") or "-")
 end
@@ -368,6 +377,94 @@ do -- ?sid= passes from anywhere: another site cannot know it
   local rc = run_gate({ SFS("cross-site") }, "sid=@" .. LIVEQUERY .. "@", LIVE, nil, nil, ALIASES)
   NEXT = {}
   want(rc, 0, "?sid= from another site: answer")
+end
+
+-- openccu-lite task 307 (GitHub issue #3): an API token as Authorization: Bearer. The token mirror
+-- names a file by the SHA-256 of the secret; the file says which segments under /addons/ the token
+-- opens ("*" for Full access), when it expires and from where it is accepted. A Bearer with a
+-- token's shape is final: 401 for a token nobody has or an expired one, 403 (logged, with the
+-- token's name) for another addon, a path outside /addons/ or an address outside the ranges; an
+-- accepted request carries the token in the session header, X-Occulite-Auth: token and
+-- X-Occulite-Token: <name>; a session-accepted request carries X-Occulite-Auth: session. Forged
+-- copies of the two identity headers are removed like the session header's.
+do
+  local LOOM, UNKNOWN, FULL, EXPIRED, RANGED = "olt_0123456789abcdef0123456789abcdef", "olt_ffffffffffffffffffffffffffffffff", "olt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "olt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "olt_cccccccccccccccccccccccccccccccc"
+  SHA256[LOOM] = "9036A388ED99FC7BB8E0253DEEAC8F7CBD9C06E70F8B0A03764BF00831960175"
+  SHA256[UNKNOWN] = "72CBA6180A5035A2046A613047ED64E785432012DDDA817AC569E946437B1A4F"
+  SHA256[FULL] = "B304DCBDF421EEA17902A51F265903F05954993E83AE67672A94AB4377A1CB82"
+  SHA256[EXPIRED] = "A54A8EC1AC82489AF7E83BDB79D50533AB582303F691D45DBE7A57276C520DDB"
+  SHA256[RANGED] = "DDF061AE5AE0107DE4B412EF0204EB8F2852925176AA2E3542A48001E38577A7"
+  local TOKENS = {
+    [key(LOOM)] = "name homematicip-local-ha\naddons red redmatic\n",
+    [key(FULL)] = "name full\naddons *\n",
+    [key(EXPIRED)] = "name old\naddons red\nexpires 1000000000\n",
+    [key(RANGED)] = "name ranged\naddons hmm\nip 192.0.2.0/24\nip 2001:db8::/32\nip 198.51.100.7/32\n",
+  }
+  local function tok(what, authz, path, want_rc, want_seen, opts)
+    opts = opts or {}
+    local logged, resp = {}, {}
+    NEXT = { tokens = TOKENS, identity = true, remote = opts.remote, method = opts.method, resp_header = resp, print = function(l) logged[#logged + 1] = l end }
+    local headers = {}
+    if authz ~= nil then headers[#headers + 1] = { "Authorization", authz } end
+    for _, h in ipairs(opts.headers or {}) do headers[#headers + 1] = h end
+    local rc, seen = run_gate(headers, opts.query, LIVE, nil, nil, ALIASES, path)
+    local body = NEXT.body or ""
+    NEXT = {}
+    want(rc, want_rc, what .. ": answer")
+    if want_rc == 0 then
+      want(seen, want_seen, what .. ": headers")
+    elseif want_rc ~= 500 then
+      want(seen, "-", what .. ": nothing to pass on")
+    end
+    if opts.log ~= nil then
+      want(#logged > 0 and logged[1]:find(opts.log, 1, true) ~= nil, true, what .. ": logged " .. opts.log)
+    elseif want_rc == 403 then
+      want(#logged, 1, what .. ": one log line")
+    else
+      want(#logged, 0, what .. ": nothing logged")
+    end
+    if opts.body ~= nil then want(body:find(opts.body, 1, true) ~= nil, true, what .. ": body says " .. opts.body) end
+  end
+  local LOOM_HDRS = "X-Occulite-Session=" .. LOOM .. " | X-Occulite-Auth=token | X-Occulite-Token=homematicip-local-ha"
+  tok("the token on its proxied segment", "Bearer " .. LOOM, "/addons/red/api/x", 0, LOOM_HDRS)
+  tok("the token on the addon's own id", "Bearer " .. LOOM, "/addons/redmatic/settings.cgi", 0, LOOM_HDRS)
+  tok("the token on the bare segment without a slash", "Bearer " .. LOOM, "/addons/red", 0, LOOM_HDRS)
+  tok("the token with spaces around it", "Bearer   " .. LOOM .. "  ", "/addons/red/", 0, LOOM_HDRS)
+  tok("the token on another addon: 403, logged with its name", "Bearer " .. LOOM, "/addons/hmm/", 403, nil, { log = "token=homematicip-local-ha addon=hmm", body = "forbidden" })
+  tok("the token on a POST to another addon", "Bearer " .. LOOM, "/addons/hmm/x.cgi", 403, nil, { method = "POST", log = "method=POST" })
+  tok("the token outside /addons/", "Bearer " .. LOOM, "/api/auth/v1/state", 403, nil, { log = "addon=-" })
+  tok("the token on a path that only starts like /addons/", "Bearer " .. LOOM, "/addonsx/red/", 403, nil, { log = "addon=-" })
+  tok("Full access opens every addon", "Bearer " .. FULL, "/addons/hmm/", 0, "X-Occulite-Session=" .. FULL .. " | X-Occulite-Auth=token | X-Occulite-Token=full")
+  tok("a token nobody has: 401, not logged", "Bearer " .. UNKNOWN, "/addons/red/", 401, nil, { body = "not known" })
+  tok("an expired token: 401", "Bearer " .. EXPIRED, "/addons/red/", 401)
+  tok("a Bearer of the wrong length is a token nobody has", "Bearer olt_0123", "/addons/red/", 401)
+  tok("a Bearer with the shape and a live cookie: the token's verdict is final", "Bearer " .. UNKNOWN, "/addons/red/", 401, nil, { headers = { { "Cookie", "occulite_gate=" .. LIVEHTTP } } })
+  tok("a Bearer that is no token falls through to the cookie", "Bearer " .. LIVEHTTP, "/addons/red/", 0, "X-Occulite-Session=" .. LIVEHTTP .. " | X-Occulite-Auth=session", { headers = { { "Cookie", "occulite_gate=" .. LIVEHTTP } } })
+  -- (the stand-in keeps a removed header's slot as lighttpd does, so the forged X-Occulite-Auth's
+  -- position comes first; its value is the gate's)
+  tok("a forged identity header is removed before the token sets its own", "Bearer " .. LOOM, "/addons/red/", 0, "X-Occulite-Auth=token | X-Occulite-Session=" .. LOOM .. " | X-Occulite-Token=homematicip-local-ha", { headers = { { "X-Occulite-Auth", "session" }, { "x_occulite_token", "admin" }, { "X-Occulite-Session", FORGED } } })
+  tok("a forged identity header without a credential: 401 for a program", nil, "/addons/red/", 401, nil, { headers = { { "X-Occulite-Auth", "token" }, { "X-Occulite-Token", "admin" } } })
+  -- the address ranges: IPv4, a mapped IPv4, IPv6, and outside
+  local RANGED_HDRS = "X-Occulite-Session=" .. RANGED .. " | X-Occulite-Auth=token | X-Occulite-Token=ranged"
+  tok("a ranged token from inside its IPv4 range", "Bearer " .. RANGED, "/addons/hmm/", 0, RANGED_HDRS, { remote = "192.0.2.77" })
+  tok("a ranged token from the single address", "Bearer " .. RANGED, "/addons/hmm/", 0, RANGED_HDRS, { remote = "198.51.100.7" })
+  tok("a ranged token, the address mapped into IPv6", "Bearer " .. RANGED, "/addons/hmm/", 0, RANGED_HDRS, { remote = "::ffff:192.0.2.9" })
+  tok("a ranged token from inside its IPv6 range", "Bearer " .. RANGED, "/addons/hmm/", 0, RANGED_HDRS, { remote = "2001:DB8:1::ab%eth0" })
+  tok("a ranged token from next to the single address", "Bearer " .. RANGED, "/addons/hmm/", 403, nil, { remote = "198.51.100.8", log = "not accepted from this address" })
+  tok("a ranged token from outside both ranges", "Bearer " .. RANGED, "/addons/hmm/", 403, nil, { remote = "203.0.113.5", log = "token=ranged addon=hmm" })
+  tok("a ranged token from another IPv6 network", "Bearer " .. RANGED, "/addons/hmm/", 403, nil, { remote = "2001:db9::1" })
+  tok("a ranged token without a known address", "Beared " .. RANGED, "/addons/hmm/", 401, nil, { remote = "" })
+  tok("a ranged token with an unreadable address", "Bearer " .. RANGED, "/addons/hmm/", 403, nil, { remote = "nowhere" })
+  -- the session paths carry the marker too
+  NEXT = { identity = true }
+  local rc, seen = run_gate({ { "Cookie", "occulite_gate=" .. LIVEHTTP } }, nil, LIVE, nil, nil, ALIASES)
+  NEXT = {}
+  want(rc, 0, "a cookie session: answer")
+  want(seen, "X-Occulite-Session=" .. LIVEHTTP .. " | X-Occulite-Auth=session", "a cookie session: the marker says session")
+  NEXT = { identity = true }
+  rc, seen = run_gate({}, "sid=@aliasLive1@", LIVE, nil, nil, ALIASES)
+  NEXT = {}
+  want(seen, "X-Occulite-Session=aliasLive1 | X-Occulite-Auth=session", "an alias: the marker says session")
 end
 
 if fails > 0 then print(fails .. " FAILED") os.exit(1) end

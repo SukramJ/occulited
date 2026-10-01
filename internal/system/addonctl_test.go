@@ -91,6 +91,7 @@ func TestAddonTokens(t *testing.T) {
 type fakeMinter struct {
 	minted  []string
 	dropped []string
+	synced  int
 }
 
 func (m *fakeMinter) MintAddonToken(id string, declared []string) (string, []string, []string, error) {
@@ -110,6 +111,8 @@ func (m *fakeMinter) MintAddonToken(id string, declared []string) (string, []str
 }
 
 func (m *fakeMinter) DropAddonToken(id string) { m.dropped = append(m.dropped, id) }
+
+func (m *fakeMinter) SyncGateTokens() { m.synced++ }
 
 // The addons' API tokens (task 66): minted from the policy's api_scopes with the refused ones
 // left out, the file beside the control token, 0600 and the addon's user; minted again only when

@@ -135,6 +135,8 @@ const routes = {
         ],
         // task 66: the scopes a token can be given, in the box's order
         scopes: ['meta:read', 'meta:write', 'system:read', 'logs:read', 'system:write', 'addons:write', 'power', 'backup', 'led', 'auth:admin', 'rpc:read', 'rpc:operate', 'rpc:configure', 'rpc:admin'],
+        // openccu-lite task 307: the installed addons' ingress scopes
+        addons: [{id: 'redmatic', name: 'RedMatic', scope: 'addon:redmatic'}],
     },
     'GET /api/auth/v1/sessions': {
         current: 'A1b2C3d4E5',
