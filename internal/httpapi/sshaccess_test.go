@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/hobbyquaker/occulited/internal/auth"
@@ -24,13 +25,30 @@ const (
 	sshLabKey  = "ecdsa-sha2-nistp384 AAAAE2VjZHNhLXNoYTItbmlzdHAzODQAAAAIbmlzdHAzODQAAABhBPUSfBJXk7J2BPZi3b7iRP74eM1MdcEXFedN6chSVTyF/9aDxY1p7bBOHauaCNJAr8v/NTm3IalSCRmjTG/Npl7TxfRK0yehzV9v+hQe5qbKdfpLnVSd9f3J/45iXcD/xg== lab"
 )
 
-// sshHelper is the helper's SSH side in memory.
+// sshHelper is the helper's SSH side in memory. Programs it refuses, every one, as the helper
+// does with any program not on its list: mkpasswd among them (openccu-lite task 302).
 type sshHelper struct {
 	priv.Local
+	root        string // the fake root the API serves
 	file        []byte
 	ended       []int
 	keyOnly     bool
 	keyOnlySets int
+	mu          sync.Mutex
+	runs        []string
+}
+
+func (h *sshHelper) Run(_ context.Context, name string, args []string, _ []byte) (priv.Result, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.runs = append(h.runs, strings.TrimSpace(name+" "+strings.Join(args, " ")))
+	return priv.Result{Exit: 1, Stderr: []byte("refused run " + name)}, nil
+}
+
+func (h *sshHelper) Runs() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]string(nil), h.runs...)
 }
 
 func (h *sshHelper) ReadAuthorizedKeys() ([]byte, error) { return h.file, nil }
@@ -70,6 +88,7 @@ func sshAPIServer(t *testing.T) (*httptest.Server, *sshHelper, map[string]string
 
 	// two sessions: one from this test's address (the page's own), one from elsewhere
 	root := t.TempDir()
+	h.root = root
 	proc := func(pid, ppid int, comm, title string) {
 		d := filepath.Join(root, "proc", strconv.Itoa(pid))
 		_ = os.MkdirAll(d, 0o755)
@@ -177,6 +196,67 @@ func TestSSHPasswordAsksForThePassword(t *testing.T) {
 	// a ticket for the keys is no ticket for the password
 	if st, _, _ := do(t, srv, "POST", SSHPasswordPath, `{"password":"rootpass123"}`, sshConfirm(t, srv, admin, SSHKeysPath)); st != 403 {
 		t.Errorf("the keys' ticket set the password: %d", st)
+	}
+}
+
+// fakeMkpasswd puts a shell script named mkpasswd first on PATH that records its stdin and
+// prints one hash: what the daemon's own mkpasswd run was handed becomes visible.
+func fakeMkpasswd(t *testing.T, body string) (stdinFile string) {
+	t.Helper()
+	dir := t.TempDir()
+	stdinFile = filepath.Join(dir, "stdin")
+	script := "#!/bin/sh\ncat > " + stdinFile + "\n" + body + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "mkpasswd"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return stdinFile
+}
+
+// openccu-lite task 302 (GitHub #2): the route as production wires it - no hasher substituted,
+// a helper that refuses every program - hashes the typed password in the daemon's own process
+// and sets that hash. Before, the hash was asked of the helper through the Runner, which has no
+// mkpasswd ("refused by the privilege helper: program mkpasswd") and carries no stdin, so even an
+// allowed mkpasswd would have hashed an empty input.
+func TestSSHPasswordOverHTTP(t *testing.T) {
+	srv, h, admin, bob := sshAPIServer(t)
+	shadow := filepath.Join(h.root, "etc", "config", "shadow")
+	before := "root:*:19000:0:99999:7:::\nhm:*:19000:0:99999:7:::\n"
+	if err := os.MkdirAll(filepath.Dir(shadow), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(shadow, []byte(before), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	stdinFile := fakeMkpasswd(t, `echo '$6$saltsalt$hashofthetypedpassword'`)
+
+	if st, _, _ := do(t, srv, "POST", SSHPasswordPath, `{"password":"rootpass123"}`, sshConfirm(t, srv, admin, SSHPasswordPath)); st != 200 {
+		t.Fatalf("set: %d", st)
+	}
+	if got, _ := os.ReadFile(stdinFile); string(got) != "rootpass123\n" {
+		t.Errorf("mkpasswd read %q, not the typed password", got)
+	}
+	if got, _ := os.ReadFile(shadow); !strings.HasPrefix(string(got), "root:$6$saltsalt$hashofthetypedpassword:19000:") || !strings.Contains(string(got), "\nhm:*:19000:") {
+		t.Errorf("shadow: %q", got)
+	}
+	if runs := h.Runs(); len(runs) != 0 {
+		t.Errorf("the route went through the privilege helper: %v", runs)
+	}
+	// a user's confirmation is not an admin's
+	if st, _, _ := do(t, srv, "POST", SSHPasswordPath, `{"password":"rootpass123"}`, bob); st != 403 {
+		t.Errorf("a user set root's password: %d", st)
+	}
+	// too short: refused before any hashing, with the confirmation spent
+	if st, out, _ := do(t, srv, "POST", SSHPasswordPath, `{"password":"short"}`, sshConfirm(t, srv, admin, SSHPasswordPath)); st != 400 || out["error"] != "invalid" {
+		t.Errorf("short: %d %v", st, out)
+	}
+	// mkpasswd failing: 400, and the hash set before stays
+	fakeMkpasswd(t, `echo 'mkpasswd: boom' >&2; exit 1`)
+	if st, out, _ := do(t, srv, "POST", SSHPasswordPath, `{"password":"anotherpass1"}`, sshConfirm(t, srv, admin, SSHPasswordPath)); st != 400 || out["error"] != "invalid" || !strings.Contains(out["message"].(string), "exit 1") {
+		t.Errorf("a failing mkpasswd: %d %v", st, out)
+	}
+	if got, _ := os.ReadFile(shadow); !strings.HasPrefix(string(got), "root:$6$saltsalt$hashofthetypedpassword:19000:") {
+		t.Errorf("a failed hash changed shadow: %q", got)
 	}
 }
 

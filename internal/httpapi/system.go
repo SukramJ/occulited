@@ -141,6 +141,10 @@ type SystemAPI struct {
 	// RunStdin executes the commands that read their standard input - the restore, which reads
 	// the security key (B-144); nil = exec for real. main substitutes the dry runner as for Run.
 	RunStdin system.StdinRunner
+	// PasswordHasher makes root's SSH password hash; nil = mkpasswd in the daemon's own process
+	// (openccu-lite task 302). Never the Runner: that is the privilege helper, which has no
+	// mkpasswd and takes no stdin, so the password would never reach it. Tests substitute a fake.
+	PasswordHasher system.PasswordHasher
 	// Firewall composes USERPORTS from the manual list and the addons' opened ports (D-47);
 	// nil = one on Root with the default state directory.
 	Firewall *system.FirewallManager
@@ -2253,7 +2257,7 @@ func (a *SystemAPI) sshPassword(w http.ResponseWriter, r *http.Request) {
 	if !a.confirmed(w, r, SSHPasswordPath) {
 		return
 	}
-	if err := a.Root.SetRootPassword(r.Context(), a.Run, body.Password); err != nil {
+	if err := a.Root.SetRootPassword(r.Context(), a.PasswordHasher, body.Password); err != nil {
 		writeJSON(w, http.StatusBadRequest, apiError{Error: "invalid", Message: err.Error()})
 		return
 	}

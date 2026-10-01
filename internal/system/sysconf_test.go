@@ -404,22 +404,29 @@ func TestSSH(t *testing.T) {
 		t.Errorf("%v", fake.actions)
 	}
 
-	hashing := func(_ context.Context, name string, args ...string) ([]byte, error) {
-		return []byte("$6$salt$hash\n"), nil
+	// the hasher is handed the password itself (openccu-lite task 302: through the Runner it
+	// never was), and a short one is refused before any hashing
+	var hashed []string
+	hashing := func(_ context.Context, password string) (string, error) {
+		hashed = append(hashed, password)
+		return "$6$salt$hash\n", nil
 	}
-	if err := r.SetRootPassword(context.Background(), hashing, "short"); err == nil {
-		t.Error("short accepted")
+	if err := r.SetRootPassword(context.Background(), hashing, "short"); err == nil || len(hashed) != 0 {
+		t.Errorf("short accepted: %v %v", err, hashed)
 	}
 	if err := r.SetRootPassword(context.Background(), hashing, "longenough1"); err != nil {
 		t.Fatal(err)
+	}
+	if len(hashed) != 1 || hashed[0] != "longenough1" {
+		t.Errorf("the hasher was handed %q, not the password", hashed)
 	}
 	if got := readFile(r.join("/etc/config/shadow")); !strings.HasPrefix(got, "root:$6$salt$hash:19000:") || !strings.Contains(got, "\nhm:*:") {
 		t.Errorf("%q", got)
 	}
 	// B-15: the line is replaced by the privilege helper's own operation, which will not write
 	// anything that is not a crypt hash - occulited never reads or rewrites the file itself
-	notAHash := func(_ context.Context, name string, args ...string) ([]byte, error) {
-		return []byte("plaintext\n"), nil
+	notAHash := func(_ context.Context, _ string) (string, error) {
+		return "plaintext\n", nil
 	}
 	if err := r.SetRootPassword(context.Background(), notAHash, "longenough1"); err == nil {
 		t.Error("a value that is not a crypt hash was written into shadow")
