@@ -6,12 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/hobbyquaker/occulited/internal/priv"
 )
 
 // B-120 (D-107): lighttpd reads its addon drop-ins, /usr/local/etc/config/lighttpd/<id>.conf, at
@@ -42,11 +45,11 @@ const (
 	// AddonsDir holds the addons' own trees.
 	AddonsDir = "/usr/local/addons"
 	// addonLighttpdFragment is where an addon ships its drop-in, relative to its tree.
-	addonLighttpdFragment = "etc/lighttpd.conf"
+	addonLighttpdFragment = priv.AddonFragmentRel
 	// LighttpdRejectedSuffix marks a drop-in the validator refused: <id>.conf.rejected holds the reason.
 	LighttpdRejectedSuffix = ".rejected"
 	// lighttpdDropinMax bounds a fragment; a frontend's few blocks are a page or two.
-	lighttpdDropinMax = 64 << 10
+	lighttpdDropinMax = priv.AddonFragmentMax
 	// lighttpdCopyHeader is the first line of every copy, so a reader knows where it came from.
 	lighttpdCopyHeader = lighttpdCopyPrefix + "%s: a validated copy of the addon's lighttpd fragment, refreshed from it at every sync\n"
 	// lighttpdCopyPrefix starts every copy's first line; a drop-in that starts with it is ours
@@ -137,7 +140,13 @@ func syncLighttpdDropin(root Root, dir, id string) (DropinResult, bool, error) {
 	lst, lerr := os.Lstat(dropin)
 	switch {
 	case lerr == nil && lst.Mode()&os.ModeSymlink != 0:
-		// the installer's link: its target is the fragment, and it has to lie in the addon's tree
+		// the installer's link: its target is the fragment, and it has to lie in the addon's tree.
+		// A link straight to the fragment is read as the fragment is (through the helper when the
+		// tree is closed to occulited's user, B-35); resolving it here would fail on that tree.
+		if lt, rerr := os.Readlink(dropin); rerr == nil && filepath.Clean(lt) == fragment {
+			src = fragment
+			break
+		}
 		target, rerr := filepath.EvalSymlinks(dropin)
 		if rerr != nil || !underDir(target, addonTree) {
 			res.Action, res.Reason = "rejected", "the drop-in is a link that does not lead into the addon's own directory"
@@ -264,41 +273,30 @@ type addonFragment struct {
 	template bool   // it carries @NAME@ placeholders: the addon renders it itself
 }
 
-// readAddonFragment reads <tree>/etc/lighttpd.conf through os.Root, so a link - the file itself or a
-// directory on the way - that leads out of the addon's tree is refused instead of followed: the sync
-// runs as root, and an addon must not get a root-only file read, let alone quoted in its note.
+// readAddonFragment reads <tree>/etc/lighttpd.conf through os.Root (priv.Local.ReadAddonFragment), so
+// a link - the file itself or a directory on the way - that leads out of the addon's tree is refused
+// instead of followed: the sync runs as root, and an addon must not get a root-only file read, let
+// alone quoted in its note. A confined addon's tree is closed to occulited's user since openccu-lite
+// B-252 (its etc 0751, the fragment 0640): then the helper reads exactly that file, by the same rules
+// (occulited B-35).
 func readAddonFragment(tree string) addonFragment {
-	r, err := os.OpenRoot(tree)
-	if err != nil {
-		return addonFragment{} // no tree, no fragment
+	path := filepath.Join(tree, addonLighttpdFragment)
+	raw, err := priv.Local{}.ReadAddonFragment(path)
+	if errors.Is(err, fs.ErrPermission) && Priv != nil {
+		raw, err = Priv.ReadAddonFragment(path)
 	}
-	defer r.Close()
-	if _, err := r.Lstat(addonLighttpdFragment); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return addonFragment{}
+	switch {
+	case err == nil:
+		return addonFragment{exists: true, raw: raw, template: lighttpdTemplateRe.Match(raw)}
+	case errors.Is(err, fs.ErrNotExist):
+		return addonFragment{}
+	}
+	for _, e := range []error{priv.ErrFragmentUnreachable, priv.ErrFragmentLink, priv.ErrFragmentNotRegular, priv.ErrFragmentTooLarge} {
+		if errors.Is(err, e) {
+			return addonFragment{exists: true, problem: e.Error()}
 		}
-		return addonFragment{exists: true, problem: "the fragment cannot be reached inside the addon's own directory"}
 	}
-	f, err := r.Open(addonLighttpdFragment)
-	if err != nil {
-		return addonFragment{exists: true, problem: "the fragment is a link that does not lead into the addon's own directory, or cannot be read"}
-	}
-	defer f.Close()
-	st, err := f.Stat()
-	if err != nil || !st.Mode().IsRegular() {
-		return addonFragment{exists: true, problem: "the fragment is not a regular file"}
-	}
-	if st.Size() > lighttpdDropinMax {
-		return addonFragment{exists: true, problem: fmt.Sprintf("the fragment is larger than %d bytes", lighttpdDropinMax)}
-	}
-	raw, err := io.ReadAll(io.LimitReader(f, lighttpdDropinMax+1))
-	if err != nil {
-		return addonFragment{exists: true, problem: "the fragment cannot be read: " + err.Error()}
-	}
-	if len(raw) > lighttpdDropinMax {
-		return addonFragment{exists: true, problem: fmt.Sprintf("the fragment is larger than %d bytes", lighttpdDropinMax)}
-	}
-	return addonFragment{exists: true, raw: raw, template: lighttpdTemplateRe.Match(raw)}
+	return addonFragment{exists: true, problem: "the fragment cannot be read: " + err.Error()}
 }
 
 // isOurLighttpdCopy says whether a drop-in is a copy the sync wrote (its first line says so).

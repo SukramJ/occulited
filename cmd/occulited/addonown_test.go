@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hobbyquaker/occulited/internal/addonunit"
 	"github.com/hobbyquaker/occulited/internal/ownwalk"
 	"github.com/hobbyquaker/occulited/internal/priv"
 	"github.com/hobbyquaker/occulited/internal/system"
@@ -32,12 +33,14 @@ func newOwnRig(t *testing.T, policy string) *ownRig {
 	t.Helper()
 	root := t.TempDir()
 	for p, content := range map[string]string{
-		"etc/passwd":                                   "root:x:0:0::/:/bin/sh\naddon-hmm:x:30007:30007::/usr/local/addons/hmm:/bin/false\naddon-other:x:30008:30008::/usr/local/addons/other:/bin/false\n",
-		"usr/local/addons/hmm/var/x":                   "",
-		"usr/local/etc/config/addons/hmm/.keep":        "",
-		"usr/local/hmm/token":                          "",
-		"usr/local/addons/other/x":                     "",
-		"usr/local/etc/config/addon-policy/hmm.json":   policy,
+		"etc/passwd":                                 "root:x:0:0::/:/bin/sh\naddon-hmm:x:30007:30007::/usr/local/addons/hmm:/bin/false\naddon-other:x:30008:30008::/usr/local/addons/other:/bin/false\n",
+		"usr/local/addons/hmm/var/x":                 "",
+		"usr/local/etc/config/addons/hmm/.keep":      "",
+		"usr/local/hmm/token":                        "",
+		"usr/local/addons/other/x":                   "",
+		"usr/local/etc/config/addon-policy/hmm.json": policy,
+		// B-295: the helper's walk asks the drop-in it rendered
+		"usr/local/etc/config/addon-policy/hmm.conf":   addonunit.DropIn{ID: "hmm", Mode: "confined", UID: 30007}.Render(),
 		"usr/local/etc/config/addon-policy/other.json": `{"id":"other","mode":"confined","uid":30008,"user":"addon-other","source":"catalog","data_dirs":["/usr/local/shared"]}`,
 		"usr/local/etc/config/rc.d/hmm":                "#!/bin/sh\n",
 		"usr/local/etc/config/rc.d/other":              "#!/bin/sh\n",

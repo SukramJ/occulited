@@ -1,10 +1,14 @@
 package system
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/hobbyquaker/occulited/internal/priv"
 )
 
 // B-120: the allowlist against the two fragments the lab's addons ship, and against what an
@@ -312,5 +316,118 @@ func TestSyncLighttpdDropinsFollowTheFragment(t *testing.T) {
 	}
 	if changed, got = sync(); changed {
 		t.Fatalf("the run after the uninstall changed something: %+v", got)
+	}
+}
+
+// fragmentHelper stands in for the helper's addon-fragment read, which reads as root: it opens the
+// closed tree for the moment of the read and counts the calls.
+type fragmentHelper struct {
+	priv.Local
+	calls *int
+}
+
+func (h fragmentHelper) ReadAddonFragment(path string) ([]byte, error) {
+	*h.calls++
+	etc := filepath.Dir(path)
+	if err := os.Chmod(etc, 0o755); err != nil {
+		return nil, err
+	}
+	defer func() { _ = os.Chmod(etc, 0o311) }()
+	if err := os.Chmod(path, 0o644); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, err
+	}
+	defer func() { _ = os.Chmod(path, 0o200) }()
+	return priv.Local{}.ReadAddonFragment(path)
+}
+
+// occulited B-35: a confined addon's tree is closed to occulited's user since openccu-lite B-252 -
+// its etc directory searchable only, the fragment not readable. The sync reads the fragment through
+// the helper then: the copy is written, and an update that changes the fragment replaces it. An etc
+// directory without a fragment is no refusal either.
+func TestSyncLighttpdDropinsClosedTree(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: a closed tree cannot be produced")
+	}
+	root := Root(t.TempDir())
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	dropins := root.join(lighttpdDropinDir)
+	must(os.MkdirAll(dropins, 0o755))
+	etc := root.join("/usr/local/addons/hmm/etc")
+	frag := filepath.Join(etc, "lighttpd.conf")
+	must(os.MkdirAll(etc, 0o755))
+	must(os.MkdirAll(root.join("/usr/local/addons/mosquitto/etc"), 0o755))
+	write := func(content string) {
+		t.Helper()
+		must(os.Chmod(etc, 0o755))
+		_ = os.Chmod(frag, 0o644)
+		must(os.WriteFile(frag, []byte(content), 0o644))
+		must(os.Chmod(frag, 0o200))
+		must(os.Chmod(etc, 0o311))
+	}
+	t.Cleanup(func() { _ = os.Chmod(etc, 0o755); _ = os.Chmod(frag, 0o644) })
+	must(os.Chmod(root.join("/usr/local/addons/mosquitto/etc"), 0o311))
+	t.Cleanup(func() { _ = os.Chmod(root.join("/usr/local/addons/mosquitto/etc"), 0o755) })
+	write(hmmFragment)
+
+	sync := func() (bool, map[string]DropinResult) {
+		t.Helper()
+		changed, results, err := SyncLighttpdDropins(root)
+		must(err)
+		got := map[string]DropinResult{}
+		for _, r := range results {
+			got[r.ID] = r
+		}
+		return changed, got
+	}
+	read := func() string {
+		b, _ := os.ReadFile(filepath.Join(dropins, "hmm.conf"))
+		return string(b)
+	}
+
+	// without a helper that reads as root the closed tree is what B-35 saw: the fragment refused
+	old := Priv
+	Priv = priv.Local{}
+	_, got := sync()
+	Priv = old
+	if got["hmm"].Action != "rejected" || !strings.Contains(got["hmm"].Reason, "cannot be read") {
+		t.Fatalf("a closed tree without the helper: %+v", got["hmm"])
+	}
+	must(os.Remove(filepath.Join(dropins, "hmm.conf"+LighttpdRejectedSuffix)))
+
+	calls := 0
+	withPriv(t, fragmentHelper{calls: &calls})
+	changed, got := sync()
+	if !changed || got["hmm"].Action != "written" || !strings.Contains(read(), `"port" => 8090`) {
+		t.Fatalf("the closed fragment was not taken: %v %+v %q", changed, got["hmm"], read())
+	}
+	if r, ok := got["mosquitto"]; ok {
+		t.Fatalf("an etc directory without a fragment: %+v", r)
+	}
+	if calls != 2 {
+		t.Fatalf("helper reads: %d, want 2 (hmm and mosquitto)", calls)
+	}
+	if _, err := os.Lstat(filepath.Join(dropins, "hmm.conf"+LighttpdRejectedSuffix)); err == nil {
+		t.Fatal("a refusal note was left")
+	}
+	// the update that changes the fragment: the next sync takes it
+	write(strings.ReplaceAll(hmmFragment, "8090", "8093"))
+	changed, got = sync()
+	if !changed || got["hmm"].Action != "written" || !strings.Contains(read(), `"port" => 8093`) {
+		t.Fatalf("the changed fragment was not taken: %v %+v %q", changed, got["hmm"], read())
+	}
+	if changed, got = sync(); changed || got["hmm"].Action != "kept" {
+		t.Fatalf("the second run: %v %+v", changed, got["hmm"])
+	}
+	// an installer's link straight to the closed fragment is read the same way and becomes a copy
+	must(os.Remove(filepath.Join(dropins, "hmm.conf")))
+	must(os.Symlink(frag, filepath.Join(dropins, "hmm.conf")))
+	changed, got = sync()
+	if st, err := os.Lstat(filepath.Join(dropins, "hmm.conf")); err != nil || !st.Mode().IsRegular() || !changed || got["hmm"].Action != "written" {
+		t.Fatalf("the link to the closed fragment: %v %+v %v", changed, got["hmm"], err)
 	}
 }

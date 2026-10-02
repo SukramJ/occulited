@@ -958,11 +958,11 @@ func TestAddonDataDirPolicy(t *testing.T) {
 	for path, want := range map[string]bool{
 		"/usr/local/hmm":                   true,
 		"/usr/local/hmm/cache":             true,
-		"/usr/local/addons/hmm":            true, // on Paths anyway
-		"/usr/local/etc/config/addons/hmm": true,
+		"/usr/local/addons/hmm":            false, // B-294: no write prefix, and a shared tree to the data directories
+		"/usr/local/etc/config/addons/hmm": false, // B-295: no drop-in here confines hmm
 		"/usr/local":                       false,
 		"/usr/local/":                      false,
-		"/usr/local/addons":                true, // Paths\' prefix, the directory itself included (B-6)
+		"/usr/local/addons":                false, // B-294: off Paths
 		"/usr/local/etc":                   false,
 		"/usr/local/etc/":                  false,
 		"/usr/local/tmp":                   true, // on Paths as a prefix, the directory itself included (B-6)

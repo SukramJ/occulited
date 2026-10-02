@@ -9,6 +9,8 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+
+	"github.com/hobbyquaker/occulited/internal/addonunit"
 )
 
 // Task 107: the helper's owntree operation - one addon's directories and that addon's uid, nothing
@@ -21,6 +23,9 @@ func ownTreeRoot(t *testing.T) string {
 		"etc/passwd":                 "root:x:0:0::/:/bin/sh\naddon-hmm:x:30007:30007::/usr/local/addons/hmm:/bin/false\naddon-www:x:30009:30009::/usr/local/addons/www:/bin/false\n",
 		"usr/local/addons/hmm/var/x": "",
 		"outside/secret":             "",
+		// B-295: the helper gives a tree only to an addon its own drop-in confines
+		"usr/local/etc/config/addon-policy/hmm.conf": addonunit.DropIn{ID: "hmm", Mode: "confined", UID: 30007}.Render(),
+		"usr/local/etc/config/addon-policy/www.conf": addonunit.DropIn{ID: "www", Mode: "confined", UID: 30009}.Render(),
 	} {
 		full := filepath.Join(root, p)
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
@@ -35,6 +40,21 @@ func ownTreeRoot(t *testing.T) string {
 
 func TestOwnTreeAllowed(t *testing.T) {
 	root := ownTreeRoot(t)
+	// accounts that exist (AddAddonUser makes one for any id), with drop-ins that do not confine
+	// the addon to them: none, root's, another uid's, a text the helper did not render
+	if err := os.WriteFile(filepath.Join(root, "etc/passwd"), []byte("root:x:0:0::/:/bin/sh\naddon-hmm:x:30007:30007::/usr/local/addons/hmm:/bin/false\naddon-www:x:30009:30009::/usr/local/addons/www:/bin/false\n"+
+		"addon-noconf:x:30014:30014::/:/bin/false\naddon-jp:x:30011:30011::/:/bin/false\naddon-red:x:30012:30012::/:/bin/false\naddon-fake:x:30013:30013::/:/bin/false\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for id, text := range map[string]string{
+		"jp":   addonunit.DropIn{ID: "jp", Mode: "root"}.Render(),
+		"red":  addonunit.DropIn{ID: "red", Mode: "confined", UID: 30099}.Render(),
+		"fake": "# mode=confined uid=30013\n[Service]\nUser=addon-fake\nGroup=addon-fake\n",
+	} {
+		if err := os.WriteFile(filepath.Join(root, "usr/local/etc/config/addon-policy", id+".conf"), []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 	p := DefaultPolicy(root, "/usr/local/etc/occulite")
 	at := func(s string) string { return root + s }
 	std := []string{at("/usr/local/addons/hmm"), at("/usr/local/etc/config/addons/hmm"), at("/usr/local/etc/config/addons/www/hmm")}
@@ -70,6 +90,11 @@ func TestOwnTreeAllowed(t *testing.T) {
 		{name: "a trailing slash", id: "hmm", uid: 30007, dirs: []string{at("/usr/local/addons/hmm/")}, want: "not a clean path"},
 		{name: "none", id: "hmm", uid: 30007, want: "0 directories"},
 		{name: "too many", id: "hmm", uid: 30007, dirs: many, want: "33 directories"},
+		// B-295: an addon whose drop-in does not confine it to that uid
+		{name: "an addon without a drop-in", id: "noconf", uid: 30014, dirs: []string{at("/usr/local/addons/noconf")}, want: "noconf is not confined to uid 30014"},
+		{name: "a root drop-in", id: "jp", uid: 30011, dirs: []string{at("/usr/local/addons/jp")}, want: "jp is not confined to uid 30011"},
+		{name: "a drop-in for another uid", id: "red", uid: 30012, dirs: []string{at("/usr/local/addons/red")}, want: "red is not confined to uid 30012"},
+		{name: "a drop-in that is not the helper's text", id: "fake", uid: 30013, dirs: []string{at("/usr/local/addons/fake")}, want: "fake is not confined to uid 30013"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := p.OwnTreeAllowed(tc.id, tc.dirs, tc.uid)

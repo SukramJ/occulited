@@ -24,6 +24,14 @@ type Root string
 
 func (r Root) join(p string) string { return filepath.Join(string(r), p) }
 
+// onBox is a joined path as the box spells it, without the root in front.
+func (r Root) onBox(full string) string {
+	if rel, err := filepath.Rel(filepath.Join(string(r), "/"), full); err == nil && !strings.HasPrefix(rel, "..") {
+		return "/" + rel
+	}
+	return full
+}
+
 // Path is a path under the root (the root itself on a system).
 func (r Root) Path(p string) string { return r.join(p) }
 

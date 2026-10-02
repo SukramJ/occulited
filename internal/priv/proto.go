@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/hobbyquaker/occulited/internal/addonunit"
 	"github.com/hobbyquaker/occulited/internal/certpem"
 	"github.com/hobbyquaker/occulited/internal/ownwalk"
 )
@@ -64,6 +65,13 @@ type request struct {
 	FWv4     []byte `json:"fw_v4,omitempty"`
 	FWv6     []byte `json:"fw_v6,omitempty"`
 	WindowMS int64  `json:"window_ms,omitempty"`
+	// PolicyFile is addon-policy-file's content: what the drop-in, the start order or the early
+	// start says, which the helper renders (openccu-lite B-293).
+	PolicyFile *addonunit.File `json:"policy_file,omitempty"`
+	// Enabled is addon-enable's direction; WWW is addon-remove's web entry (Path is the rc.d
+	// entry, Recursive removes the web directory with what is in it).
+	Enabled bool   `json:"enabled,omitempty"`
+	WWW     string `json:"www,omitempty"`
 }
 
 type response struct {
@@ -80,7 +88,8 @@ type response struct {
 	// Names is listdir's answer: the entries' names, nothing else (openccu-lite B-253).
 	Names []string `json:"names,omitempty"`
 	// Errno is the failed open's errno name (shareopen, B-217), so the caller can tell a file
-	// that is not there from one it may not read.
+	// that is not there from one it may not read; addon-fragment's says why a fragment cannot be
+	// taken (occulited B-35).
 	Errno string `json:"errno,omitempty"`
 }
 
@@ -544,7 +553,8 @@ type Policy struct {
 	// CertPaths is the live TLS file, /etc/config/server.pem, exact: the one path WriteCertificate
 	// may write (as root:certs 0640, after checking the PEM) and ReadCertificate may read (the
 	// certificate blocks only). Not on Paths' terms - /etc/config/ is a prefix there, and a
-	// generic write of a trust anchor is exactly what task 35 was told not to add. The other
+	// generic write of a trust anchor is exactly what task 35 was told not to add, and since
+	// B-238 the generic operations refuse it although the prefix covers it (namedonly.go). The other
 	// entries are the markers the operation writes beside it (path+ManagedSuffix, and task
 	// 35's path+MarkerSuffix), listed so the list says everything the operation touches; a
 	// marker is never a certificate path of its own.
@@ -572,6 +582,10 @@ type Policy struct {
 	AddonRCDir string
 	// AddonUIDBase: RunAs may switch to uids from here up (the addon users), or stay root.
 	AddonUIDBase int
+	// AddonPolicyDir is where the addon policies are (openccu-lite B-293): its <id>.conf, .needs
+	// and .start are root's to obey and written by AddonPolicyFile alone, never by the generic
+	// operations; the other files there (the stored policy and manifest) are the daemon's.
+	AddonPolicyDir string
 	// LEDDir is the LED class directory the led operation writes under, and LEDNames the LEDs it
 	// may write there (task 95): the RPI-RF-MOD's three and the red power LED. Exact names.
 	LEDDir   string
@@ -618,7 +632,10 @@ func DefaultPolicy(root, stateDir string) Policy {
 			// B-53: on the image the two are links into /var/etc; a write resolves through them
 			// (B-235) and the target has to be on the list as well
 			"/var/etc/hostname", "/var/etc/hosts",
-			"/var/run/", "/run/occulite/", "/sys/class/leds/", "/usr/local/addons/",
+			// openccu-lite B-294: not /usr/local/addons/ - what a root addon's rc.d script starts
+			// lies there, and root runs it; the daemon's three cases there are named operations
+			// (addonhome.go), a confined addon's directory is its own
+			"/var/run/", "/run/occulite/", "/sys/class/leds/",
 			"/usr/local/backup/", "/media/",
 			// openccu-lite task 145: the recovery system's install logs, written as root and
 			// removed by the daemon once they are in the journal (system.RecoveryLogDir)
@@ -699,6 +716,7 @@ func DefaultPolicy(root, stateDir string) Policy {
 		CGIInterpreters:   []string{"/bin/tclsh", "/usr/bin/tclsh"},
 		AddonRCDir:        "/usr/local/etc/config/rc.d/",
 		AddonUIDBase:      30000,
+		AddonPolicyDir:    "/usr/local/etc/config/addon-policy/",
 		// task 95: the status LED controller's frames
 		LEDDir:   "/sys/class/leds",
 		LEDNames: []string{"rpi_rf_mod:red", "rpi_rf_mod:green", "rpi_rf_mod:blue", "PWR"},
@@ -778,6 +796,10 @@ func (p Policy) rel(path string) (string, bool) {
 func (p Policy) pathAllowed(path string) bool {
 	rel, ok := p.rel(path)
 	if !ok || strings.Contains(rel, "..") {
+		return false
+	}
+	// B-238: a named operation's file is never a generic one's, whatever prefix holds it
+	if p.namedOnly(rel) {
 		return false
 	}
 	for _, a := range p.Paths {
@@ -879,7 +901,9 @@ func (p Policy) dataDirAllowed(path string) bool {
 		return true
 	}
 	rel, ok := p.rel(path)
-	if !ok || strings.Contains(rel, "..") {
+	// B-293: a file root runs or obeys is not made the daemon's by a chown either, wherever a link
+	// in rc.d or a web tree put it
+	if !ok || strings.Contains(rel, "..") || p.namedOnly(rel) {
 		return false
 	}
 	for _, d := range p.AddonDataDirs {
@@ -928,6 +952,12 @@ func (p Policy) OwnTreeAllowed(id string, dirs []string, uid int) error {
 	}
 	if !found {
 		return fmt.Errorf("no user %s", name)
+	}
+	// openccu-lite B-295: only a confined addon's tree is given to its user - its drop-in, which
+	// the helper renders itself, says so and names this uid. A root addon's tree handed to an
+	// unprivileged uid would be a tree root runs that another user may change.
+	if confined, ok := p.addonConfinedUID(id); !ok || confined != uid {
+		return fmt.Errorf("%s is not confined to uid %d (its drop-in)", id, uid)
 	}
 	if len(dirs) == 0 || len(dirs) > 32 {
 		return fmt.Errorf("%d directories", len(dirs))
@@ -1346,6 +1376,12 @@ func (s *Server) ops() Ops {
 }
 
 func (s *Server) do(ctx context.Context, req request) response {
+	if res, ok := s.doNamedRootObeyed(req); ok {
+		return res
+	}
+	if res, ok := s.doAddonHome(req); ok {
+		return res
+	}
 	ops := s.ops()
 	fail := func(err error) response {
 		if err != nil {
@@ -1396,8 +1432,10 @@ func (s *Server) do(ctx context.Context, req request) response {
 		}
 		return fail(ops.Touch(path, os.FileMode(req.Mode)))
 	case "remove", "removeall":
+		// B-238: not a directory that holds a named operation's file; since B-293 not the
+		// certificate either (RemoveCertificate) - no named file has a generic exception
 		allowed := func(path string) bool {
-			return s.Policy.pathAllowed(path) || (req.Op == "remove" && s.Policy.runUnitFileAllowed(path))
+			return s.Policy.wholeAllowed(path) || (req.Op == "remove" && s.Policy.runUnitFileAllowed(path))
 		}
 		path, err := s.resolved(req.Path, false, allowed)
 		if err != nil {
@@ -1417,7 +1455,9 @@ func (s *Server) do(ctx context.Context, req request) response {
 	case "symlink":
 		// B-235: the target too - a link from an allowed path to /etc/passwd made the next
 		// write there root's
-		link, err := s.resolved(req.Path, false, s.Policy.pathAllowed)
+		// B-293: nor a link in place of a directory that holds a named file (a missing rc.d or
+		// policy directory made a link to one the daemon fills)
+		link, err := s.resolved(req.Path, false, s.Policy.wholeAllowed)
 		if err != nil {
 			return refuse("path " + req.Path + ": " + err.Error())
 		}
@@ -1427,11 +1467,13 @@ func (s *Server) do(ctx context.Context, req request) response {
 		}
 		return fail(ops.Symlink(req.Target, link))
 	case "rename":
-		src, err := s.resolved(req.Src, false, func(p string) bool { return s.Policy.pathAllowed(p) || s.Policy.stagingAllowed(p) })
+		// B-238: neither side a directory that holds a named operation's file (moved away, the
+		// file written there, moved back)
+		src, err := s.resolved(req.Src, false, func(p string) bool { return s.Policy.wholeAllowed(p) || s.Policy.stagingAllowed(p) })
 		if err != nil {
 			return refuse("rename " + req.Src + ": " + err.Error())
 		}
-		dst, err := s.resolved(req.Dst, false, s.Policy.pathAllowed)
+		dst, err := s.resolved(req.Dst, false, s.Policy.wholeAllowed)
 		if err != nil {
 			return refuse("rename " + req.Dst + ": " + err.Error())
 		}
@@ -1443,7 +1485,12 @@ func (s *Server) do(ctx context.Context, req request) response {
 	case "chown":
 		// the entry itself, never through a link at the end (Lchown; the recursive walk follows
 		// none either)
-		path, err := s.resolved(req.Path, false, s.Policy.dataDirAllowed)
+		// B-238: not a directory that holds a named operation's file (its owner could replace it)
+		allowed := func(path string) bool {
+			rel, ok := s.Policy.rel(path)
+			return s.Policy.dataDirAllowed(path) && ok && !s.Policy.holdsNamed(rel)
+		}
+		path, err := s.resolved(req.Path, false, allowed)
 		if err != nil {
 			return refuse("path " + req.Path + ": " + err.Error())
 		}
@@ -1463,7 +1510,8 @@ func (s *Server) do(ctx context.Context, req request) response {
 		}
 		return response{OK: true, Stdout: b}
 	case "chmod":
-		path, err := s.resolved(req.Path, true, s.Policy.pathAllowed)
+		// B-238: a directory that holds a named operation's file may lose bits, never gain one
+		path, err := s.resolved(req.Path, true, func(p string) bool { return s.Policy.chmodAllowed(p, os.FileMode(req.Mode)) })
 		if err != nil {
 			return refuse("path " + req.Path + ": " + err.Error())
 		}
@@ -1640,6 +1688,8 @@ func (s *Server) do(ctx context.Context, req request) response {
 		return s.listLogs(req)
 	case opListDir:
 		return s.listDir(req)
+	case opAddonFragment:
+		return s.addonFragment(req)
 	case opNetMount, opNetUnmount, opNetMountRemove, opWriteTest:
 		return s.netMount(ctx, req)
 	case opShareList:

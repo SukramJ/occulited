@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/hobbyquaker/occulited/internal/priv"
 )
 
 // mediola's NEO Server (roadmap task 37). OpenCCU's package/neoserver unpacks it onto the userfs
@@ -18,11 +20,11 @@ import (
 
 const (
 	// NeoServerID is the rc.d name, and with it the unit's (addon-97NeoServer.service).
-	NeoServerID = "97NeoServer"
+	NeoServerID = priv.NeoServerRCEntry
 	// NeoServerDir is the addon's directory; the vendor's uninstall removes it.
-	NeoServerDir = "/usr/local/addons/mediola"
+	NeoServerDir = priv.NeoServerHome
 	// NeoServerVendorMarker is the addon's own switch: present, its rc.d script starts nothing.
-	NeoServerVendorMarker = NeoServerDir + "/Disabled"
+	NeoServerVendorMarker = priv.NeoServerDisabledMarker
 	// NeoServerUninstalledMarker is what the vendor's uninstall touches so that OpenCCU's
 	// package does not unpack the addon again at the next update ("do not install the neo
 	// server after user uninstall").
@@ -71,7 +73,9 @@ func (r Root) NeoServerDisabled() bool {
 func (r Root) DisableNeoServer() ([]string, error) {
 	var done []string
 	if _, err := os.Lstat(r.join(NeoServerDir)); err == nil && !r.NeoServerDisabled() {
-		if err := Priv.Touch(r.join(NeoServerVendorMarker), 0o644); err != nil {
+		// the addon's directory is no generic write's (openccu-lite B-294): the helper's own
+		// operation sets the marker, and nothing else there
+		if err := Priv.MarkNeoServerDisabled(r.join(NeoServerVendorMarker)); err != nil {
 			return done, fmt.Errorf("%s: %w", NeoServerVendorMarker, err)
 		}
 		done = append(done, "vendor marker "+NeoServerVendorMarker)

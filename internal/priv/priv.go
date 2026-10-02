@@ -25,6 +25,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/hobbyquaker/occulited/internal/addonunit"
 	"github.com/hobbyquaker/occulited/internal/certpem"
 	"github.com/hobbyquaker/occulited/internal/netmount"
 	"github.com/hobbyquaker/occulited/internal/ownwalk"
@@ -193,6 +194,38 @@ type Ops interface {
 	// helper admits a directory of Policy.ListDirs only - hmipserver's data directory, which is
 	// 0700 - so the daemon knows which devices and modules have files there.
 	ListDir(dir string) ([]string, error)
+	// AddonPolicyFile writes or removes one of an addon's policy files root obeys (openccu-lite
+	// B-293): path is <AddonPolicyDir>/<id>.conf, .needs or .start, and the text is the helper's,
+	// rendered from f (addonunit) after checking it - a drop-in with the addon's own user and a uid
+	// in the addon range, grants of a shape that adds no line and nothing root-equivalent for a
+	// confined addon, a start order of known interfaces, the early start's one word.
+	AddonPolicyFile(path string, f addonunit.File) error
+	// SetAddonEnabled sets or clears the executable bits of an addon's rc.d entry (B-293): the
+	// entry's mode is the helper's to compute, nothing but those bits changes.
+	SetAddonEnabled(path string, enabled bool) error
+	// RemoveAddonEntry removes an addon's rc.d entry, the addon's own script beside the wrapper
+	// and its web entry in the config directory (a link, an empty directory, or with whole the
+	// directory and everything in it) - the uninstall's and the leftovers' removal (B-293). It
+	// answers the paths that were there and went.
+	RemoveAddonEntry(rcd, www string, whole bool) ([]string, error)
+	// RemoveCertificate removes the live certificate and its two markers (B-293; until then a
+	// generic remove with an exception in the policy).
+	RemoveCertificate(path string) error
+	// RemoveAddonHome removes an addon's emptied directory, AddonHomeDir + <id> - a link, a file
+	// or an empty directory - once its rc.d entry is gone: the uninstall's (openccu-lite B-294,
+	// /usr/local/addons/ is no write prefix).
+	RemoveAddonHome(path string) error
+	// MarkNeoServerDisabled creates the NEO Server's own switch, NeoServerDisabledMarker, an empty
+	// file in its existing directory (B-294).
+	MarkNeoServerDisabled(path string) error
+	// RemoveNeoServerHome removes the NEO Server leftover's directory, NeoServerHome, with what is
+	// in it, once its rc.d entry and its web entry are gone (B-294).
+	RemoveNeoServerHome(path string) error
+	// ReadAddonFragment reads an addon's lighttpd fragment, /usr/local/addons/<id>/etc/lighttpd.conf
+	// (occulited B-35, addonfragment.go): through os.Root on the addon's tree, a regular file of at
+	// most AddonFragmentMax bytes. Confined addons' files are 0640 since openccu-lite B-252, so the
+	// drop-in sync reads them through the helper.
+	ReadAddonFragment(path string) ([]byte, error)
 }
 
 // SmartDeviceRe is the one device shape the SMART read admits: a whole SCSI/SATA/USB disk

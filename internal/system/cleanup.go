@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/hobbyquaker/occulited/internal/priv"
 )
 
 // Legacy leftovers (roadmap task 21): what an update from OpenCCU leaves on the userfs that
@@ -39,6 +41,11 @@ type LegacyItem struct {
 	Also []string `json:"also,omitempty"`
 	// Unit is the systemd unit to stop before the paths go (an addon that may still be running).
 	Unit string `json:"-"`
+	// RCEntry and WWWEntry name an addon among the paths by its rc.d id and its web entry: the rc.d
+	// entry with its script and the web entry go first, through the helper's own operation
+	// (openccu-lite B-293) - no generic one reaches rc.d or the web trees, nor a directory a web
+	// link leads into while the link is there.
+	RCEntry, WWWEntry string `json:"-"`
 	// after runs once the paths are gone: what the leftover's own uninstall would do beyond them.
 	after func(Root) error
 }
@@ -52,7 +59,7 @@ var legacyItems = []LegacyItem{
 	// task 37: OpenCCU's NEO Server, which cannot work without the ReGa; the removal is what the
 	// addon's own uninstall does - its four paths and the neoDisabled marker - plus the wrapper's
 	// twin, its hm_addons.cfg entry and the watchdog line it left in root's crontab
-	{ID: "neoserver", Path: NeoServerDir, Also: neoServerPaths[1:], Unit: "addon-" + NeoServerID + ".service",
+	{ID: "neoserver", Path: NeoServerDir, Also: neoServerPaths[1:], Unit: "addon-" + NeoServerID + ".service", RCEntry: NeoServerID, WWWEntry: "mediola",
 		Why:   "mediola's NEO Server, unpacked by OpenCCU: it posts to /tclrega.exe (the ReGa) and /api/homematic.cgi (the WebUI's CGI stack), neither of which openccu-lite has",
 		after: Root.removeNeoServerRemains},
 }
@@ -131,13 +138,39 @@ func (r Root) RemoveLegacyWith(ids []string, stop func(unit string), reload func
 			stop(it.Unit)
 			stopped = true
 		}
+		named := map[string]bool{}
+		if it.RCEntry != "" || it.WWWEntry != "" {
+			var rcd, www string
+			if it.RCEntry != "" {
+				rcd = "/usr/local/etc/config/rc.d/" + it.RCEntry
+				named[rcd], named[rcd+".script"] = true, true
+				rcd = r.join(rcd)
+			}
+			if it.WWWEntry != "" {
+				www = AddonWWW + "/" + it.WWWEntry
+				named[www] = true
+				www = r.join(www)
+			}
+			if _, err := Priv.RemoveAddonEntry(rcd, www, true); err != nil {
+				return removed, fmt.Errorf("%s: %w", id, err)
+			}
+		}
 		for _, path := range paths {
 			p := r.join(path)
+			if named[path] {
+				continue
+			}
 			if _, err := os.Lstat(p); errors.Is(err, os.ErrNotExist) {
 				continue
 			}
-			// RemoveAll on a symlink removes the link, never what it points to
-			if err := Priv.RemoveAll(p); err != nil {
+			// RemoveAll on a symlink removes the link, never what it points to. An addon's
+			// directory is no generic write's (openccu-lite B-294): the NEO Server's goes through
+			// the helper's own operation, after its rc.d and web entries above
+			del := Priv.RemoveAll
+			if path == NeoServerDir || path == priv.NeoServerConfig {
+				del = Priv.RemoveNeoServerHome
+			}
+			if err := del(p); err != nil {
 				return removed, fmt.Errorf("%s: %w", path, err)
 			}
 		}
@@ -230,7 +263,9 @@ func (r Root) hardenConfigDirs() []string {
 	mh := filepath.Join(base, "addons", "mh")
 	if fi, err := os.Lstat(mh); err == nil && fi.IsDir() {
 		if ents, _ := os.ReadDir(mh); len(ents) == 0 {
-			if err := Priv.RemoveAll(mh); err == nil {
+			// an addon config directory nobody is confined to is no generic write's (openccu-lite
+			// B-295): the helper's own operation removes it, and only empty
+			if err := Priv.RemoveAddonHome(mh); err == nil {
 				fixed = append(fixed, "addons/mh (removed, empty)")
 				slog.Info("ccu leftovers: removed the empty world-writable directory", "path", "addons/mh")
 			} else {

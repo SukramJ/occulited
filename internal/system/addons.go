@@ -167,26 +167,34 @@ func (b AddonScripts) Uninstall(ctx context.Context, id string) (UninstallResult
 	}
 	// what went is recorded for the answer (B-283): a path that was not there is not a removal
 	// (the helper's remove treats a missing path as done, so it is looked at first)
-	rm := func(box string) {
+	rm := func(box string, del func(string) error) {
 		if _, err := os.Lstat(b.Root.join(box)); err != nil {
 			return
 		}
-		if err := remove(b.Root.join(box)); err == nil {
+		if err := del(b.Root.join(box)); err == nil {
 			res.SystemRemoved = append(res.SystemRemoved, box)
 		}
 	}
 	// the WebUI removes the rc.d entry unconditionally after `uninstall` (cp_software.cgi:
-	// `exec rm -rf $script`), and so do we — otherwise a half-removed addon keeps a ghost row
-	rm("/usr/local/etc/config/rc.d/" + id)
-	rm("/usr/local/etc/config/rc.d/" + id + ".script") // 28.8: the addon's own script behind the addon-rc wrapper
-	// B-119: what the script could not remove as the addon's user, because root owns the parent:
-	// its www link (or directory) and its standard directories - the latter only once the script
-	// emptied them, never with anything left inside (an addon that keeps its configuration for a
-	// reinstall keeps it). Root's uninstall did all this itself; for it these are no-ops.
-	rm("/usr/local/etc/config/addons/www/" + id)
-	rm("/usr/local/addons/" + id)
-	rm("/usr/local/etc/config/addons/" + id)
-	rm("/usr/local/etc/monit-" + id + ".cfg")
+	// `exec rm -rf $script`), and so do we — otherwise a half-removed addon keeps a ghost row. With
+	// it the addon's own script behind the addon-rc wrapper (28.8) and - B-119, what the script
+	// could not remove as the addon's user, because root owns the parent - its www link, or the
+	// directory once the script emptied it. rc.d and the web trees are root's to run, so the
+	// helper's own operation removes them (openccu-lite B-293).
+	removed, err := Priv.RemoveAddonEntry(script, b.Root.join(AddonWWW+"/"+id), false)
+	if err != nil {
+		slog.Warn("addons: the rc.d entry or the web link could not be removed", "addon", id, "err", err)
+	}
+	for _, p := range removed {
+		res.SystemRemoved = append(res.SystemRemoved, b.Root.onBox(p))
+	}
+	// its standard directories, only once the script emptied them, never with anything left inside
+	// (an addon that keeps its configuration for a reinstall keeps it). Root's uninstall did all
+	// this itself; for it these are no-ops. The addon's directory is no generic write's
+	// (openccu-lite B-294): the helper's own operation removes it, and only empty.
+	rm("/usr/local/addons/"+id, Priv.RemoveAddonHome)
+	rm("/usr/local/etc/config/addons/"+id, Priv.RemoveAddonHome) // B-295: likewise its config directory
+	rm("/usr/local/etc/monit-"+id+".cfg", remove)
 	cfgPath := b.Root.join("/usr/local/etc/config/hm_addons.cfg")
 	if entries := ParseHMAddonsCfg(readFile(cfgPath)); entries[id].ConfigURL != "" || entries[id].Name != "" {
 		delete(entries, id)

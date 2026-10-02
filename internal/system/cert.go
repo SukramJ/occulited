@@ -6,8 +6,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-
-	"github.com/hobbyquaker/occulited/internal/priv"
 )
 
 // LiveCertPath is the box's TLS certificate and key, one PEM: what lighttpd's ssl.pemfile
@@ -65,12 +63,8 @@ func (c CertInstaller) Install(ctx context.Context, livePEM []byte, mode string,
 // pick that one up.
 func (c CertInstaller) Remove(ctx context.Context, log func(string)) ([]string, error) {
 	l := certLog(log)
-	for _, suffix := range []string{priv.ManagedSuffix, priv.MarkerSuffix} {
-		if err := Priv.Remove(c.Root.join(LiveCertPath + suffix)); err != nil {
-			return nil, err
-		}
-	}
-	if err := Priv.Remove(c.Root.join(LiveCertPath)); err != nil {
+	// the helper's own operation (openccu-lite B-293): the markers, then the file
+	if err := Priv.RemoveCertificate(c.Root.join(LiveCertPath)); err != nil {
 		return nil, err
 	}
 	l.logf("removed %s and its markers", LiveCertPath)

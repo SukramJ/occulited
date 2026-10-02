@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/hobbyquaker/occulited/internal/addonunit"
 )
 
 // openccu-lite B-235: the symlink operation checked the link and not its target, and WriteFile
@@ -19,7 +21,10 @@ func TestSymlinkBoundary(t *testing.T) {
 	mk := func(rel string, mode os.FileMode) { _ = os.MkdirAll(at(rel), mode) }
 	mk("usr/local/tmp", 0o755)
 	mk("usr/local/etc/config", 0o755)
-	mk("usr/local/addons/x", 0o755)
+	mk("usr/local/etc/config/addons/x", 0o755)
+	// B-295: an addon's config directory is the daemon's to write only when the addon is confined
+	mk("usr/local/etc/config/addon-policy", 0o755)
+	_ = os.WriteFile(at("usr/local/etc/config/addon-policy/x.conf"), []byte(addonunit.DropIn{ID: "x", Mode: "confined", UID: 30001}.Render()), 0o644)
 	mk("etc", 0o755)
 	mk("var/etc", 0o755)
 	_ = os.WriteFile(at("usr/local/etc/config/rfd.conf"), []byte("[rfd]\n"), 0o644)
@@ -74,41 +79,42 @@ func TestSymlinkBoundary(t *testing.T) {
 		t.Error("/etc/passwd is gone")
 	}
 
-	// 3. an addon's link in its own tree: the tree is world-writable here, as an addon-owned
+	// 3. an addon's link in its own tree (its config directory; since B-294 its directory under
+	// /usr/local/addons is no write prefix at all): the tree is world-writable here, as an addon-owned
 	// directory is to root's eyes - a directory component that is such a link, and a file that is
-	if err := os.Chmod(at("usr/local/addons/x"), 0o777); err != nil {
+	if err := os.Chmod(at("usr/local/etc/config/addons/x"), 0o777); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(at("usr/local/etc/config"), at("usr/local/addons/x/data")); err != nil {
+	if err := os.Symlink(at("usr/local/etc/config"), at("usr/local/etc/config/addons/x/data")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(at("usr/local/etc/config/rfd.conf"), at("usr/local/addons/x/conf")); err != nil {
+	if err := os.Symlink(at("usr/local/etc/config/rfd.conf"), at("usr/local/etc/config/addons/x/conf")); err != nil {
 		t.Fatal(err)
 	}
-	why = refused(request{Op: "write", Path: at("usr/local/addons/x/data/rfd.conf"), Data: []byte("evil"), Mode: 0o644})
+	why = refused(request{Op: "write", Path: at("usr/local/etc/config/addons/x/data/rfd.conf"), Data: []byte("evil"), Mode: 0o644})
 	if !strings.Contains(why, "others may write") {
 		t.Errorf("the reason: %s", why)
 	}
-	refused(request{Op: "write", Path: at("usr/local/addons/x/conf"), Data: []byte("evil"), Mode: 0o644})
-	refused(request{Op: "touch", Path: at("usr/local/addons/x/data/marker"), Mode: 0o644})
-	refused(request{Op: "mkdir", Path: at("usr/local/addons/x/data/sub"), Mode: 0o755})
-	refused(request{Op: "chmod", Path: at("usr/local/addons/x/conf"), Mode: 0o666})
-	refused(request{Op: "chown", Path: at("usr/local/addons/x/data/rfd.conf"), UID: 30001, GID: 30001})
-	refused(request{Op: "remove", Path: at("usr/local/addons/x/data/rfd.conf")})
-	refused(request{Op: "removeall", Path: at("usr/local/addons/x/data/crRFD")})
+	refused(request{Op: "write", Path: at("usr/local/etc/config/addons/x/conf"), Data: []byte("evil"), Mode: 0o644})
+	refused(request{Op: "touch", Path: at("usr/local/etc/config/addons/x/data/marker"), Mode: 0o644})
+	refused(request{Op: "mkdir", Path: at("usr/local/etc/config/addons/x/data/sub"), Mode: 0o755})
+	refused(request{Op: "chmod", Path: at("usr/local/etc/config/addons/x/conf"), Mode: 0o666})
+	refused(request{Op: "chown", Path: at("usr/local/etc/config/addons/x/data/rfd.conf"), UID: 30001, GID: 30001})
+	refused(request{Op: "remove", Path: at("usr/local/etc/config/addons/x/data/rfd.conf")})
+	refused(request{Op: "removeall", Path: at("usr/local/etc/config/addons/x/data/crRFD")})
 	_ = os.WriteFile(at("usr/local/tmp/new.tgz"), []byte("tgz"), 0o644)
-	refused(request{Op: "rename", Src: at("usr/local/tmp/new.tgz"), Dst: at("usr/local/addons/x/data/new.tgz")})
+	refused(request{Op: "rename", Src: at("usr/local/tmp/new.tgz"), Dst: at("usr/local/etc/config/addons/x/data/new.tgz")})
 	if b, _ := os.ReadFile(at("usr/local/etc/config/rfd.conf")); string(b) != "[rfd]\n" {
 		t.Errorf("rfd.conf changed: %q", b)
 	}
 	// a link as rename's source is not moved into place either
-	refused(request{Op: "rename", Src: at("usr/local/addons/x/conf"), Dst: at("usr/local/tmp/conf")})
+	refused(request{Op: "rename", Src: at("usr/local/etc/config/addons/x/conf"), Dst: at("usr/local/tmp/conf")})
 	// removing the addon's tree removes the links, not what they point to
-	ok(request{Op: "removeall", Path: at("usr/local/addons/x")})
+	ok(request{Op: "removeall", Path: at("usr/local/etc/config/addons/x")})
 	if _, err := os.Stat(at("usr/local/etc/config/rfd.conf")); err != nil {
 		t.Error("removeall followed the addon's link")
 	}
-	if _, err := os.Lstat(at("usr/local/addons/x")); err == nil {
+	if _, err := os.Lstat(at("usr/local/etc/config/addons/x")); err == nil {
 		t.Error("the addon's tree is still there")
 	}
 

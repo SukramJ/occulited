@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/hobbyquaker/occulited/internal/addonunit"
 	"github.com/hobbyquaker/occulited/internal/manifest"
 	"github.com/hobbyquaker/occulited/internal/priv"
 )
@@ -25,7 +26,8 @@ import (
 // installs that drop-in as addon-<id>.service.d/10-policy.conf, and occu-addons.service
 // recreates the users from the same files at boot (the rootfs, and with it /etc/passwd, is
 // replaced by every firmware update; the uid in the file keeps the ownership on the userfs
-// valid). The busybox products ignore all of it.
+// valid). The uid itself is reserved in the uid registry beside the directory (addonuids.go,
+// openccu-lite B-288), which outlives the addon. The busybox products ignore all of it.
 
 // AddonPolicyDir is where the files live.
 const AddonPolicyDir = "/usr/local/etc/config/addon-policy"
@@ -388,41 +390,33 @@ const CertsGroup = "certs"
 // certs: a stick may hold the system's backups.
 const USBStorageGroup = "usbstorage"
 
-// renderDropIn renders the policy's fragment. hasGroup says whether the system knows a group: a
-// declared group it does not know is left out (and logged), since systemd refuses to start a unit
-// whose supplementary group is unknown - an addon that declares a group a newer image brings (the
-// USB sticks' usbstorage, B-259) must still start on an older one.
+// renderDropIn is the policy's fragment as the helper writes it (dropInOf, addonunit.Render).
 func renderDropIn(p *AddonPolicy, hasGroup func(string) bool) string {
-	certsGroup := hasGroup(CertsGroup)
-	var b strings.Builder
-	// the header is part of what the unit editor shows as the effective unit, so it names no
-	// decision id (task 52)
-	fmt.Fprintf(&b, "# openccu-lite addon policy for %s: written by occulited, installed by the\n# occu-addons generator as addon-%s.service.d/10-policy.conf. Change it on the Services page.\n", p.ID, p.ID)
+	return dropInOf(p, hasGroup).Render()
+}
+
+// dropInOf is what the policy's drop-in says, as the privilege helper takes it (openccu-lite
+// B-293): the daemon decides, the helper checks the decision and renders the file itself, so no
+// text of the daemon's reaches a unit root starts. hasGroup says whether the system knows a group:
+// a declared group it does not know is left out (and logged), since systemd refuses to start a
+// unit whose supplementary group is unknown - an addon that declares a group a newer image brings
+// (the USB sticks' usbstorage, B-259) must still start on an older one.
+func dropInOf(p *AddonPolicy, hasGroup func(string) bool) addonunit.DropIn {
 	rt := p.Runtime
 	if rt == nil {
 		rt = &AddonRuntime{}
 	}
 	if p.Mode != "confined" {
-		b.WriteString("# mode=root\n")
-		// D-66: a root addon keeps root, not the right to mount. Without CAP_SYS_ADMIN the
-		// CCU-era `mount -o remount,rw /` around an addon script's writes answers "permission
-		// denied" and the script goes on; what it writes into /firmware/rftypes lands in the
-		// writable layer the image mounts there (occu-extension-dirs). An entry that truly needs
-		// mounting declares CAP_SYS_ADMIN and keeps the full set - the generator installs a
-		// drop-in only when the file has a [Service] section, so that case writes none.
-		if rt.DeclaresCapability(CapSysAdmin) {
-			b.WriteString("# may mount: the addon's entry declares CAP_SYS_ADMIN\n")
-			return b.String()
-		}
-		b.WriteString("[Service]\nCapabilityBoundingSet=~" + CapSysAdmin + "\n")
-		return b.String()
+		// D-66: a root addon keeps root, not the right to mount, unless its entry declares
+		// CAP_SYS_ADMIN (addonunit.DropIn.Render)
+		return addonunit.DropIn{ID: p.ID, Mode: "root", MayMount: rt.DeclaresCapability(CapSysAdmin)}
 	}
-	fmt.Fprintf(&b, "# mode=confined uid=%d\n[Service]\nUser=%s\nGroup=%s\n", p.UID, p.User, p.User)
+	d := addonunit.DropIn{ID: p.ID, Mode: "confined", UID: p.UID}
 	// B-251/D-119: the second guard. manifest.Validate already refuses a confined manifest that
 	// names a root-equivalent capability or group, but a policy can also reach here without passing
 	// through that check - a policy stored before this fix, or one built some other way - so nothing
-	// on the denylist is ever rendered into a confined addon's unit. What is dropped is logged.
-	groups := make([]string, 0, len(rt.Groups))
+	// on the denylist is ever rendered into a confined addon's unit (and the helper refuses a drop-in
+	// that names one). What is dropped is logged.
 	for _, g := range rt.Groups {
 		if manifest.DeniedConfinedGroup(g) {
 			slog.Warn("addon policy: a root-equivalent group is refused for a confined addon and not rendered", "id", p.ID, "group", g)
@@ -432,41 +426,40 @@ func renderDropIn(p *AddonPolicy, hasGroup func(string) bool) string {
 			slog.Warn("addon policy: a declared group is unknown on this system and not rendered", "id", p.ID, "group", g)
 			continue
 		}
-		groups = append(groups, g)
+		d.Groups = append(d.Groups, g)
 	}
-	if certsGroup && !slices.Contains(groups, CertsGroup) {
-		groups = append(groups, CertsGroup)
+	if hasGroup(CertsGroup) && !slices.Contains(d.Groups, CertsGroup) {
+		d.Groups = append(d.Groups, CertsGroup)
 	}
-	if len(groups) > 0 {
-		fmt.Fprintf(&b, "SupplementaryGroups=%s\n", strings.Join(groups, " "))
-	}
-	caps := make([]string, 0, len(rt.Capabilities))
 	for _, c := range rt.Capabilities {
 		if manifest.DeniedConfinedCap(c) {
 			slog.Warn("addon policy: a root-equivalent capability is refused for a confined addon and not rendered", "id", p.ID, "capability", c)
 			continue
 		}
-		caps = append(caps, c)
+		d.Capabilities = append(d.Capabilities, c)
 	}
-	if len(caps) > 0 {
-		joined := strings.Join(caps, " ")
-		fmt.Fprintf(&b, "AmbientCapabilities=%s\nCapabilityBoundingSet=%s\n", joined, joined)
+	d.Paths = append(append([]string(nil), p.DataDirs...), rt.Paths...) // D-52: what the take-over chowned, and nothing it refused
+	return d
+}
+
+// writePolicyDropIn has the helper write the policy's drop-in (B-293).
+func (r Root) writePolicyDropIn(p *AddonPolicy) error {
+	d := dropInOf(p, r.HasGroup)
+	return Priv.AddonPolicyFile(filepath.Join(r.join(AddonPolicyDir), p.ID+addonunit.KindDropIn), addonunit.File{DropIn: &d})
+}
+
+// restoreDropIn puts the drop-in back to the policy it had (before), or removes it when there was
+// none (B-295: SetPolicy writes the confined one before it gives the addon its files).
+func (r Root) restoreDropIn(id string, before *AddonPolicy) {
+	var err error
+	if before != nil {
+		err = r.writePolicyDropIn(before)
 	} else {
-		b.WriteString("CapabilityBoundingSet=\n")
+		err = Priv.AddonPolicyFile(filepath.Join(r.join(AddonPolicyDir), id+addonunit.KindDropIn), addonunit.File{Remove: true})
 	}
-	// "-": a path that does not exist is skipped instead of failing the unit (226/NAMESPACE)
-	paths := []string{"/usr/local/addons/" + p.ID, "/usr/local/etc/config/addons/" + p.ID, "/usr/local/etc/config/rc.d", "/run", "/var/log", "/tmp", "/var/tmp"}
-	paths = append(paths, p.DataDirs...) // D-52: what the take-over chowned, and nothing it refused
-	paths = append(paths, rt.Paths...)
-	for i := range paths {
-		paths[i] = "-" + paths[i]
+	if err != nil {
+		slog.Warn("addon policy: the drop-in could not be put back", "addon", id, "err", err)
 	}
-	b.WriteString("NoNewPrivileges=yes\nProtectSystem=strict\nProtectKernelTunables=yes\nProtectControlGroups=yes\nRestrictSUIDSGID=yes\n")
-	// /run/addon-<id>, owned by the user: where a confined addon can keep its pid file
-	// (/var/run/<name>.pid is root's; the addon decides whether to use it)
-	fmt.Fprintf(&b, "RuntimeDirectory=addon-%s\nRuntimeDirectoryPreserve=yes\n", p.ID)
-	fmt.Fprintf(&b, "ReadWritePaths=%s\n", strings.Join(paths, " "))
-	return b.String()
 }
 
 // checkPolicy refuses an id or a mode SetPolicy would refuse, before anything is done.
@@ -533,6 +526,11 @@ func (a *SystemdAddons) SetPolicy(ctx context.Context, id, mode, source string, 
 	defer policyMu.Unlock()
 	root := a.Scripts.Root
 	p := root.ReadAddonPolicy(id)
+	var before *AddonPolicy
+	if p != nil {
+		c := *p
+		before = &c
+	}
 	if p == nil {
 		p = &AddonPolicy{ID: id}
 	}
@@ -544,7 +542,11 @@ func (a *SystemdAddons) SetPolicy(ctx context.Context, id, mode, source string, 
 	p.Mode, p.Source = mode, source
 	if mode == "confined" {
 		if p.UID == 0 {
-			p.UID = a.nextUID()
+			uid, err := a.addonUID(id) // B-288: its registered uid, a reinstall's too
+			if err != nil {
+				return nil, err
+			}
+			p.UID = uid
 		}
 		p.User = "addon-" + id
 		if err := a.ensureUser(p); err != nil {
@@ -555,16 +557,24 @@ func (a *SystemdAddons) SetPolicy(ctx context.Context, id, mode, source string, 
 		if !wasConfined {
 			a.markFullWalk("policy", id)
 		}
+		// openccu-lite B-295: the helper gives an addon its tree, and opens its config directory,
+		// only when the drop-in it rendered confines the addon - so the drop-in comes first (with
+		// the data directories it has; the final one below adds what the take-over finds), and goes
+		// back to what it was when the addon cannot be given its files
+		if err := root.writePolicyDropIn(p); err != nil {
+			return nil, err
+		}
 		// the config directory exists for almost no addon; create it so the addon can use it
 		_ = Priv.MkdirAll(root.join("/usr/local/etc/config/addons/"+id), 0o755)
 		if err := a.ownAddonDirs(ctx, p); err != nil {
+			root.restoreDropIn(id, before)
 			return nil, err
 		}
 	}
 	if err := root.writeAddonPolicy(p); err != nil {
 		return nil, err
 	}
-	if err := writeFileAtomic(filepath.Join(root.join(AddonPolicyDir), id+".conf"), []byte(renderDropIn(p, root.HasGroup)), 0o644); err != nil {
+	if err := root.writePolicyDropIn(p); err != nil {
 		return nil, err
 	}
 	// task 94: the start order follows the declaration - the stored manifest, else the stored
@@ -636,8 +646,10 @@ func (a *SystemdAddons) RefreshPolicyDropIns(ctx context.Context) []string {
 		if readFile(path) == want {
 			continue
 		}
-		if err := writeFileAtomic(path, []byte(want), 0o644); err == nil {
+		if err := root.writePolicyDropIn(p); err == nil {
 			changed = append(changed, id)
+		} else {
+			slog.Warn("addon policy: the drop-in could not be written", "addon", id, "err", err)
 		}
 	}
 	if len(changed) > 0 {
@@ -645,17 +657,6 @@ func (a *SystemdAddons) RefreshPolicyDropIns(ctx context.Context) []string {
 		_, _ = a.Systemd.run(ctx, "daemon-reload")
 	}
 	return changed
-}
-
-// nextUID hands out uids from AddonUIDBase upwards, never reusing one from a stored policy.
-func (a *SystemdAddons) nextUID() int {
-	next := AddonUIDBase
-	for _, p := range a.Scripts.Root.AddonPolicies() {
-		if p.UID >= next {
-			next = p.UID + 1
-		}
-	}
-	return next
 }
 
 // ensureUser creates the addon's user and group through the privilege helper's own operation
@@ -707,7 +708,14 @@ func (r Root) removeAddonPolicyFiles(id string) []string {
 		if _, err := os.Lstat(r.join(box)); err != nil {
 			continue // not there (the helper's remove would say done all the same)
 		}
-		if err := remove(r.join(box)); err == nil {
+		var err error
+		if slices.Contains(addonunit.Kinds, suffix) {
+			// what root obeys goes through the helper's own operation (B-293)
+			err = Priv.AddonPolicyFile(r.join(box), addonunit.File{Remove: true})
+		} else {
+			err = remove(r.join(box))
+		}
+		if err == nil {
 			removed = append(removed, box)
 		} else {
 			slog.Warn("addon policy: a file could not be removed", "addon", id, "file", box, "err", err)
@@ -720,8 +728,9 @@ func (r Root) removeAddonPolicyFiles(id string) []string {
 // B-283): what an uninstall before this binary left behind, or an addon removed by other means
 // (mediola's NEO Server switched off at the first boot). The boot's addon-users step would
 // otherwise recreate a user for an addon that is gone, and a reinstall under the same name would
-// start from the old policy instead of its new manifest. Run at occulited's start, before the
-// policy refreshes, when no install can be under way; returns the ids swept, sorted.
+// start from the old policy instead of its new manifest. The addon's uid stays reserved in the
+// uid registry (B-288; SeedAddonUIDs records it before this runs). Run at occulited's start,
+// before the policy refreshes, when no install can be under way; returns the ids swept, sorted.
 func (a *SystemdAddons) SweepStalePolicyFiles() []string {
 	root := a.Scripts.Root
 	entries, err := os.ReadDir(root.join(AddonPolicyDir))

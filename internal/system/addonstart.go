@@ -2,6 +2,8 @@ package system
 
 import (
 	"log/slog"
+
+	"github.com/hobbyquaker/occulited/internal/addonunit"
 	"os"
 	"path/filepath"
 	"sort"
@@ -59,7 +61,7 @@ func (a *SystemdAddons) writeAddonStart(id string, rt *AddonRuntime) (bool, erro
 		if _, err := os.Lstat(path); err != nil {
 			return false, nil
 		}
-		if err := remove(path); err != nil && !os.IsNotExist(err) {
+		if err := Priv.AddonPolicyFile(path, addonunit.File{Remove: true}); err != nil && !os.IsNotExist(err) {
 			return false, err
 		}
 		return true, nil
@@ -71,7 +73,7 @@ func (a *SystemdAddons) writeAddonStart(id string, rt *AddonRuntime) (bool, erro
 	if err := Priv.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return false, err
 	}
-	return true, writeFileAtomic(path, []byte(want), 0o644)
+	return true, Priv.AddonPolicyFile(path, addonunit.File{Early: true}) // the helper's text (B-293)
 }
 
 // RefreshAddonStart writes every stored policy's .start file from what the addon declares now

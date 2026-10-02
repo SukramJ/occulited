@@ -164,23 +164,17 @@ func (r Root) AddonEnabled(id string) bool {
 	return err == nil && st.Mode()&0o111 != 0
 }
 
-// SetAddonEnabled flips the executable bits of the rc.d script through the privilege boundary.
+// SetAddonEnabled flips the executable bits of the rc.d script through the privilege helper's own
+// operation (openccu-lite B-293): rc.d is root's to run, and no generic operation reaches it.
 func (r Root) SetAddonEnabled(id string, enabled bool) error {
 	if !addonIDRe.MatchString(id) {
 		return fmt.Errorf("invalid addon id")
 	}
 	path := r.join("/usr/local/etc/config/rc.d/" + id)
-	st, err := os.Stat(path)
-	if err != nil {
+	if _, err := os.Stat(path); err != nil {
 		return fmt.Errorf("unknown addon")
 	}
-	mode := st.Mode().Perm()
-	if enabled {
-		mode |= 0o755
-	} else {
-		mode &^= 0o111
-	}
-	return Priv.Chmod(path, mode)
+	return Priv.SetAddonEnabled(path, enabled)
 }
 
 // DisableRegaDependentAddons is the first-boot step after an update from OpenCCU: every
