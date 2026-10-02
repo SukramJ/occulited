@@ -135,8 +135,25 @@ func (s *Subscriber) handlerFor(i *iface) *xmlrpc.Handler {
 	}))
 	d.HandleFunc("deleteDevices", devices("deleted", func(q *xmlrpc.Query) []string { return q.Idx(1).Strings() }))
 	d.HandleFunc("readdedDevice", devices("readded", func(q *xmlrpc.Query) []string { return q.Idx(1).Strings() }))
-	d.HandleFunc("updateDevice", devices("updated", func(q *xmlrpc.Query) []string { return []string{q.Idx(1).String()} }))
-	d.HandleFunc("replaceDevice", devices("replaced", func(q *xmlrpc.Query) []string { return []string{q.Idx(1).String(), q.Idx(2).String()} }))
+	// updateDevice(id, address, hint) and replaceDevice(id, old, new) carry more than addresses
+	// (occulited task 5): the hint, which a consumer acts on (2: read the description again), and
+	// which of the two is the new device. The address is read first: a missing argument marks the
+	// whole query as failed, and every read after it is empty.
+	d.HandleFunc("updateDevice", func(args *xmlrpc.Value) (*xmlrpc.Value, error) {
+		seen()
+		q := xmlrpc.Q(args)
+		addr := q.Idx(1).String()
+		hint := q.Idx(2).Int() // 0 when the interface sent none
+		s.bus.publish(Message{Type: "devices", Interface: i.name, Op: "updated", Addresses: []string{addr}, Hint: &hint})
+		return empty(), nil
+	})
+	d.HandleFunc("replaceDevice", func(args *xmlrpc.Value) (*xmlrpc.Value, error) {
+		seen()
+		q := xmlrpc.Q(args)
+		old, nw := q.Idx(1).String(), q.Idx(2).String()
+		s.bus.publish(Message{Type: "devices", Interface: i.name, Op: "replaced", Addresses: []string{old, nw}, Old: old, New: nw})
+		return empty(), nil
+	})
 	// event(id, address, key, value)
 	event := func(args *xmlrpc.Value, batch uint64) {
 		q := xmlrpc.Q(args)

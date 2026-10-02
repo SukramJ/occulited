@@ -132,6 +132,12 @@ type Message struct {
 	// devices: op new, deleted, updated, replaced, readded, with the addresses
 	Op        string   `json:"op,omitempty"`
 	Addresses []string `json:"addresses,omitempty"`
+	// devices, op updated: updateDevice's hint as the interface sent it (0 unspecified, 1 the
+	// links changed, 2 the description changed); a pointer, so a 0 still goes out (occulited task 5)
+	Hint *int `json:"hint,omitempty"`
+	// devices, op replaced: the replaced device and its successor (Addresses holds both, in order)
+	Old string `json:"old,omitempty"`
+	New string `json:"new,omitempty"`
 	// hello: the boot id, the seq the ring is at, and every interface's status (the stream's
 	// first message); resync: reason gap or boot
 	BootID     string        `json:"boot_id,omitempty"`

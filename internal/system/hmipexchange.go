@@ -32,9 +32,10 @@ const SnapshotFreshStart = "fresh-start"
 // SnapshotModuleMove marks the snapshot a connection change takes before it moves HmIP-RF to
 // another module (openccu-lite B-285, maintainer 2026-09-30): the module's identity files,
 // hmip_address.conf and every device file, with the connection choices from before the move. The
-// move is an adapter exchange through eQ-3's key server, which refused the exchange back on a lab
-// system - and hmipserver had rewritten the device files for the new access point, so the way
-// back needs the pre-move identity and device files, which only this snapshot has.
+// move is an adapter exchange through eQ-3's key server, which may refuse the exchange back (it
+// did on a lab system, and accepted one on another) - and hmipserver rewrites the device files for
+// the new access point, so the way back without the server needs the pre-move identity and device
+// files, which only this snapshot has.
 const SnapshotModuleMove = "module-move"
 
 // HmIPMoveBack is the Interfaces page's offer: a module-move snapshot is kept, and HmIP-RF can go
@@ -259,6 +260,10 @@ type ExchangeView struct {
 	ExchangeID bool   `json:"exchange_id"`
 	Switching  string `json:"switching,omitempty"`
 	Error      string `json:"error,omitempty"`
+	// Exchanges is the local record of the adapter exchanges this system attempted (openccu-lite
+	// task 301), newest first: which module took which network over, when, whether the key server
+	// took part, how it went. Kept by hmipserver's unit steps under /etc/config, in every backup.
+	Exchanges []radio.HmIPExchange `json:"exchanges"`
 }
 
 // Exchange assembles the view.
@@ -275,6 +280,10 @@ func (k *HmIPLocalKey) Exchange() ExchangeView {
 		ExchangeID: radio.ExchangeIDSet(readFile(k.Root.join(hmipAddressConf))),
 		Switching:  switching,
 		Error:      lastErr,
+		Exchanges:  radio.ReadHmIPExchanges(string(k.Root)),
+	}
+	if out.Exchanges == nil {
+		out.Exchanges = []radio.HmIPExchange{}
 	}
 	for _, p := range out.Previous {
 		if _, ok := k.snapshotFor(p); ok {

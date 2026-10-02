@@ -1,4 +1,5 @@
-import {expect, test, type Page} from '@playwright/test';
+import {type Page} from '@playwright/test';
+import {expect, test} from './fixtures';
 
 // task 129 phase 3 (D-81, D-82, D-98): the connection of each interface process on the Interfaces
 // page - what runs on what, the choices the detected hardware allows, the preview in the shell's
@@ -197,10 +198,21 @@ test('the module was refused: the fresh start asks for the host name, moves the 
     await page.goto('/radio');
     const notice = page.locator('[data-notice="hmip-fatal"]');
     await expect(notice).toHaveAttribute('data-cause', 'refused');
-    await expect(notice).toContainText("eQ-3's key server does not know the module 3014F711A000040000000A02");
+    // task 301: the server refused and does not say why - no "unknown module", no "used once"; the ways out
+    await expect(notice).toContainText("eQ-3's key server refused to move the HmIP network of this system to the module 3014F711A000040000000A02. It does not say why");
+    await expect(notice).not.toContainText('does not know the module');
     await expect(notice).toContainText('The network belongs to the previous module 3014F711A0001F0000000A04.');
-    await expect(notice).toContainText('put the previous module back, or start fresh with this module');
+    await expect(notice).toContainText('The ways out: the module the network is on now, where it is still at hand');
+    await expect(notice).toContainText('the saved files of an earlier module');
     await expect(notice).not.toContainText('Try again');
+    // the local record of exchanges, newest first, with the key server's part and the outcome
+    const record = notice.locator('[data-exchanges="2"]');
+    await expect(record.locator('summary')).toHaveText('Adapter exchanges recorded on this system (2)');
+    await record.locator('summary').click();
+    const rows = record.locator('li');
+    await expect(rows.nth(0)).toContainText('3014F711A0001F0000000A04 → 3014F711A000040000000A02 · 0xA0B1C2 · through eQ-3\'s key server · refused by the key server');
+    await expect(rows.nth(1)).toContainText('3014F711A0001F5F000000AF → 3014F711A0001F0000000A04 · 0xA0B1C2 · through eQ-3\'s key server · accepted');
+    await expect(notice.locator('[data-local-swap]')).toHaveCount(0);
     const local = notice.getByLabel(/Switch to local key mode in the same step/);
     await expect(local).toBeChecked();
     await notice.getByRole('button', {name: 'Start fresh with this module…'}).click();
@@ -266,11 +278,44 @@ test('a user sees the diagnosis, not the actions, and the view is not asked for'
     page.on('request', (r) => calls.push(new URL(r.url()).pathname));
     await page.goto('/radio');
     const notice = page.locator('[data-notice="hmip-fatal"]');
-    await expect(notice).toContainText("eQ-3's key server does not know the module");
-    await expect(notice).toContainText('put the previous module back, or start fresh with this module');
+    await expect(notice).toContainText("eQ-3's key server refused to move the HmIP network of this system to the module");
+    await expect(notice).toContainText('The ways out: the module the network is on now');
     await expect(notice.getByRole('button')).toHaveCount(0);
     await expect(notice.getByRole('checkbox')).toHaveCount(0);
+    // the record comes with the admin's view, which a user is not asked for
+    await expect(notice.locator('[data-exchanges]')).toHaveCount(0);
     expect(calls).not.toContain('/api/system/v1/radio/hmip/exchange');
+});
+
+// openccu-lite task 301 / B-289: the record shows that the previous module took the network over
+// without the key server (a local swap onto a module whose firmware cannot take the network key) -
+// the one cause of a refusal the page can name; the Status warning says the ways out, no "unknown module"
+test('refused, and the record names the local swap onto the previous module as the cause; the Status warning', async ({page, baseURL}) => {
+    const id = `conn-${Math.random().toString(36).slice(2)}`;
+    await page.context().addCookies([{name: 'stub-conn', value: id, url: baseURL!}, {name: 'stub-conn-fatal', value: 'refused', url: baseURL!}, {name: 'stub-conn-exchanges', value: 'swap', url: baseURL!}]);
+    await page.goto('/radio');
+    const notice = page.locator('[data-notice="hmip-fatal"]');
+    const swap = notice.locator('[data-local-swap="3014F711A0001F0000000A04"]');
+    await expect(swap).toContainText('3014F711A0001F0000000A04 took the network over on');
+    await expect(swap).toContainText('without the key server: its firmware could not take the network key, so the key server cannot move the network on from it');
+    await notice.locator('[data-exchanges] summary').click();
+    await expect(notice.locator('[data-exchanges] li').nth(1)).toContainText("local swap without the key server (the module's firmware cannot take the network key) · accepted");
+    // the Status page's warning for the same marker
+    await page.route('**/api/system/v1/warnings', async (route) => {
+        if (route.request().method() !== 'GET') return route.fallback();
+        const response = await route.fetch();
+        const j = await response.json();
+        j.warnings = [...(j.warnings ?? []), {id: 'hmip-adapter', variant: 'adapter-exchange-rejected', severity: 'error', href: '/system/interfaces#connections', since: new Date().toISOString(), params: {adapter: '3014F711A000040000000A02', line: 'Adapter exchange was rejected by key server.', cause: 'refused'}}];
+        await route.fulfill({response, json: j});
+    });
+    await page.goto('/');
+    const warning = page.locator('[data-notice="hmip-adapter"]');
+    await expect(warning).toContainText("eQ-3's key server refused to move the HmIP network of this system to the module 3014F711A000040000000A02. The Interfaces page names the ways out");
+    await expect(warning).not.toContainText('does not know');
+    await page.addInitScript(() => localStorage.setItem('ol.language', 'de'));
+    await page.goto('/radio');
+    await expect(notice).toContainText('hat es abgelehnt, das HmIP-Netz dieses Systems auf das Modul 3014F711A000040000000A02 zu übertragen. Einen Grund nennt er nicht');
+    await expect(notice).toContainText('Die Auswege: das Modul, auf dem das Netz jetzt liegt');
 });
 
 // openccu-lite B-272: an HB-RF-ETH added under LAN devices while both processes are pinned to the

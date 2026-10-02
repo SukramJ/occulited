@@ -185,6 +185,17 @@ func (f *fakeDaemon) send(events [][3]string, multicall bool) {
 	}
 }
 
+// call makes one call with the given arguments after the registration's id on every registered
+// callback, as the daemon calls updateDevice or replaceDevice.
+func (f *fakeDaemon) call(method string, args ...*xmlrpc.Value) {
+	for u, id := range f.registrations() {
+		c := &xmlrpc.Client{Addr: strings.TrimPrefix(u, "http://")}
+		if _, err := c.Call(method, append(xmlrpc.Values{xmlrpc.NewString(id)}, args...)); err != nil {
+			f.t.Errorf("fake: %s: %v", method, err)
+		}
+	}
+}
+
 // restart drops the registrations (rfd's way) or keeps them and calls listDevices on each
 // (hmipserver's way).
 func (f *fakeDaemon) restart() {
@@ -346,6 +357,47 @@ func TestRegistersAnswersAndForwards(t *testing.T) {
 	// the daemon's own PONG broadcast counts as activity
 	if st := s.Status(); st[0].Events != 3 || st[0].LastActivity == "" {
 		t.Fatalf("counters %+v", st)
+	}
+}
+
+// occulited task 5: updateDevice's hint and replaceDevice's old and new device go onto the bus -
+// its ring, which the remote stream reads - as the daemon sent them; a hint the call left out is
+// 0, and still sent. The in-process handlers keep their address-only Devices call.
+func TestDeviceCallsCarryHintAndOrder(t *testing.T) {
+	rfd := newFakeDaemon(t)
+	s, _ := startSub(t, Config{})
+	s.Set([]Entry{{Name: "BidCos-RF", URL: rfd.url()}})
+	waitRegistered(t, s, "BidCos-RF")
+	rfd.call("updateDevice", xmlrpc.NewString("JEQ9000001"), &xmlrpc.Value{Int: "2"})
+	rfd.call("updateDevice", xmlrpc.NewString("JEQ9000001"), &xmlrpc.Value{I4: "0"})
+	rfd.call("updateDevice", xmlrpc.NewString("JEQ9000002"))
+	rfd.call("replaceDevice", xmlrpc.NewString("JEQ0000OLD"), xmlrpc.NewString("JEQ0000NEW"))
+	var dev []Message
+	waitFor(t, "the device messages", func() bool {
+		ring, _ := s.bus.Replay(0)
+		dev = dev[:0]
+		for _, m := range ring {
+			if m.Type == "devices" {
+				dev = append(dev, m)
+			}
+		}
+		return len(dev) == 4
+	})
+	if m := dev[0]; m.Op != "updated" || m.Interface != "BidCos-RF" || len(m.Addresses) != 1 || m.Addresses[0] != "JEQ9000001" || m.Hint == nil || *m.Hint != 2 {
+		t.Fatalf("updateDevice with hint 2: %+v", m)
+	}
+	if m := dev[1]; m.Hint == nil || *m.Hint != 0 {
+		t.Fatalf("updateDevice with hint 0: %+v", m)
+	}
+	if m := dev[2]; m.Addresses[0] != "JEQ9000002" || m.Hint == nil || *m.Hint != 0 {
+		t.Fatalf("updateDevice without a hint: %+v", m)
+	}
+	if m := dev[3]; m.Op != "replaced" || m.Old != "JEQ0000OLD" || m.New != "JEQ0000NEW" || len(m.Addresses) != 2 || m.Addresses[0] != "JEQ0000OLD" || m.Hint != nil {
+		t.Fatalf("replaceDevice: %+v", m)
+	}
+	// on the wire: hint 0 is written
+	if b, _ := json.Marshal(dev[1]); !strings.Contains(string(b), `"hint":0`) {
+		t.Fatalf("hint 0 in JSON: %s", b)
 	}
 }
 

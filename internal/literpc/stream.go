@@ -297,7 +297,15 @@ func convert(m rpcsub.Message) (typ string, data map[string]any) {
 		if typ == "" {
 			typ = "devices"
 		}
-		return typ, map[string]any{"interface": m.Interface, "addresses": m.Addresses, "ts": m.TS}
+		d := map[string]any{"interface": m.Interface, "addresses": m.Addresses, "ts": m.TS}
+		// occulited task 5: what a callback server would have had from the call
+		if m.Hint != nil {
+			d["hint"] = *m.Hint
+		}
+		if m.Op == "replaced" {
+			d["old"], d["new"] = m.Old, m.New
+		}
+		return typ, d
 	}
 	return m.Type, map[string]any{"ts": m.TS}
 }

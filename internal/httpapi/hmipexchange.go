@@ -25,7 +25,7 @@ func (a *SystemAPI) exchange() map[string]any {
 	return map[string]any{
 		"fatal": v.Fatal, "module": v.Module, "previous": v.Previous, "replaces_snapshots": v.ReplacesSnapshots,
 		"local_key": v.LocalKey, "exchange_id": v.ExchangeID, "switching": v.Switching, "error": v.Error,
-		"hostname": a.Root.Hostname(),
+		"exchanges": v.Exchanges, "hostname": a.Root.Hostname(),
 	}
 }
 

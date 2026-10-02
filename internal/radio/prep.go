@@ -90,6 +90,8 @@ func Prep(ctx context.Context, d Detector, daemon string, p Plan, logf func(stri
 			if err := counterPreStart(d, p, logf); err != nil {
 				return err
 			}
+			// openccu-lite task 301: the exchange this start will attempt, for the record
+			exchangeBeforeStart(ctx, d, p, logf)
 		}
 		log4j2(d, logf)
 		measureDir := filepath.Dir(d.path(DiagramPath))
@@ -284,16 +286,21 @@ func Ready(ctx context.Context, d Detector, daemon string, mainPID int, logf fun
 				fatal.Adapter = p.HmIP.SGTIN
 			}
 			writeHmIPFatal(d.Root, fatal)
+			// openccu-lite task 301: the exchange this start attempted, with its outcome
+			exchangeAfterStart(d, daemonOutput(ctx, d, mainPID), &fatal, logf)
 			return fmt.Errorf("the HmIP server cannot start (%s): %s", fatal.Code, fatal.Line)
 		}
 		if !started {
 			return fmt.Errorf("the HmIP server did not report itself started in 300 s")
 		}
 		logf("ready hmipserver: started")
+		output := daemonOutput(ctx, d, mainPID)
 		// openccu-lite task 299: the security counter lines of this start
 		if p, err := LoadPlan(d.Root); err == nil {
-			counterAfterStart(daemonOutput(ctx, d, mainPID), d, p, logf)
+			counterAfterStart(output, d, p, logf)
 		}
+		// openccu-lite task 301: the exchange this start attempted, with its outcome
+		exchangeAfterStart(d, output, nil, logf)
 		// B-89: the shim that holds the HTTP port on the loopback fails open when it cannot load
 		if port, open := HMServerPortOpen(d.Root); len(open) > 0 {
 			logf("ready hmipserver: port %d listens on %s, not only on the loopback - the bind shim did not take (LD_PRELOAD /usr/lib/openccu-lite/libbindlo.so in the unit); the firewall still closes it", port, strings.Join(open, ", "))
@@ -309,6 +316,8 @@ func Stopped(ctx context.Context, d Detector, daemon string, logf func(string, .
 		return nil
 	}
 	_ = os.Remove(d.path("/var/status/HMServerStarted"))
+	// openccu-lite task 301: an adapter exchange the ready step left open is closed from the files
+	exchangeAfterStop(ctx, d, logf)
 	stick, measure := d.path("/media/usb0/measurement"), d.path(DiagramPath)
 	if isDir(stick) && isDir(measure) {
 		// B-146: with rsync, as upstream's S62HMServer mirrored. The image carries it again

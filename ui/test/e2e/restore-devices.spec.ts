@@ -57,7 +57,10 @@ test('the backup\'s devices, a free system, the import asks in red and posts the
     const dlg = page.getByRole('dialog');
     await expect(dlg).toContainText('2 BidCos-RF devices, 3 HmIP devices, 1 BidCos-Wired devices');
     await expect(dlg).toContainText('adapter exchange');
-    await expect(dlg).toContainText('hmipserver takes it over onto RPI-RF-MOD 0000000A01');
+    // task 301: the move said plainly - the backup is in local key mode here, so no key server; and the source system must stop
+    await expect(dlg).toContainText('hmipserver moves the HmIP network onto RPI-RF-MOD 0000000A01 (3014F711A000040000000A01) at the start');
+    await expect(dlg).toContainText('The backup is in local key mode: no key server is involved in the move.');
+    await expect(dlg).toContainText('The system this backup comes from must not keep running this HmIP network');
     // task 281: the names of the same file go first
     await expect(dlg).toContainText('names, rooms and functions of the backup\'s ReGa database are imported first');
     await expect(dlg.getByRole('button', {name: 'Import and reboot'})).toHaveClass(/danger/);

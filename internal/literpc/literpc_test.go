@@ -747,3 +747,25 @@ func TestFromJSONDouble(t *testing.T) {
 		t.Error("a struct with a double member is a struct")
 	}
 }
+
+// occulited task 5: the stream's updateDevice carries the hint (0 too), replaceDevice names the
+// old and the new device beside the addresses; the other device messages stay as they were.
+func TestConvertDeviceCalls(t *testing.T) {
+	two, zero := 2, 0
+	for _, c := range []struct {
+		m    rpcsub.Message
+		typ  string
+		want string
+	}{
+		{rpcsub.Message{Type: "devices", Interface: "BidCos-RF", Op: "updated", Addresses: []string{"JEQ1"}, Hint: &two, TS: "t"}, "updateDevice", `{"addresses":["JEQ1"],"hint":2,"interface":"BidCos-RF","ts":"t"}`},
+		{rpcsub.Message{Type: "devices", Interface: "BidCos-RF", Op: "updated", Addresses: []string{"JEQ1"}, Hint: &zero, TS: "t"}, "updateDevice", `{"addresses":["JEQ1"],"hint":0,"interface":"BidCos-RF","ts":"t"}`},
+		{rpcsub.Message{Type: "devices", Interface: "HmIP-RF", Op: "replaced", Addresses: []string{"OLD", "NEW"}, Old: "OLD", New: "NEW", TS: "t"}, "replaceDevice", `{"addresses":["OLD","NEW"],"interface":"HmIP-RF","new":"NEW","old":"OLD","ts":"t"}`},
+		{rpcsub.Message{Type: "devices", Interface: "HmIP-RF", Op: "deleted", Addresses: []string{"A"}, TS: "t"}, "deleteDevices", `{"addresses":["A"],"interface":"HmIP-RF","ts":"t"}`},
+	} {
+		typ, data := convert(c.m)
+		b, _ := json.Marshal(data)
+		if typ != c.typ || string(b) != c.want {
+			t.Errorf("%s: %s %s, want %s %s", c.m.Op, typ, b, c.typ, c.want)
+		}
+	}
+}

@@ -121,6 +121,18 @@
     let replaceKey = $state(false);
     const backupEmpty = (b: RadioBackup) => b.bidcos_rf.devices === 0 && b.hmip.devices === 0 && b.bidcos_wired.devices === 0 && !b.hmip.identity_sgtin && !b.bidcos_rf.address;
     const moduleName = (m?: RestoreModule) => m ? `${m.hardware} ${m.serial}`.trim() + (m.sgtin ? ` (${m.sgtin})` : '') : '';
+    // openccu-lite task 301 (maintainer, 2026-09-30): the backup's HmIP identity belongs to another module
+    // than this system's - the import or the restore moves the network onto this module through eQ-3's key
+    // server, which may refuse it; said in the danger question of both, and that the source system must stop
+    function hmipMoveLines(b: RadioBackup, to: string): string[] {
+        return [
+            t('The HmIP identity belongs to module {from}; hmipserver moves the HmIP network onto {to} at the start (the adapter exchange).', {from: b.hmip.identity_sgtin ?? '', to}),
+            b.hmip.local_key
+                ? t('The backup is in local key mode: no key server is involved in the move.')
+                : t('The move goes through eQ-3\'s key server, which needs an internet connection and may refuse it; after a refusal HmIP-RF stays stopped, and the Interfaces page shows the ways out.'),
+            t('The system this backup comes from must not keep running this HmIP network: one network, one running system.'),
+        ];
+    }
     async function loadDevices() {
         devices = null;
         devicesMsg = '';
@@ -151,7 +163,7 @@
             t('The paired devices of this backup - {parts} - come onto this system with the radio identity they are bound to: the BidCos address and security key, the HmIP identity, the LAN gateways.', {parts}),
             t('This system\'s own radio identity is set aside and it reboots.'),
         ];
-        if (devices.module_changed) lines.push(t('The HmIP identity belongs to module {from}; hmipserver takes it over onto {to} at the start (the adapter exchange). The Interfaces page shows how it went.', {from: b.hmip.identity_sgtin ?? '', to: moduleName(devices.target.hmip_module)}));
+        if (devices.module_changed) lines.push(...hmipMoveLines(b, moduleName(devices.target.hmip_module)));
         if (devices.non_default_key) lines.push(t('The backup\'s BidCos security key is not the default key: it comes along as it is.'));
         if (devices.target.user_key) lines.push(t('This system\'s own security key is replaced by the backup\'s.'));
         if (check?.has_rega) lines.push(t('The names, rooms and functions of the backup\'s ReGa database are imported first (merged with what this system has), then the system reboots.'));
@@ -285,8 +297,13 @@
         // task 296: the backup's own BidCos key without a confirmed passphrase - the warning, then the
         // restore on the user's word (force: the script would refuse the key it cannot check)
         const unconfirmed = !!check.backup_key && !keyConfirmed(restoreVerdict, true);
+        // task 301: the backup's HmIP identity belongs to another module - the restore moves the network
+        // onto this one (the adapter exchange), said and confirmed in red before the restore
+        const moveLines = devices?.module_changed ? hmipMoveLines(devices.backup, moduleName(devices.target.hmip_module)) : [];
         if (unconfirmed) {
-            if (!(await ask({title: t('Restore without the confirmed passphrase?'), message: [...keyWarning('restore', restoreVerdict), question].join('\n\n'), confirm: t('Restore anyway'), danger: true}))) return;
+            if (!(await ask({title: t('Restore without the confirmed passphrase?'), message: [...keyWarning('restore', restoreVerdict), ...moveLines, question].join('\n\n'), confirm: t('Restore anyway'), danger: true}))) return;
+        } else if (moveLines.length) {
+            if (!(await ask({title: t('Restore onto another radio module?'), message: [...moveLines, question].join('\n\n'), confirm: t('Restore and reboot'), danger: true}))) return;
         } else if (!(await ask(question))) return;
         // the backup's passphrase confirmed but this system has another key: the restore replaces it (the
         // panel said so), and the script, which wants one key for both sides, needs the force for that
@@ -417,8 +434,8 @@
                     {#if devices.module_changed}
                         <div class="ol-notice" data-notice="module-change">
                             <strong>{t('Another radio module: HmIP re-keys.')}</strong>
-                            {t('The HmIP identity in this backup belongs to module {from}; this system runs HmIP-RF on {to}. When hmipserver starts after the import, it takes the identity over onto this module - the adapter exchange: offline in local key mode, otherwise through eQ-3\'s key server, which needs an internet connection and has to know this module.', {from: b.hmip.identity_sgtin ?? '', to: moduleName(tg.hmip_module)})}
-                            {t('Every HmIP device is then re-keyed for the new module; a battery device only when it wakes up, so press a button on it if it stays silent. The Interfaces page shows how the move went and offers a retry. A module the key server refuses keeps HmIP-RF stopped: then put the previous module back, or start fresh with this one.')}
+                            {t('The HmIP identity in this backup belongs to module {from}; this system runs HmIP-RF on {to}. When hmipserver starts after the import, it takes the identity over onto this module - the adapter exchange: offline in local key mode, otherwise through eQ-3\'s key server, which needs an internet connection and may refuse the move.', {from: b.hmip.identity_sgtin ?? '', to: moduleName(tg.hmip_module)})}
+                            {t('Every HmIP device is then re-keyed for the new module; a battery device only when it wakes up, so press a button on it if it stays silent. The Interfaces page shows how the move went and offers a retry. A refusal keeps HmIP-RF stopped; the Interfaces page then names the ways out: the module the network is on now, the saved files of an earlier module, or a fresh start with this module. The system this backup comes from must not keep running this HmIP network.')}
                         </div>
                     {:else if b.hmip.identity_sgtin && !tg.hmip_module}
                         <div class="ol-notice" data-notice="module-change">{t('This system has no HmIP module: the HmIP identity of module {from} is imported and waits for one.', {from: b.hmip.identity_sgtin})}</div>

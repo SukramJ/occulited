@@ -162,7 +162,16 @@
                 "null"
               ]
             },
+            "hint": {
+              "type": "integer"
+            },
             "interface": {
+              "type": "string"
+            },
+            "new": {
+              "type": "string"
+            },
+            "old": {
               "type": "string"
             },
             "ts": {
@@ -308,7 +317,16 @@
                     "null"
                   ]
                 },
+                "hint": {
+                  "type": "integer"
+                },
                 "interface": {
+                  "type": "string"
+                },
+                "new": {
+                  "type": "string"
+                },
+                "old": {
                   "type": "string"
                 },
                 "ts": {
@@ -355,7 +373,16 @@
                 "null"
               ]
             },
+            "hint": {
+              "type": "integer"
+            },
             "interface": {
+              "type": "string"
+            },
+            "new": {
+              "type": "string"
+            },
+            "old": {
               "type": "string"
             },
             "ts": {
@@ -385,7 +412,16 @@
                 "null"
               ]
             },
+            "hint": {
+              "type": "integer"
+            },
             "interface": {
+              "type": "string"
+            },
+            "new": {
+              "type": "string"
+            },
+            "old": {
               "type": "string"
             },
             "ts": {
@@ -475,7 +511,16 @@
                 "null"
               ]
             },
+            "hint": {
+              "type": "integer"
+            },
             "interface": {
+              "type": "string"
+            },
+            "new": {
+              "type": "string"
+            },
+            "old": {
               "type": "string"
             },
             "ts": {
@@ -507,7 +552,16 @@
                     "null"
                   ]
                 },
+                "hint": {
+                  "type": "integer"
+                },
                 "interface": {
+                  "type": "string"
+                },
+                "new": {
+                  "type": "string"
+                },
+                "old": {
                   "type": "string"
                 },
                 "ts": {
@@ -717,7 +771,16 @@
                         "null"
                       ]
                     },
+                    "hint": {
+                      "type": "integer"
+                    },
                     "interface": {
+                      "type": "string"
+                    },
+                    "new": {
+                      "type": "string"
+                    },
+                    "old": {
                       "type": "string"
                     },
                     "ts": {
@@ -780,7 +843,16 @@
                     "null"
                   ]
                 },
+                "hint": {
+                  "type": "integer"
+                },
                 "interface": {
+                  "type": "string"
+                },
+                "new": {
+                  "type": "string"
+                },
+                "old": {
                   "type": "string"
                 },
                 "ts": {
@@ -826,7 +898,16 @@
                     "null"
                   ]
                 },
+                "hint": {
+                  "type": "integer"
+                },
                 "interface": {
+                  "type": "string"
+                },
+                "new": {
+                  "type": "string"
+                },
+                "old": {
                   "type": "string"
                 },
                 "ts": {
@@ -964,7 +1045,16 @@
                     "null"
                   ]
                 },
+                "hint": {
+                  "type": "integer"
+                },
                 "interface": {
+                  "type": "string"
+                },
+                "new": {
+                  "type": "string"
+                },
+                "old": {
                   "type": "string"
                 },
                 "ts": {

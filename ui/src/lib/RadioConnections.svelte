@@ -253,12 +253,13 @@
         ];
         if (pv.restarts.length) paras.push(t('{units} are stopped and started again. The radio is unavailable for about a minute; nothing is flashed.', {units: pv.restarts.join(', ')}));
         // openccu-lite B-285: HmIP-RF leaves its module - an adapter exchange through eQ-3's key server,
-        // one-way in practice; the system keeps a snapshot first, the only way back
+        // which may refuse the exchange back (task 301: "may", no claim about its rules); the system
+        // keeps a snapshot first, the way back that needs no server
         if (pv.hmip_move && !pv.hmip_move.local_key) {
-            paras.push(t('HmIP-RF moves from module {from} to module {to}. That is an adapter exchange through eQ-3\'s key server: the HmIP network belongs to the new module afterwards, and the key server refuses the exchange back.', {from: pv.hmip_move.from, to: pv.hmip_move.to}));
+            paras.push(t('HmIP-RF moves from module {from} to module {to}. That is an adapter exchange through eQ-3\'s key server: the HmIP network belongs to the new module afterwards, and the key server may refuse the exchange back.', {from: pv.hmip_move.from, to: pv.hmip_move.to}));
             paras.push(pv.hmip_move.snapshot
-                ? t('The system keeps a snapshot of the current module\'s identity and device files first. "Back to the previous module" on this page works from that snapshot alone - without it there is no way back.')
-                : t('No snapshot can be kept here: there is no way back to the current module afterwards.'));
+                ? t('The system keeps a snapshot of the current module\'s identity and device files first. "Back to the previous module" on this page works from that snapshot without the key server.')
+                : t('No snapshot can be kept here: the way back to the current module is another exchange, which the key server may refuse.'));
         } else if (pv.hmip_move) {
             paras.push(t('HmIP-RF moves from module {from} to module {to}. Local key mode is on: no key server is involved.', {from: pv.hmip_move.from, to: pv.hmip_move.to}));
         }
