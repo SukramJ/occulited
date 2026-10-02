@@ -1,4 +1,5 @@
-import {expect, test, type Locator} from '@playwright/test';
+import {type Locator} from '@playwright/test';
+import {expect, test} from './fixtures';
 import {fitsWindow} from './scroll';
 
 // Task 94, section 7: during a boot the web UI answers long before hmipserver's JVM is ready (about

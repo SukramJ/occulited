@@ -1,4 +1,5 @@
-import {expect, test, type Page} from '@playwright/test';
+import {type Page} from '@playwright/test';
+import {expect, test} from './fixtures';
 import {CA} from '../stub/testcert.mjs';
 
 // B-71: a user session opens the Interfaces and Certificate pages without calling the routes only an

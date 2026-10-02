@@ -1,4 +1,5 @@
-import {expect, test, type Locator, type Page, type TestInfo} from '@playwright/test';
+import {type Locator, type Page, type TestInfo} from '@playwright/test';
+import {expect, test} from './fixtures';
 import {PORT, scrollY} from './scroll';
 
 // Task 50: timers on the Services page - the table with its Enabled column and row actions, an own
@@ -14,9 +15,19 @@ async function press(target: Locator) {
     else await target.click();
 }
 
+// B-36: every timer a test makes goes again after it, through the stub's own DELETE: the stub is
+// shared and lives through the run, and with --repeat-each the leftovers piled up in its table.
+// A test that deleted its timer itself gets a 404 here, which is fine.
+const made = new Set<string>();
 function uniqueName(info: TestInfo) {
-    return `e2e${info.project.name.replace(/[^a-z]/g, '').slice(0, 6)}${Date.now().toString(36)}${Math.floor(Math.random() * 1296).toString(36)}`;
+    const name = `e2e${info.project.name.replace(/[^a-z]/g, '').slice(0, 6)}${Date.now().toString(36)}${Math.floor(Math.random() * 1296).toString(36)}`;
+    made.add(name);
+    return name;
 }
+test.afterEach(async ({request}) => {
+    for (const name of made) await request.delete(`/api/system/v1/timers/own/${encodeURIComponent(name)}`);
+    made.clear();
+});
 function timerRow(page: Page, unit: string) {
     return page.locator('table.ol-timers tbody tr').filter({has: page.locator('td:first-child', {hasText: unit})});
 }

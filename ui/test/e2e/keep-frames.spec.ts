@@ -1,4 +1,5 @@
-import {expect, test, type Page} from '@playwright/test';
+import {type Page} from '@playwright/test';
+import {expect, test} from './fixtures';
 
 // Task 39: the shell keeps an addon page loaded while the user is elsewhere, so switching back to
 // Node-RED does not load the editor from scratch. The stub's framed pages count their loads in the

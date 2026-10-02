@@ -217,6 +217,14 @@ func TestOpenAPIFromHandlers(t *testing.T) {
 	if got := js(at(t, doc, "paths", "/health", "get", "tags")); got != `["api"]` {
 		t.Errorf("health tags: %s", got)
 	}
+	// B-33: the query parameters a same-package helper reads from the request's url.Values, two deep
+	var names []string
+	for _, p := range at(t, doc, "paths", "/api/x/v1/multi", "get", "parameters").([]any) {
+		names = append(names, p.(map[string]any)["name"].(string))
+	}
+	if got := strings.Join(names, ","); got != "before,e,tag" {
+		t.Errorf("multi parameters: %s", got)
+	}
 	multi := js(at(t, doc, "paths", "/api/x/v1/multi", "get", "responses", "200", "content", "application/json", "schema"))
 	if multi != `{"anyOf":[{"$ref":"#/components/schemas/Error2"},{"properties":{"inner":{"properties":{"deep":{"type":"integer"}},"required":["deep"],"type":"object"},"v":{"anyOf":[{"type":"integer"},{"type":"string"}]}},"required":["inner"],"type":"object"}]}` {
 		t.Errorf("multi: %s", multi)

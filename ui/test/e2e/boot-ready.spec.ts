@@ -1,4 +1,5 @@
-import {expect, test, type Page} from '@playwright/test';
+import {type Page} from '@playwright/test';
+import {expect, test} from './fixtures';
 
 // B-104: after a reboot and a new login, task 94's thin bar stood without a label at the top of the
 // Status page, with only "Radio interfaces are starting" under it. It keeps its place, and has a

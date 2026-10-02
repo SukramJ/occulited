@@ -1,4 +1,5 @@
-import {expect, test, type Page} from '@playwright/test';
+import {type Page} from '@playwright/test';
+import {expect, test} from './fixtures';
 
 // openccu-lite task 226 (the maintainer, 2026-09-24: "don't show IPv4/6 panel for an
 // inactive/disabled interface"): an interface that is administratively down, has neither cable
@@ -29,6 +30,17 @@ async function withInterfaces(page: Page, interfaces: Iface[], wifiEnabled = tru
     });
 }
 
+// B-292: the page loaded with both routed answers in. A test whose assertion held once /network
+// had answered ended while /wifi was still in its route handler, and route.fetch then threw "Test
+// ended" into the worker; it could also judge the Wi-Fi panels before the Wi-Fi state had arrived.
+async function openNetwork(page: Page) {
+    const answered = (path: string) => page.waitForResponse((r) => r.request().method() === 'GET' && new URL(r.url()).pathname === path);
+    const network = answered('/api/system/v1/network');
+    const wifi = answered('/api/system/v1/wifi');
+    await page.goto('/system/network');
+    await Promise.all([network, wifi]);
+}
+
 const panelsOf = (page: Page, name: string) => page.locator(`[data-panel^="ipv"][data-of="${name}"]`);
 
 test('the cases: which interface keeps its address panels', async ({page}) => {
@@ -47,7 +59,7 @@ test('the cases: which interface keeps its address panels', async ({page}) => {
         // Wi-Fi switched off
         {name: 'wlan0', up: false, operstate: 'down', kind: 'wireless'},
     ], false);
-    await page.goto('/system/network');
+    await openNetwork(page);
     await expect(page.locator('[data-iface="br0"]')).toBeVisible();
     await expect(panelsOf(page, 'eth0')).toHaveCount(2);
     await expect(page.locator('[data-panel="ipv4"][data-of="eth0"] #net-mode')).toBeVisible();
@@ -64,7 +76,7 @@ test('Wi-Fi on and connected: its panels are back', async ({page}) => {
         {name: 'eth0', up: true, operstate: 'up', carrier: true, kind: 'ethernet', ipv4: v4('10.0.0.2'), default_route: true},
         {name: 'wlan0', up: true, operstate: 'up', carrier: true, kind: 'wireless', ipv4: v4('10.0.1.2'), ipv6: ll},
     ], true);
-    await page.goto('/system/network');
+    await openNetwork(page);
     await expect(panelsOf(page, 'wlan0')).toHaveCount(2);
 });
 
@@ -75,7 +87,7 @@ test('the layout: a column that is its panel alone leaves no hole, the next row 
         {name: 'eth2', up: true, operstate: 'up', carrier: true, kind: 'ethernet', ipv4: v4('10.0.2.2')},
         {name: 'eth3', up: false, operstate: 'down', carrier: false, kind: 'ethernet'},
     ], true, false);
-    await page.goto('/system/network');
+    await openNetwork(page);
     await expect(page.locator('[data-panel="ipv6"][data-of="eth2"]')).toBeVisible();
     const box = async (sel: string) => (await page.locator(sel).first().boundingBox())!;
     const eth0 = await box('[data-iface="eth0"]');

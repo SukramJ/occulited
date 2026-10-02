@@ -1,4 +1,5 @@
-import {expect, test, type Page} from '@playwright/test';
+import {type Page} from '@playwright/test';
+import {expect, test} from './fixtures';
 import {fitsWindow} from './scroll';
 
 // task 76: the subscribers as one card per interface process, with a removal per row behind the

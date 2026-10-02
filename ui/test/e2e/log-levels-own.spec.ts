@@ -1,4 +1,5 @@
-import {test, expect, type Page} from '@playwright/test';
+import {type Page} from '@playwright/test';
+import {expect, test} from './fixtures';
 
 // Task 101: the Log settings' levels tab has occulited's own level at the top (with debug for some
 // areas only) and multimacd's own level beside rfd's, which says before saving that the radio stack

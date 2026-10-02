@@ -1,4 +1,4 @@
-import {expect, test} from '@playwright/test';
+import {expect, test} from './fixtures';
 
 // The Services page: a typed filter searches every service, hidden categories included (28.3);
 // the actions line up in one grid per row; a one-shot addon reads Completed (30.1).
@@ -124,6 +124,8 @@ test('every row has the same action columns', async ({page}) => {
     // the services table's rows; the timers table below shares the grid and the widths
     // (task 87, services-actions.spec.ts)
     const grids = page.locator('table.ol-table').first().locator('.ol-rowactions');
+    // count() does not wait: the rows first (occulited task 8's 50x run read 0 once in 150)
+    await expect(grids.first()).toBeVisible();
     const n = await grids.count();
     expect(n).toBeGreaterThan(3);
     const widths = new Set<number>();

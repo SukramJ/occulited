@@ -1,4 +1,4 @@
-import {expect, test} from '@playwright/test';
+import {expect, test} from './fixtures';
 import {fitsWindow, pageWidth} from './scroll';
 
 // task 53: the Status page - the duty cycle graph with its time axis and top tick, the cards of

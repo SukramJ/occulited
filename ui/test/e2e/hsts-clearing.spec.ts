@@ -1,4 +1,5 @@
-import {expect, test, type Page} from '@playwright/test';
+import {type Page} from '@playwright/test';
+import {expect, test} from './fixtures';
 
 // Task 96 (D-64): HSTS switched off sends max-age=0 for a while - a browser forgets its entry only when
 // it sees that - and the pages ask the user to open the box once by its name in every browser: in

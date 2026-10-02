@@ -93,8 +93,19 @@ func TestParseSecretForgivesTyping(t *testing.T) {
 }
 
 func TestParseSecretErrors(t *testing.T) {
-	sec, _ := NewSecret()
+	// a fixed key (B-36): with a random one the cases below hit a key where they mean nothing - the
+	// identity's "typo" was no change at all when its last symbol already was the one put there,
+	// and a changed code symbol meets its 10-bit check one time in 1024
+	sec, err := secretFromBytes([]byte("occulited-B36-k!"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	code := sec.Code()
+	id := sec.IdentityString()
+	last := "Q"
+	if strings.HasSuffix(id, last) {
+		last = "P"
+	}
 	// one symbol changed: a typo, never "wrong key"
 	b := []byte(code)
 	for i, c := range b {
@@ -120,7 +131,7 @@ func TestParseSecretErrors(t *testing.T) {
 		{sec.Recipient(), ErrIsRecipient},
 		{"AGE-SECRET-KEY-PQ-1QQQQ", ErrUnsupported},
 		{"AGE-PLUGIN-YUBIKEY-1QQQ", ErrUnsupported},
-		{sec.IdentityString()[:len(sec.IdentityString())-1] + "Q", ErrTypo},
+		{id[:len(id)-1] + last, ErrTypo},
 	}
 	for _, c := range cases {
 		_, err := ParseSecret(c.in)

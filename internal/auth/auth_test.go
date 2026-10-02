@@ -619,34 +619,25 @@ func TestLoginUnknownAccountCostsAHash(t *testing.T) {
 	if err := s.CreateUserWithoutPassword("carol", RoleUser); err != nil {
 		t.Fatal(err)
 	}
+	// every refusal - a wrong password, an unknown name, an account without a password - is exactly
+	// one argon2 run of the current parameters (B-36: this replaces a wall-clock comparison that
+	// failed on a busy CI runner; the work done, not the time it took, is what the test can see)
+	want := argonCost{t: argonTime, m: argonMemory, p: argonThreads, n: argonKeyLen}
 	for _, name := range []string{"admin", "nobody", "carol"} {
 		before := hashes.Load()
+		lastCost.Store(argonCost{})
 		if _, err := s.Login(name, "wrong-pw1", "192.0.2."+name[:1], ""); err != ErrInvalidCredentials {
 			t.Fatalf("%s: %v", name, err)
 		}
 		if n := hashes.Load() - before; n != 1 {
 			t.Errorf("%s: %d argon2 runs for a refusal, want 1", name, n)
 		}
+		if got, _ := lastCost.Load().(argonCost); got != want {
+			t.Errorf("%s: the refusal's argon2 run cost %+v, want %+v", name, got, want)
+		}
 	}
 	// the dummy hash has the current parameters and parses: its run costs what a real one does
 	if !strings.HasPrefix(dummyHash, fmt.Sprintf("argon2id$m=%d,t=%d,p=%d$", argonMemory, argonTime, argonThreads)) {
 		t.Errorf("dummy hash parameters: %s", dummyHash)
-	}
-	// a coarse timing check: the fastest refusal of an unknown name is not faster than half the
-	// fastest refusal of a known one
-	fastest := func(name string) time.Duration {
-		best := time.Hour
-		for i := 0; i < 3; i++ {
-			start := time.Now()
-			_, _ = s.Login(name, "wrong-pw1", fmt.Sprintf("198.51.100.%d", i+10), "")
-			if d := time.Since(start); d < best {
-				best = d
-			}
-		}
-		return best
-	}
-	known, unknown := fastest("admin"), fastest("nobody2")
-	if unknown < known/2 {
-		t.Errorf("unknown account refused in %v, known in %v", unknown, known)
 	}
 }

@@ -1,4 +1,5 @@
-import {expect, test, type Page} from '@playwright/test';
+import {type Page} from '@playwright/test';
+import {expect, test} from './fixtures';
 
 // The power button of the top bar: far right, administrators only; a menu with reboot, halt and a
 // reboot into the recovery system, each asking again in the shell's dialog; the full-page states

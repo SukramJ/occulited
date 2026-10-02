@@ -1,4 +1,5 @@
-import {expect, test, type Page} from '@playwright/test';
+import {type Page} from '@playwright/test';
+import {expect, test} from './fixtures';
 
 // openccu-lite task 137 (D-89: the boot never flashes the radio coprocessor): a newer firmware on the
 // system is a notice on Status; an HmIP-RFUSB the detection found but could not read is a warning on

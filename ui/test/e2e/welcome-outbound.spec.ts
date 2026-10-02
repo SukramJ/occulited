@@ -1,4 +1,5 @@
-import {expect, test, type Page, type Route} from '@playwright/test';
+import {type Page, type Route} from '@playwright/test';
+import {expect, test} from './fixtures';
 
 // openccu-lite B-241 (D-90): the welcome page asks once about the daily checks, one checkbox per
 // destination, each named with where it connects, both unticked on a fresh system. GitHub is one
@@ -22,6 +23,13 @@ async function setting(page: Page, get: string, patch: (j: Record<string, unknow
         await route.fulfill({json: {ok: true, ...reply(b)}});
     });
     return bodies;
+}
+
+// B-292: the routed answers awaited before a check that reads them, and the routes ended with the
+// test - a check that held before the patched answer was in ended the test while route.fetch was
+// still running, which failed the run ("Response has been disposed") and judged the defaults.
+function answered(page: Page, path: string) {
+    return page.waitForResponse((r) => r.request().method() === 'GET' && new URL(r.url()).pathname === path);
 }
 
 async function fresh(page: Page) {
@@ -78,7 +86,9 @@ test('a system in use shows what it runs with: GitHub ticked only when both its 
     await setting(page, '**/api/system/v1/firmware', (j) => (j.enabled = true), '**/api/system/v1/firmware/settings', (b) => ({enabled: b.enabled}));
     await setting(page, '**/api/system/v1/system-update', (j) => ((j.feed as Record<string, unknown>).enabled = true), '**/api/system/v1/system-update/settings', (b) => ({enabled: b.enabled}));
     await setting(page, '**/api/system/v1/catalog', (j) => (j.daily = false), '**/api/system/v1/catalog/settings', (b) => ({daily: b.daily}));
+    const answers = ['/api/system/v1/firmware', '/api/system/v1/system-update', '/api/system/v1/catalog'].map((p) => answered(page, p));
     await page.goto('/welcome');
+    await Promise.all(answers);
     const step = page.locator('[data-welcome-outbound]');
     await expect(step.locator('[data-outbound="eq3"]')).toBeChecked();
     await expect(step.locator('[data-outbound="github"]')).not.toBeChecked();

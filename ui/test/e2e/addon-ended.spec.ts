@@ -1,4 +1,5 @@
-import {expect, test, type Page} from '@playwright/test';
+import {type Page} from '@playwright/test';
+import {expect, test} from './fixtures';
 
 // openccu-lite B-158: an addon that keeps a daemon, whose unit is empty - the daemon ended - is red
 // and says Exited (not Completed) on the Services and the Addons page, with the time of its last

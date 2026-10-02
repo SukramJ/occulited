@@ -1,4 +1,4 @@
-import {expect, test} from '@playwright/test';
+import {expect, test} from './fixtures';
 import {fitsWindow} from './scroll';
 
 // openccu-lite task 256 (the maintainer: "remove version panel from settings page and version

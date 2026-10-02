@@ -1,4 +1,4 @@
-import {expect, test} from '@playwright/test';
+import {expect, test} from './fixtures';
 
 // With no ACME names stored, the Certificate page proposes the box's FQDN and its host name, marked
 // as the proposal; an ACME save with the field left empty stores exactly those.

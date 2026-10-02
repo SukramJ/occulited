@@ -4,6 +4,7 @@ package h
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -134,6 +135,11 @@ func (a *API) computed(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, code, apiError{Error: "x"})
 }
 
+// filters reads query parameters outside the handler, from the request's url.Values (B-33)
+func filters(v url.Values) string { return v.Get("tag") + page(v) }
+
+func page(v url.Values) string { return v.Get("before") }
+
 // Error collides with the document's own Error component.
 type Error struct {
 	Why string `json:"why"`
@@ -146,6 +152,7 @@ func (a *API) multi(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, Error{})
 		return
 	}
+	_ = filters(r.URL.Query())
 	inner := map[string]any{"deep": 1}
 	var out = map[string]any{"inner": inner}
 	out["v"] = 1

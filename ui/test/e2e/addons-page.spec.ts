@@ -1,4 +1,4 @@
-import {expect, test} from '@playwright/test';
+import {expect, test} from './fixtures';
 
 // task 139: one Addons page built on the catalogue - installed addons first (updates on top), the
 // rest by stars; a card with the unit's state dot, the version, the badges, Open/Settings/Update,
@@ -95,7 +95,6 @@ test('the ⋯ menu holds Stop, Restart, Disable at boot, Reinstall and Uninstall
     await expect(menu.getByRole('menuitem')).toHaveText(['Restart', 'Stop', 'Disable at boot', 'Reinstall from the catalogue', 'Uninstall']);
     await menu.getByRole('menuitem', {name: 'Stop'}).click();
     await expect.poll(() => posted).toEqual(['/api/system/v1/services/addon-redmatic/stop']);
-    await page.unrouteAll({behavior: 'ignoreErrors'});
 });
 
 // openccu-lite task 146 (D-106): the addons a restore brought back without their program files -

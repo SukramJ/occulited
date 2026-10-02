@@ -736,11 +736,24 @@ const (
 // double the peak on a small box
 var hashSem = make(chan struct{}, 1)
 
-// hashes counts the argon2 computations; the tests use it to see that a refusal cost one
-var hashes atomic.Int64
+// hashes counts the argon2 computations and lastCost holds the parameters of the latest; the tests
+// use them to see that a refusal cost one run of the current parameters, whether the account exists
+// or not (occulited B-36: the same thing measured in wall time failed on a busy CI runner)
+var (
+	hashes   atomic.Int64
+	lastCost atomic.Value // argonCost
+)
+
+// argonCost is what an argon2 run costs: its time, memory, threads and key length.
+type argonCost struct {
+	t, m uint32
+	p    uint8
+	n    uint32
+}
 
 func idKey(pw string, salt []byte, t, m uint32, p uint8, n uint32) []byte {
 	hashes.Add(1)
+	lastCost.Store(argonCost{t: t, m: m, p: p, n: n})
 	hashSem <- struct{}{}
 	defer func() {
 		<-hashSem
@@ -2135,8 +2148,10 @@ type TokenClient struct {
 	PairedBy   string    `json:"paired_by"`
 	Address    string    `json:"address"`
 	// Fingerprint is the certificate (hex SHA-256) the code was bound to, "" over plain HTTP
-	Fingerprint string            `json:"fingerprint,omitempty"`
-	Access      map[string]string `json:"access,omitempty"`
+	Fingerprint string `json:"fingerprint,omitempty"`
+	// Access is {} for a pairing of addons alone (openccu-lite B-296), absent only in a record
+	// from before the fix
+	Access map[string]string `json:"access,omitzero"`
 	// Addons are the addon ids whose ingress the pairing asked for (openccu-lite task 307)
 	Addons      []string `json:"addons,omitempty"`
 	LastAddress string   `json:"last_address,omitempty"`

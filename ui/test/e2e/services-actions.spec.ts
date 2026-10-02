@@ -1,4 +1,5 @@
-import {expect, test, type Locator, type Page} from '@playwright/test';
+import {type Locator, type Page} from '@playwright/test';
+import {expect, test} from './fixtures';
 
 // Task 87: the Services page's row actions. Every text button of the services table and of the timers
 // table has the same width (one sizer for both), both tables use the same grid, and the action cells

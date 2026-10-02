@@ -1,4 +1,5 @@
-import {expect, test, type Locator, type Page} from '@playwright/test';
+import {type Locator, type Page} from '@playwright/test';
+import {expect, test} from './fixtures';
 
 // Tasks 49 and 48 on the Services page: the PID column names the leader of a oneshot addon unit's
 // cgroup with +N and lists every process in its popup; the Enabled column maps systemd's
@@ -200,6 +201,5 @@ test('a stray addon: the text says Restart puts it back, and Restart is offered 
     // the other addons carry no such button
     await expect(page.locator('#addon-row-mosquitto').getByRole('button', {name: 'Restart', exact: true})).toHaveCount(0);
     // the page reads the addon list again after the restart; the test can end while the patched
-    // route still waits for the stub's answer, which then failed the test ("Response has been disposed")
-    await page.unrouteAll({behavior: 'ignoreErrors'});
+    // route still waits for the stub's answer - the shared fixture (./fixtures) waits for it
 });

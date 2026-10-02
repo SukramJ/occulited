@@ -1,4 +1,5 @@
-import {expect, test, type Page} from '@playwright/test';
+import {type Page} from '@playwright/test';
+import {expect, test} from './fixtures';
 import {fitsWindow} from './scroll';
 
 // The Network page's panels: one per interface with its link, its addresses and a state pill -

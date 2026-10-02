@@ -1,4 +1,5 @@
-import {expect, test, type Page} from '@playwright/test';
+import {type Page} from '@playwright/test';
+import {expect, test} from './fixtures';
 import {PORT} from './scroll';
 
 // B-75: the Services page was wider than the window beyond phones - 1489 px on a 768 px tablet, and

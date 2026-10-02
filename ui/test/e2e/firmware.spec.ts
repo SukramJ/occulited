@@ -1,4 +1,5 @@
-import {expect, test, type Locator} from '@playwright/test';
+import {type Locator} from '@playwright/test';
+import {expect, test} from './fixtures';
 import {PORT, fitsWindow} from './scroll';
 
 // The Firmware page: a bundle whose info says eQ-3's 0.0.0 (the API sends an empty version) shows

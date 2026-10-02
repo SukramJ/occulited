@@ -1,4 +1,5 @@
-import {expect, test, type Page, type Route} from '@playwright/test';
+import {type Page, type Route} from '@playwright/test';
+import {expect, test} from './fixtures';
 
 // task 85: the Journal panel on the Log page - RAM only, RAM copied to the userfs (ram-sync) or
 // persistent on the userfs, the figures, the copies and when a switch applies. The stub is the VM:

@@ -1,4 +1,5 @@
-import {expect, test, type Page, type Route} from '@playwright/test';
+import {type Page, type Route} from '@playwright/test';
+import {expect, test} from './fixtures';
 
 // task 214: where the radio interfaces' history is kept - occulited's database file, the third tab
 // of the Log settings. The stub is the VM: persistent by default, the file open.

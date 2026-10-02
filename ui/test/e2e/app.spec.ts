@@ -1,4 +1,4 @@
-import {expect, test} from '@playwright/test';
+import {expect, test} from './fixtures';
 
 // task 193, phase 2: the App - a tab beside Status; the drawer generated from the metadata tree
 // (favorites, the enums as foldable sections, service messages with a count, settings for an

@@ -1,4 +1,5 @@
-import {expect, test, type Page} from '@playwright/test';
+import {type Page} from '@playwright/test';
+import {expect, test} from './fixtures';
 
 // Task 76's follow-up (D-64): when a page with the registered clients opens it asks the system once
 // whether each subscriber's callback accepts a TCP connection (GET /radio/subscribers/reachability),

@@ -1,4 +1,5 @@
-import {expect, test, type Page} from '@playwright/test';
+import {type Page} from '@playwright/test';
+import {expect, test} from './fixtures';
 
 // Task 94: the reboot countdown in occulited's page. The power menu's reboot writes the countdown
 // entry before it sends the request and shows a bar that empties; the health route's answers land

@@ -208,7 +208,8 @@ func (a *Analyzer) walk(h *Handler, fn *types.Func, seen map[*types.Func]bool, d
 				}
 			}
 		}
-		// follow the same package's functions that get the handler's writer or request
+		// follow the same package's functions that get the handler's writer or request, or the
+		// request's query (B-33: /log's filters and cursors are read in logQuery and logPage)
 		if callee != nil && callee.Pkg() != nil && callee.Pkg() == d.pkg.Types && passesHTTP(info, c) {
 			a.walk(h, callee, seen, depth+1)
 		}
@@ -320,7 +321,7 @@ func decodesRequestBody(info *types.Info, c *ast.CallExpr) bool {
 func passesHTTP(info *types.Info, c *ast.CallExpr) bool {
 	for _, arg := range c.Args {
 		t := info.TypeOf(arg)
-		if t != nil && (isNamed(t, "net/http", "ResponseWriter") || isNamed(t, "net/http", "Request")) {
+		if t != nil && (isNamed(t, "net/http", "ResponseWriter") || isNamed(t, "net/http", "Request") || isNamed(t, "net/url", "Values")) {
 			return true
 		}
 	}

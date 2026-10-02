@@ -156,5 +156,6 @@ switch to root and back) stands across updates; the runtime block's facts follow
 - Bump nothing for the manifest alone: the system reads it with every install, and `version` is informational.
 - Declare only what the addon uses. `needs: []` and `start: "early"` shorten every boot; `ports` give the user a
   switch instead of a closed door; `data_dirs` is what keeps a confined addon writing where it always did.
-- Validate with the schema: `npx ajv validate -s manifest.schema.json -d openccu-lite.json`, or any JSON Schema
-  2020-12 validator. The system's own reader is `internal/manifest` in this repository.
+- Validate with the schema: `npx ajv-cli validate --spec=draft2020 -s manifest.schema.json -d openccu-lite.json`
+  (ajv-cli's own default is draft-07, which refuses this 2020-12 schema; `npx ajv` is the library, without a command),
+  or any JSON Schema 2020-12 validator. The system's own reader is `internal/manifest` in this repository.

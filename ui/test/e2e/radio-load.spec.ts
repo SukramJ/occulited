@@ -1,4 +1,4 @@
-import {expect, test} from '@playwright/test';
+import {expect, test} from './fixtures';
 import {fitsWindow} from './scroll';
 
 // task 150: the radio load is the Status page's alone - the duty cycle ring against the 1 % budget

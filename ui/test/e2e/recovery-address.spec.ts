@@ -1,4 +1,5 @@
-import {expect, test, type Page} from '@playwright/test';
+import {type Page} from '@playwright/test';
+import {expect, test} from './fixtures';
 
 // The recovery system has no HTTPS, and a browser that remembers HSTS for the box's name refuses
 // it by name: the power menu, a system update's install and the HSTS question send the browser to

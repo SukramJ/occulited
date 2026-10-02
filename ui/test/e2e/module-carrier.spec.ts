@@ -1,4 +1,5 @@
-import {expect, test, type Page} from '@playwright/test';
+import {type Page} from '@playwright/test';
+import {expect, test} from './fixtures';
 
 // openccu-lite task 240 (the maintainer): "i would like to have 2 lines here 'Gerät HM-MOD-RPI-PCB' and
 // next line 'Via HB-RF-ETH@192.0.2.209' similar for hb-rf-usb* attached devices". The carrier comes

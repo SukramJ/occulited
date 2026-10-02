@@ -1,4 +1,4 @@
-import {expect, test} from '@playwright/test';
+import {expect, test} from './fixtures';
 
 // openccu-lite B-247: a system update that would not fit where the recovery unpacks it is refused
 // before the reboot, and the Updates page says why - the free and the needed space, and what to do.

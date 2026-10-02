@@ -1,4 +1,4 @@
-import {test, expect} from '@playwright/test';
+import {expect, test} from './fixtures';
 
 // Task 102 (D-59): a firmware flash's and an ACME attempt's lines are in the journal. The pages read
 // them through GET /log?run=<run_id>, a finished run the journal no longer holds says so, and the
