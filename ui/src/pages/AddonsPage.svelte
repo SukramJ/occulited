@@ -421,13 +421,14 @@
     }
     // an upload install still running when the page opens (a reload during it) is followed again
     async function resumeInstall() {
-        let job: InstallJob;
+        let job: InstallJob | undefined;
         try {
-            job = await api.get<InstallJob>('/api/system/v1/addons/install');
+            // occulited B-15: 204 (no body) when there has been none since the system service started
+            job = await api.get<InstallJob | undefined>('/api/system/v1/addons/install');
         } catch {
-            return; // none since the system service started
+            return;
         }
-        if (job.state !== 'running' || installing) return;
+        if (!job || job.state !== 'running' || installing) return;
         installing = true;
         try {
             await finishInstall(await followJob(job.id));

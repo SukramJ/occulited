@@ -456,7 +456,7 @@ func run(opts daemonOptions) error {
 		firstBootAddonPolicies(sa, cfg.StateDir, area("addons"))
 		// openccu-lite task 283: the units' restart counters for the crash-loop warning, and the
 		// addons that declare a daemon restarted when it ended (the rc.d stop and start)
-		crashLoops = &system.CrashLoops{Systemd: sd, Supervised: sa.SupervisedDaemons, Log: area("services"),
+		crashLoops = &system.CrashLoops{Systemd: sd, Supervised: sa.SupervisedDaemons, Paused: sa.Busy, Log: area("services"),
 			Restart: func(ctx context.Context, unit string) error { _, err := sd.Control(ctx, unit, "restart"); return err }}
 		manager = sa
 		// the addon list comes from the same object on a systemd box: its running state is the
@@ -626,6 +626,11 @@ func run(opts daemonOptions) error {
 		// the manifest fetched for the page
 		if catSvc != nil {
 			sa.FallbackManifest = catSvc.ManifestAt
+		}
+		// openccu-lite B-288: every addon uid the system holds is in the uid registry before the
+		// sweep below takes a gone addon's policy - its uid stays reserved for its reinstall
+		if ids := sa.SeedAddonUIDs(); len(ids) > 0 {
+			log.Info("addon uids: registered", "addons", ids)
 		}
 		// openccu-lite B-283: the policy files of an addon that is gone (an uninstall before this
 		// binary, NEO Server switched off) go first, so the refreshes below see installed addons only

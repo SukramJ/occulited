@@ -61,10 +61,55 @@ type FirewallAddonPort struct {
 	Proto string            `json:"proto,omitempty"`
 	TLS   bool              `json:"tls,omitempty"`
 	Label map[string]string `json:"label,omitempty"`
-	// Listening: a socket on that port exists, loopback or not (ListeningPorts).
+	// Listening: the addon holds a socket on that port and protocol, loopback or not
+	// (ListeningPorts): one of its unit's processes owns it (occulited B-31). Without the socket
+	// owners (the helper did not answer) any socket on the port and protocol counts, and
+	// OwnerUnknown says so.
 	Listening bool `json:"listening"`
+	// HeldBy is the process that holds the port when it is not the addon's (occulited B-31): RedMatic's
+	// node-red on a port openccu-loom declares. Absent when nobody holds it or the owner is unknown.
+	HeldBy *PortHolder `json:"held_by,omitempty"`
+	// OwnerUnknown: a socket is open on the port, and whose could not be read.
+	OwnerUnknown bool `json:"owner_unknown,omitempty"`
 	// Open: the port is in the policy's OpenPorts, so USERPORTS carries it.
 	Open bool `json:"open"`
+}
+
+// PortHolder is the process that holds a declared port, as the helper's socket owners name it.
+type PortHolder struct {
+	Process string `json:"process,omitempty"`
+	Unit    string `json:"unit,omitempty"`
+}
+
+// addonPortState is a declared port's listening state from the sockets on it (occulited B-31): the
+// protocol must match (tcp and tcp6 are tcp; a port declared without one takes either), and the
+// socket must be held by a process in the addon's own unit. Another holder is named; an owner
+// that could not be read is said, and counts as listening as before.
+func addonPortState(id string, d Port, listening []Listener) FirewallAddonPort {
+	p := FirewallAddonPort{Port: d.Port, Proto: d.Proto, TLS: d.TLS, Label: d.Label}
+	unit := "addon-" + id + ".service"
+	var other *PortHolder
+	unknown := false
+	for _, l := range listening {
+		if l.Port != d.Port || (d.Proto != "" && strings.TrimSuffix(l.Proto, "6") != d.Proto) {
+			continue
+		}
+		switch {
+		case l.Unit == unit:
+			p.Listening = true
+			return p
+		case l.Unit == "" && l.Process == "":
+			unknown = true
+		case other == nil:
+			other = &PortHolder{Process: l.Process, Unit: l.Unit}
+		}
+	}
+	if unknown {
+		p.Listening, p.OwnerUnknown = true, true
+		return p
+	}
+	p.HeldBy = other
+	return p
 }
 
 // AddonPorts is every installed addon's opened ports: port -> addon id. A policy whose addon is
@@ -138,10 +183,6 @@ func (m FirewallManager) AddonOwners() map[string][]firewall.PortSpec {
 // Addons lists every installed addon that declares ports, with each port's state. names maps an
 // id to its display name (the id when missing); listening is ListeningPorts' answer.
 func (m FirewallManager) Addons(names map[string]string, listening []Listener) []FirewallAddon {
-	sockets := map[int]bool{}
-	for _, l := range listening {
-		sockets[l.Port] = true
-	}
 	installed := map[string]bool{}
 	for _, id := range rcdAddonIDs(m.Root) {
 		installed[id] = true
@@ -157,7 +198,9 @@ func (m FirewallManager) Addons(names map[string]string, listening []Listener) [
 			a.Name = id
 		}
 		for _, d := range declared {
-			a.Ports = append(a.Ports, FirewallAddonPort{Port: d.Port, Proto: d.Proto, TLS: d.TLS, Label: d.Label, Listening: sockets[d.Port], Open: slices.Contains(p.OpenPorts, d.Port)})
+			port := addonPortState(id, d, listening)
+			port.Open = slices.Contains(p.OpenPorts, d.Port)
+			a.Ports = append(a.Ports, port)
 		}
 		out = append(out, a)
 	}

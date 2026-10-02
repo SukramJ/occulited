@@ -83,6 +83,11 @@ type CrashLoops struct {
 	Procs func(cgroup string) bool
 	// Restart restarts an addon's unit (addon-<id>); nil = no supervision.
 	Restart func(ctx context.Context, unit string) error
+	// Paused says whether an addon install or uninstall runs (SystemdAddons.Busy, occulited B-30):
+	// meanwhile the core units are still observed, the addons' units are left alone and nothing is
+	// restarted, and the first sample after the job counts an ended daemon afresh (its backoff
+	// from then), so the job's own stop and start are never taken for a crash. nil = never.
+	Paused func() bool
 	// OnChange is called after a sample that changed which units are in a loop (the Status
 	// warnings are evaluated again, so the LED follows within its step, not the tracker's five
 	// minutes); nil = nothing.
@@ -93,6 +98,7 @@ type CrashLoops struct {
 	units  map[string]*unitHistory
 	addons map[string]*addonSupervision
 	looped string // the units in a loop at the last sample, for OnChange
+	paused bool   // the last sample fell into Paused
 }
 
 type unitHistory struct {
@@ -206,11 +212,28 @@ func (c *CrashLoops) Sample(ctx context.Context) {
 		c.observeCore(u, p, up, now)
 	}
 	keep := map[string]bool{}
+	paused := c.Paused != nil && c.Paused()
+	resumed := c.paused && !paused
+	c.paused = paused
 	for _, id := range addons {
 		keep[id] = true
 		p := props["addon-"+id+".service"]
 		if p == nil || p["LoadState"] != "loaded" {
 			continue
+		}
+		if paused {
+			// B-30: an install or uninstall runs; what the job does to the units is not a crash
+			if s := c.addons[id]; s != nil {
+				s.due, s.runningAt = time.Time{}, time.Time{}
+			}
+			continue
+		}
+		if resumed {
+			// the first sample after the job: an empty unit now starts its backoff, it is not
+			// restarted at once - the job's settle step may still be starting it
+			if s := c.addons[id]; s != nil {
+				s.due = now.Add(addonBackoff(s.attempts))
+			}
 		}
 		if c.observeAddon(id, p, up, now) {
 			restart = append(restart, id)

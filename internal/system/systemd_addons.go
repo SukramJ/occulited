@@ -12,6 +12,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync/atomic"
 
 	"github.com/hobbyquaker/occulited/internal/journald"
 	"github.com/hobbyquaker/occulited/internal/manifest"
@@ -63,6 +64,10 @@ type SystemdAddons struct {
 	// addon's last lines (addondaemon.go); nil = the box's journalctl. Tests hand in the JSON lines.
 	Journalctl func(ctx context.Context, args ...string) ([]byte, error)
 
+	// jobs counts the installs and uninstalls running now (occulited B-30): the addon supervisor
+	// leaves every unit alone while one runs (Busy).
+	jobs atomic.Int32
+
 	scopeFn func() string // nil = a random occulite-addon-<hex>.scope
 	monoNow func() uint64 // nil = CLOCK_MONOTONIC in microseconds (task 107)
 	remount remountScan   // the last refused-remount scan (D-66)
@@ -74,6 +79,13 @@ type SystemdAddons struct {
 const AddonDefaultMode = "confined"
 
 // NewSystemdAddons wires the rc.d layer (AddonScripts) to run its scripts through systemd-run.
+// Busy says whether an install or an uninstall runs now (occulited B-30). The addon supervisor
+// (CrashLoops.Paused) restarts nothing meanwhile: the job stops, starts and settles the units
+// itself, and an update script's stop leaves a daemon's unit empty for a moment on purpose.
+// Which addon an archive holds is known only after its installer, and an install touches other
+// addons' units too, so the pause is for all of them; it lasts seconds to a minute.
+func (a *SystemdAddons) Busy() bool { return a.jobs.Load() > 0 }
+
 func NewSystemdAddons(root Root, sd SystemdServices) *SystemdAddons {
 	a := &SystemdAddons{Systemd: sd}
 	a.Scripts = AddonScripts{Root: root, Exec: a.scoped, Credential: a.Credential}
@@ -164,6 +176,8 @@ func (a *SystemdAddons) rcdSnapshot() map[string]rcdEntry {
 // and are stopped now (B-98) - unless the installer asked for a reboot. A new addon is started in
 // its unit after any installer that succeeded, one asking for a reboot too (B-186).
 func (a *SystemdAddons) Install(ctx context.Context, archive io.Reader) (*InstallResult, error) {
+	a.jobs.Add(1) // B-30: the supervisor waits until the units are settled
+	defer a.jobs.Add(-1)
 	// the archive is staged first, so that openccu-lite.json can be read out of it in Go before
 	// any code of the package runs (never a helper tar -xOf, B-39); an archive the API staged
 	// already is read where it is
@@ -534,6 +548,8 @@ func (a *SystemdAddons) stoppedAddons(ctx context.Context, ranBefore map[string]
 // Uninstall stops the addon's unit (the whole cgroup), runs the rc.d uninstall, removes the
 // entry and reloads the generator so the unit disappears, and removes the addon's policy files.
 func (a *SystemdAddons) Uninstall(ctx context.Context, id string) (UninstallResult, error) {
+	a.jobs.Add(1) // B-30
+	defer a.jobs.Add(-1)
 	if strings.ContainsAny(id, "/\\ ") || id == "" {
 		return UninstallResult{}, fmt.Errorf("invalid addon id")
 	}
@@ -544,8 +560,12 @@ func (a *SystemdAddons) Uninstall(ctx context.Context, id string) (UninstallResu
 		slog.Warn("addons: the unit's stop failed before the uninstall; the uninstall goes on", "id", id, "err", serr, "output", strings.TrimSpace(string(sout)))
 	}
 	scope := a.scopeName()
+	// occulited B-26: as whom the script runs, for the journal's line after it (the policy goes below)
+	asUser := ""
+	if a.Credential(id) != nil {
+		asUser = "addon-" + id
+	}
 	out, err := a.Scripts.Uninstall(context.WithValue(ctx, scopeKey{}, scope), id)
-	a.journalUninstall(id, out.Output, err)
 	// the scope is not stopped (B-3, see Install)
 	_, _ = a.Systemd.run(ctx, "daemon-reload")
 	// B-236: a unit that ended failed (its stop exited non-zero) stays listed after its file is
@@ -554,10 +574,14 @@ func (a *SystemdAddons) Uninstall(ctx context.Context, id string) (UninstallResu
 	_, _ = a.Systemd.run(ctx, "reset-failed", "--no-pager", "--", unit)
 	// openccu-lite B-283 (maintainer, 2026-09-30): every addon-policy/<id>.* goes with the addon -
 	// the policy, its drop-in, the start order, the early start and the stored manifest - so a
-	// reinstall starts clean from its new manifest (D-119), with every port closed (D-29, D-47) and
-	// a uid nextUID hands out afresh; until then the policy file outlived the addon to reserve its
-	// uid. The firewall follows: the opened ports were the policy's.
+	// reinstall starts clean from its new manifest (D-119), with every port closed (D-29, D-47). Its
+	// uid stays reserved in the uid registry (B-288: addon-uids.json is not one of these files), so
+	// a reinstall runs as the same uid and no other addon gets it. The firewall follows: the opened
+	// ports were the policy's.
 	out.SystemRemoved = append(out.SystemRemoved, a.Scripts.Root.removeAddonPolicyFiles(id)...)
+	// the script's output, then what the system removed after it (B-26: the refused rm lines of a
+	// confined script read as handled), then how it ended
+	a.journalUninstall(id, out, asUser, err)
 	a.regenerateFirewall(ctx)
 	// its tokens go with it (28.8, task 66), and what was learned about its daemon (B-158)
 	a.Tokens.forget(a.Scripts.Root, id)

@@ -77,6 +77,11 @@ type addonRun struct {
 	exit    int    // the exit code, when ran
 	meaning string // what the exit code means, when known
 	err     error
+	// removed is what the system removed after an uninstall script (UninstallResult.SystemRemoved),
+	// asUser the user a confined addon's script ran as (occulited B-26): the journal says it after
+	// the script's lines, so the script's refused rm lines read as handled
+	removed []string
+	asUser  string
 }
 
 func (r addonRun) failed() bool {
@@ -107,6 +112,9 @@ func (r addonRun) entries() [][]journald.Field {
 	if r.id != "" {
 		prefix = r.id + ": "
 	}
+	if note := r.removedNote(); note != "" {
+		out = append(out, entry(prefix+note, journald.PriorityInfo))
+	}
 	if !r.ran {
 		return append(out, entry(fmt.Sprintf("%s%s failed: %v", prefix, r.action, r.err), journald.PriorityErr))
 	}
@@ -119,6 +127,25 @@ func (r addonRun) entries() [][]journald.Field {
 		priority = journald.PriorityErr
 	}
 	return append(out, append(entry(msg, priority), journald.Field{Key: "ADDON_EXIT", Value: strconv.Itoa(r.exit)}))
+}
+
+// removedNote is the journal's line after a confined or any uninstall script: as whom it ran, and
+// what the system removed afterwards; "" when there is nothing to say.
+func (r addonRun) removedNote() string {
+	if r.action != "uninstall" || (len(r.removed) == 0 && r.asUser == "") {
+		return ""
+	}
+	note := ""
+	if r.asUser != "" {
+		note = "the uninstall ran as the addon's user " + r.asUser + ", as a confined addon's does"
+	}
+	if len(r.removed) > 0 {
+		if note != "" {
+			note += "; "
+		}
+		note += "the system then removed: " + strings.Join(r.removed, ", ")
+	}
+	return note
 }
 
 // journalLines is the output as the journal's lines: blank lines left out, a line redrawn with
@@ -173,8 +200,8 @@ func (a *SystemdAddons) journalAddonRun(r addonRun) {
 
 // journalUninstall journals an uninstall: its script's output and how it ended. A refusal before
 // any script ran (an unknown addon) is the request's answer and not a run, so it is left out.
-func (a *SystemdAddons) journalUninstall(id, out string, err error) {
-	r := addonRun{action: "uninstall", id: id, output: out, ran: true, meaning: "uninstalled"}
+func (a *SystemdAddons) journalUninstall(id string, res UninstallResult, asUser string, err error) {
+	r := addonRun{action: "uninstall", id: id, output: res.Output, ran: true, meaning: "uninstalled", removed: res.SystemRemoved, asUser: asUser}
 	var pe *priv.ExitError
 	var ee *exec.ExitError
 	switch {

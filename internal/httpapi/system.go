@@ -1611,7 +1611,10 @@ func (a *SystemAPI) firewallAddons(w http.ResponseWriter, r *http.Request) {
 
 func (a *SystemAPI) addonPorts(ctx context.Context) []system.FirewallAddon {
 	c, _ := a.Root.ReadRules()
-	l := a.Root.ListeningPorts(c, nil)
+	// occulited B-31: whose socket it is decides whether the addon listens - nil when the helper
+	// does not answer, and the ports then say the owner is unknown
+	owners, _ := system.Priv.SocketOwners(ctx)
+	l := a.Root.ListeningPorts(c, owners)
 	names := map[string]string{}
 	if a.Addons != nil {
 		if list, err := a.Addons.ListAddons(ctx); err == nil {

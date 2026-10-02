@@ -231,6 +231,9 @@ func (a *SystemAPI) installLocal(w http.ResponseWriter, r *http.Request) {
 func (a *SystemAPI) runInstall(job *InstallJob, staged *system.StagedArchive) {
 	defer staged.Remove()
 	res, err := a.Manager.Install(context.Background(), staged)
+	// the staged file goes before the job says it is over: a reader that sees "done" finds
+	// nothing left behind (Gitea run 618 caught the deferred remove after finish)
+	staged.Remove()
 	a.installs.finish(job, res, err)
 	if err != nil {
 		slog.Warn("addons: an uploaded archive was not installed", "job", job.ID, "err", err)
@@ -244,9 +247,16 @@ func (a *SystemAPI) runInstall(job *InstallJob, staged *system.StagedArchive) {
 	}
 }
 
-// installJob answers GET /addons/install: ?job=<id>, or the newest job without one.
+// installJob answers GET /addons/install: ?job=<id>, or the newest job without one. Without one
+// and before the first install it is 204: the Addons page asks at every opening, and a 404 there
+// was a "Failed to load resource" in the browser's console after every start (occulited B-15).
 func (a *SystemAPI) installJob(w http.ResponseWriter, r *http.Request) {
-	job, ok := a.installs.get(r.URL.Query().Get("job"))
+	id := r.URL.Query().Get("job")
+	job, ok := a.installs.get(id)
+	if !ok && id == "" {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	if !ok {
 		writeJSON(w, http.StatusNotFound, apiError{Error: "unknown-job", Message: "no such install job"})
 		return

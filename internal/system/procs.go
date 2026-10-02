@@ -19,15 +19,27 @@ type proc struct {
 	Cgroup string // the cgroup v2 path ("/system.slice/addon-hmm.service"); empty when unreadable
 }
 
-// addonProcesses lists the processes whose command line names a file under the addon's
-// directory, /usr/local/addons/<id>/ - node-red under RedMatic's, mosquitto under its own, the
-// manager's node. It is the one signal that survives a daemon started outside its unit (an
-// addon's own restart button before 28.8's wrapper, or an update script in the install scope,
-// task 48): the unit's cgroup is then empty and systemd says "exited" while the daemon runs on -
-// which is exactly the case the Services page must not report as Completed or Stopped. The list
+// addonProcesses lists the addon's processes (task 48, occulited B-30): a daemon started outside
+// its unit (an addon's own restart button before 28.8's wrapper, or an update script in the install
+// scope) leaves the unit's cgroup empty while the daemon runs on - the case the Services page must
+// not report as Completed or Stopped, and the leftovers the install step and Restart stop by pid.
+// A process is the addon's when
+//   - its executable is under the addon's directory /usr/local/addons/<id>/ (/proc/<pid>/exe, which
+//     the daemon can read for its own processes and root's helper for all),
+//   - argv[0] is there (mosquitto, the manager's own node),
+//   - an interpreter runs a script from there: the first argument of node, sh, python, tclsh, java
+//     and the like that is not an option (`node --opt /usr/local/addons/hmm/app/cli.js`,
+//     `sh /usr/local/addons/redmatic/bin/redmaticLoader`, `java -jar …/x.jar`),
+//   - or it runs as the addon's own user addon-<id> (a confined addon's node-red, whose command
+//     line is its title alone).
+//
+// A command line that merely names a file there is not: an ssh session's `sh -c "md5sum
+// /usr/local/addons/hmm/etc/hmm.env"`, a `tail -f` of an addon's log, an editor. And never a process
+// in occulited's own or the privilege helper's unit (an addon's CGI runs as its user there). The list
 // is in pid order.
 func addonProcesses(root Root, id string) []proc {
-	needle := "/usr/local/addons/" + id + "/"
+	dir := "/usr/local/addons/" + id + "/"
+	uid, hasUID := root.passwdAddonUIDs()[id]
 	entries, err := os.ReadDir(root.join("/proc"))
 	if err != nil {
 		return nil
@@ -38,14 +50,99 @@ func addonProcesses(root Root, id string) []proc {
 		if err != nil || pid <= 0 {
 			continue
 		}
-		cmd := procCmdline(root, pid)
-		if cmd == "" || !strings.Contains(cmd, needle) {
+		args := procArgv(root, pid)
+		if len(args) == 0 {
 			continue
 		}
-		out = append(out, proc{PID: pid, Cmd: cmd, Cgroup: procCgroup(root, pid)})
+		cg := procCgroup(root, pid)
+		if inCgroup(cg, "occulited.service") || inCgroup(cg, "occulited-helper.service") {
+			continue
+		}
+		if !argvRunsFrom(args, dir) && !procExeUnder(root, pid, dir) && !(hasUID && procUID(root, pid) == uid) {
+			continue
+		}
+		out = append(out, proc{PID: pid, Cmd: strings.Join(args, " "), Cgroup: cg})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].PID < out[j].PID })
 	return out
+}
+
+// interpreters are the programs whose script argument says whose process it is.
+var interpreters = map[string]bool{"sh": true, "ash": true, "bash": true, "dash": true, "busybox": true,
+	"node": true, "nodejs": true, "bun": true, "deno": true, "perl": true, "ruby": true, "java": true}
+
+// interpreter: an interpreters entry, or python, tclsh, lua, php with any version suffix.
+func interpreter(argv0 string) bool {
+	base := filepath.Base(argv0)
+	if interpreters[base] {
+		return true
+	}
+	for _, p := range []string{"python", "tclsh", "lua", "php"} {
+		if strings.HasPrefix(base, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// argvRunsFrom: argv[0] is under dir, or argv[0] is an interpreter whose first argument that is
+// not an option is (for `sh -c`, the command string's start).
+func argvRunsFrom(args []string, dir string) bool {
+	if strings.HasPrefix(args[0], dir) {
+		return true
+	}
+	if !interpreter(args[0]) {
+		return false
+	}
+	for _, a := range args[1:] {
+		if strings.HasPrefix(a, "-") {
+			continue
+		}
+		return strings.HasPrefix(a, dir)
+	}
+	return false
+}
+
+// procArgv is the process's arguments, nil when the process is gone or a kernel thread.
+func procArgv(root Root, pid int) []string {
+	b, err := os.ReadFile(filepath.Join(root.join("/proc"), strconv.Itoa(pid), "cmdline"))
+	if err != nil || len(b) == 0 {
+		return nil
+	}
+	args := strings.Split(strings.TrimRight(string(b), "\x00"), "\x00")
+	if len(args) == 1 {
+		// a process that rewrote its title into one string (node-red): the words of it
+		args = strings.Fields(args[0])
+	}
+	return args
+}
+
+// procExeUnder: /proc/<pid>/exe leads under dir (as the box spells it; under a development root
+// the link carries the root's path in front).
+func procExeUnder(root Root, pid int, dir string) bool {
+	exe, err := os.Readlink(filepath.Join(root.join("/proc"), strconv.Itoa(pid), "exe"))
+	if err != nil {
+		return false
+	}
+	return strings.HasPrefix(exe, dir) || strings.HasPrefix(exe, root.join(dir))
+}
+
+// procUID is the process's real uid from /proc/<pid>/status, -1 when unknown.
+func procUID(root Root, pid int) int {
+	b, err := os.ReadFile(filepath.Join(root.join("/proc"), strconv.Itoa(pid), "status"))
+	if err != nil {
+		return -1
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if rest, ok := strings.CutPrefix(line, "Uid:"); ok {
+			if f := strings.Fields(rest); len(f) > 0 {
+				if n, err := strconv.Atoi(f[0]); err == nil {
+					return n
+				}
+			}
+		}
+	}
+	return -1
 }
 
 // procCmdline is the process's command line with the NULs turned into spaces, "" when the

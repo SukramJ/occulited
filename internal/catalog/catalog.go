@@ -464,7 +464,7 @@ func (s *Service) getETag(ctx context.Context, u, etag string, limit int64) ([]b
 	if etag != "" {
 		req.Header.Set("If-None-Match", etag)
 	}
-	res, err := s.HTTP.Do(req)
+	res, err := s.do(req)
 	if err != nil {
 		return nil, "", err
 	}
@@ -743,7 +743,7 @@ func (s *Service) refreshStars(ctx context.Context, repo string) {
 		req.Header.Set("If-None-Match", etag)
 	}
 	s.mu.Unlock()
-	res, err := s.HTTP.Do(req)
+	res, err := s.do(req)
 	if err != nil {
 		return
 	}
@@ -945,7 +945,7 @@ func (s *Service) releasesOf(ctx context.Context, repo string) ([]ghRelease, err
 	if ok && cached.etag != "" {
 		req.Header.Set("If-None-Match", cached.etag)
 	}
-	res, err := s.HTTP.Do(req)
+	res, err := s.do(req)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, err // cancelled by the caller, not a failing GitHub
@@ -1186,6 +1186,8 @@ func (s *Service) run(ctx context.Context, id string) (*Progress, error) {
 		now := time.Now()
 		s.mu.Lock()
 		s.progress.Phase, s.progress.Message, s.progress.Finished = "failed", err.Error(), &now
+		// B-37: a failed install is said in the journal too, not only in the progress
+		slog.Warn("catalog: install failed", "addon", id, "err", err)
 		if re, ok := asReleasesError(err); ok {
 			// B-21: the list could not be read, so nothing was resolved and nothing installed -
 			// said with a code the page translates and GitHub's wait
@@ -1222,13 +1224,13 @@ func (s *Service) run(ctx context.Context, id string) (*Progress, error) {
 	if err != nil {
 		return fail(err)
 	}
-	res, err := s.HTTP.Do(req)
+	res, err := s.do(req)
 	if err != nil {
 		return fail(err)
 	}
 	if res.StatusCode != 200 {
 		res.Body.Close()
-		return fail(fmt.Errorf("download: HTTP %d", res.StatusCode))
+		return fail(statusError("download", res))
 	}
 	h := sha256.New()
 	counter := &countingWriter{w: io.MultiWriter(tmp, h), s: s, total: res.ContentLength}
@@ -1280,13 +1282,13 @@ func (s *Service) fetchSHA(ctx context.Context, u string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	res, err := s.HTTP.Do(req)
+	res, err := s.do(req)
 	if err != nil {
 		return "", err
 	}
 	defer res.Body.Close()
 	if res.StatusCode != 200 {
-		return "", fmt.Errorf("HTTP %d", res.StatusCode)
+		return "", statusError("the checksum file", res)
 	}
 	sc := bufio.NewScanner(io.LimitReader(res.Body, 4096))
 	for sc.Scan() {

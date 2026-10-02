@@ -98,6 +98,13 @@ func TestSystemRoutes(t *testing.T) {
 
 func TestInstallUninstallRoutes(t *testing.T) {
 	srv := systemServer(t)
+	// B-15: before the first install the newest job is none - 204, no body; an unknown id stays 404
+	if st, _, raw := do(t, srv, "GET", "/api/system/v1/addons/install", "", nil); st != 204 || raw != "" {
+		t.Fatalf("no job yet: %d %q", st, raw)
+	}
+	if st, out, _ := do(t, srv, "GET", "/api/system/v1/addons/install?job=nope", "", nil); st != 404 || out["error"] != "unknown-job" {
+		t.Fatalf("an unknown job before any: %d %v", st, out)
+	}
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
 	fw, _ := mw.CreateFormFile("file", "addon.tar.gz")

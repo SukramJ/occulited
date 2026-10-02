@@ -3,6 +3,7 @@ package system
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"github.com/hobbyquaker/occulited/internal/manifest"
 	"os"
 	"slices"
@@ -270,5 +271,38 @@ func TestRefreshManifestRuntimes(t *testing.T) {
 	}
 	if conf := readFile(r.join(AddonPolicyDir + "/mosq.conf")); !strings.Contains(conf, "SupplementaryGroups=dialout certs") {
 		t.Errorf("drop-in:\n%s", conf)
+	}
+}
+
+// occulited B-31: a declared port is the addon's listening port only when a process of its own
+// unit holds a socket on it, of its protocol; another holder is named, an unknown owner said. On
+// rpi3-1 openccu-loom's 5540/udp showed as listening while RedMatic's node-red held it.
+func TestAddonPortListeningIsTheAddonsOwn(t *testing.T) {
+	udp := Port{Port: 5540, Proto: "udp"}
+	tcp := Port{Port: 8080, Proto: "tcp"}
+	anyProto := Port{Port: 9000}
+	loom := "addon-openccu-loom.service"
+	red := Listener{Proto: "udp", Port: 5540, Process: "node-red", Unit: "addon-redmatic.service"}
+	for _, c := range []struct {
+		name    string
+		d       Port
+		sockets []Listener
+		want    FirewallAddonPort
+	}{
+		{"nobody", udp, nil, FirewallAddonPort{}},
+		{"its own unit", udp, []Listener{{Proto: "udp6", Port: 5540, Process: "loom", Unit: loom}}, FirewallAddonPort{Listening: true}},
+		{"another addon", udp, []Listener{red}, FirewallAddonPort{HeldBy: &PortHolder{Process: "node-red", Unit: "addon-redmatic.service"}}},
+		{"another and its own", udp, []Listener{red, {Proto: "udp", Port: 5540, Process: "loom", Unit: loom}}, FirewallAddonPort{Listening: true}},
+		{"tcp on a udp port", udp, []Listener{{Proto: "tcp", Port: 5540, Process: "loom", Unit: loom}}, FirewallAddonPort{}},
+		{"udp on a tcp port", tcp, []Listener{{Proto: "udp", Port: 8080, Process: "x", Unit: "x.service"}}, FirewallAddonPort{}},
+		{"tcp6 on a tcp port", tcp, []Listener{{Proto: "tcp6", Port: 8080, Process: "loom", Unit: loom}}, FirewallAddonPort{Listening: true}},
+		{"owner unknown", udp, []Listener{{Proto: "udp", Port: 5540}}, FirewallAddonPort{Listening: true, OwnerUnknown: true}},
+		{"no protocol declared", anyProto, []Listener{{Proto: "udp", Port: 9000, Process: "sshd", Unit: "sshd.service"}}, FirewallAddonPort{HeldBy: &PortHolder{Process: "sshd", Unit: "sshd.service"}}},
+		{"another port", udp, []Listener{{Proto: "udp", Port: 5541, Process: "loom", Unit: loom}}, FirewallAddonPort{}},
+	} {
+		got := addonPortState("openccu-loom", c.d, c.sockets)
+		if got.Listening != c.want.Listening || got.OwnerUnknown != c.want.OwnerUnknown || fmt.Sprint(got.HeldBy) != fmt.Sprint(c.want.HeldBy) {
+			t.Errorf("%s: %+v (held by %v)", c.name, got, got.HeldBy)
+		}
 	}
 }

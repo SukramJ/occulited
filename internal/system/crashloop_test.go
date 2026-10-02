@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -431,5 +432,84 @@ esac
 	_ = os.WriteFile(state, []byte("{"), 0o644)
 	if root.ReadOcculitedUnitState() != nil {
 		t.Error("a broken file read")
+	}
+}
+
+// occulited B-30: while an install or uninstall runs the supervisor restarts nothing - the job's
+// update script stops the daemon and the job settles the unit itself - and the first sample after
+// the job does not restart either: an empty unit starts its backoff from there.
+func TestCrashLoopPausedDuringAnAddonJob(t *testing.T) {
+	f := &fakeUnits{boot: time.Date(2026, 9, 29, 9, 0, 0, 0, time.UTC)}
+	f.now = f.boot.Add(time.Hour)
+	running := map[string]bool{}
+	var restarted []string
+	busy := false
+	c := f.watcher()
+	c.Supervised = func() []string { return []string{"hmm"} }
+	c.Procs = func(cg string) bool { return running[cg] }
+	c.Restart = func(_ context.Context, unit string) error { restarted = append(restarted, unit); return nil }
+	c.Paused = func() bool { return busy }
+	const unit = "addon-hmm.service"
+	cg := "/system.slice/" + unit
+	f.set(unit, "active", "exited", f.boot.Add(time.Minute), 0, "success")
+	running[cg] = true
+	c.Sample(context.Background())
+
+	// the install starts; its update script stops the daemon, the unit stays active and empty
+	busy = true
+	running[cg] = false
+	for i := 0; i < 5; i++ {
+		c.Sample(context.Background())
+		f.now = f.now.Add(15 * time.Second)
+	}
+	if len(restarted) != 0 {
+		t.Fatalf("restarted during the job: %v", restarted)
+	}
+	if w := c.wait(); w != CrashLoopInterval {
+		t.Errorf("a restart is due during the job: wait %v", w)
+	}
+	// the job ends with the unit still empty: the first sample only schedules
+	busy = false
+	c.Sample(context.Background())
+	if len(restarted) != 0 {
+		t.Fatalf("restarted in the first sample after the job: %v", restarted)
+	}
+	// the job's settle step started it meanwhile: nothing to do
+	running[cg] = true
+	f.now = f.now.Add(2 * time.Second)
+	c.Sample(context.Background())
+	if len(restarted) != 0 || c.attempts("hmm") != 0 {
+		t.Fatalf("restarted a running daemon: %v", restarted)
+	}
+	// had it not, the supervisor takes over after the backoff, as for any ended daemon
+	running[cg] = false
+	c.Sample(context.Background())
+	f.now = f.now.Add(2 * time.Second)
+	c.Sample(context.Background())
+	if len(restarted) != 1 {
+		t.Fatalf("an ended daemon after the job: %v", restarted)
+	}
+}
+
+// occulited B-30: SystemdAddons.Busy is true for the whole of an uninstall (the unit's stop at its
+// start included) and false again afterwards - what main.go hands the supervisor as Paused.
+func TestSystemdAddonsBusyDuringAJob(t *testing.T) {
+	r := rootWith(t, map[string]string{"usr/local/etc/config/rc.d/x": "#!/bin/sh\nexit 0\n"})
+	var a *SystemdAddons
+	var during []bool
+	run := func(_ context.Context, name string, args ...string) ([]byte, error) {
+		during = append(during, a.Busy())
+		return nil, nil
+	}
+	a = NewSystemdAddons(r, SystemdServices{Root: r, Run: run})
+	if a.Busy() {
+		t.Fatal("busy before")
+	}
+	_, _ = a.Uninstall(context.Background(), "x")
+	if len(during) == 0 || slices.Contains(during, false) {
+		t.Errorf("busy during the uninstall: %v", during)
+	}
+	if a.Busy() {
+		t.Error("busy after")
 	}
 }

@@ -374,3 +374,30 @@ func TestRefusedRunIsLoggedAndNotRun(t *testing.T) {
 		t.Errorf("the allowed command: %+v %v", r, ops.cmds)
 	}
 }
+
+// occulited B-30: a process of an addon user may be signalled although its command line is a
+// title alone (a confined node-red); one with a uid of the system's, or with any of its uids below
+// the addon range, may not - nor an addon user's process inside a system unit.
+func TestKillableAddonUser(t *testing.T) {
+	proc := t.TempDir()
+	status := func(pid int, uids string) {
+		_ = os.WriteFile(filepath.Join(proc, strconv.Itoa(pid), "status"), []byte("Name:\tx\nUid:\t"+uids+"\nGid:\t0\t0\t0\t0\n"), 0o644)
+	}
+	fakeProc(t, proc, 7000, "node-red", []string{"node-red"}, "/system.slice/occulite-addon-0a1b2c3d.scope")
+	status(7000, "30000\t30000\t30000\t30000")
+	fakeProc(t, proc, 7001, "node-red", []string{"node-red"}, "/system.slice/occulite-addon-0a1b2c3d.scope")
+	status(7001, "30000\t0\t30000\t30000") // setuid root
+	fakeProc(t, proc, 7002, "sshd", []string{"sshd-session"}, "/system.slice/sshd.service")
+	status(7002, "0\t0\t0\t0")
+	fakeProc(t, proc, 7003, "node-red", []string{"node-red"}, "/system.slice/rfd.service")
+	status(7003, "30000\t30000\t30000\t30000")
+	fakeProc(t, proc, 7004, "sh", []string{"sh", "-c", "md5sum /usr/local/addons/hmm/etc/hmm.env"}, "/system.slice/sshd.service")
+	status(7004, "0\t0\t0\t0")
+	p := DefaultPolicy("/", "/usr/local/etc/occulite")
+	p.ProcDir = proc
+	for pid, want := range map[int]bool{7000: true, 7001: false, 7002: false, 7003: false, 7004: false} {
+		if got := p.killable(pid); got != want {
+			t.Errorf("killable(%d) = %v", pid, got)
+		}
+	}
+}

@@ -397,3 +397,31 @@ test('the addon ports have a heading over every column and the switch beside its
     const label = (await sw.boundingBox())!;
     expect(label.x + label.width - (box.x + box.width)).toBeLessThan(80);
 });
+
+// occulited B-31: a declared port held by another process says so, by name, and one whose
+// socket's owner is unknown says that - in both languages
+test('an addon port held by another process is named, not listening', async ({page}) => {
+    const answer = [{id: 'openccu-loom', name: 'OpenCCU-Loom', mode: 'confined', ports: [
+        {port: 5540, proto: 'udp', label: {de: 'Matter', en: 'Matter'}, listening: false, open: false, held_by: {process: 'node-red', unit: 'addon-redmatic.service'}},
+        {port: 8088, proto: 'tcp', label: {de: 'Web', en: 'Web'}, listening: true, open: false},
+        {port: 8089, proto: 'tcp', label: {de: 'API', en: 'API'}, listening: true, open: false, owner_unknown: true},
+        {port: 8090, proto: 'tcp', label: {de: 'MCP', en: 'MCP'}, listening: false, open: false},
+    ]}];
+    await page.route('**/api/system/v1/firewall/addons', (r) => r.fulfill({json: answer}));
+    await page.addInitScript(() => localStorage.setItem('ol.language', 'en'));
+    await page.goto('/addons');
+    const table = page.locator('table.ol-addon-ports');
+    const cell = (port: number) => table.locator('tbody tr', {hasText: String(port)}).locator('td[data-listening]');
+    await expect(cell(5540)).toHaveText('held by another process (node-red)');
+    await expect(cell(5540)).toHaveAttribute('title', 'addon-redmatic.service');
+    await expect(cell(5540).locator('.ol-dot')).toHaveClass(/warn/);
+    await expect(cell(8088)).toHaveText('listening');
+    await expect(cell(8089)).toHaveText('a socket is open (owner unknown)');
+    await expect(cell(8090)).toHaveText('not listening');
+    await page.evaluate(() => localStorage.setItem('ol.language', 'de'));
+    await page.addInitScript(() => localStorage.setItem('ol.language', 'de'));
+    await page.reload();
+    await expect(cell(5540)).toHaveText('von einem anderen Prozess belegt (node-red)');
+    await expect(cell(8089)).toHaveText('ein Socket ist offen (Besitzer unbekannt)');
+    await expect(cell(8088)).toHaveText('lauscht');
+});

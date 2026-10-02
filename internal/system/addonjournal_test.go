@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/hobbyquaker/occulited/internal/journald"
+	"github.com/hobbyquaker/occulited/internal/priv"
 )
 
 // fakeJournal is a unixgram socket in a temp dir standing in for journald's.
@@ -194,8 +195,9 @@ func TestAddonUninstallJournal(t *testing.T) {
 		prio    string
 		exit    string
 	}{
-		{"gone", "[stopping removed]", "gone: uninstall finished, exit 0 (uninstalled)", "6", "0"},
-		{"bad", "[cannot remove]", "bad: uninstall finished, exit 2 (uninstall script failed)", "3", "2"},
+		// occulited B-26: after the script's lines what the system removed after it
+		{"gone", "[stopping removed gone: the system then removed: /usr/local/etc/config/rc.d/gone]", "gone: uninstall finished, exit 0 (uninstalled)", "6", "0"},
+		{"bad", "[cannot remove bad: the system then removed: /usr/local/etc/config/rc.d/bad]", "bad: uninstall finished, exit 2 (uninstall script failed)", "3", "2"},
 	} {
 		_, _ = a.Uninstall(context.Background(), c.id)
 		got := j.run()
@@ -252,5 +254,38 @@ func TestJournalLines(t *testing.T) {
 		if got := journalLines(c.in); !c.want(got) {
 			t.Errorf("%s: %d lines %.200q", c.name, len(got), got)
 		}
+	}
+}
+
+// occulited B-26: a confined addon's uninstall runs as its user and its rm lines are refused; the
+// journal says so after them, with what the system removed, and the answer's output stays the
+// script's own.
+func TestConfinedUninstallJournalSaysWhatTheSystemRemoved(t *testing.T) {
+	r := rootWith(t, map[string]string{
+		"usr/local/etc/config/rc.d/mosq":              "#!/bin/sh\n# openccu-lite addon-rc wrapper\nexit 0\n",
+		"usr/local/etc/config/addon-policy/mosq.json": `{"id":"mosq","mode":"confined","uid":30002,"user":"addon-mosq"}`,
+		"usr/local/etc/config/hm_addons.cfg":          "mosq {CONFIG_URL /addons/mosq/index.html ID mosq CONFIG_NAME Mosq}\n",
+	})
+	refused := "rm: can't remove '/usr/local/etc/config/rc.d/mosq': Permission denied\n"
+	fp := &fakePriv{out: priv.Result{Stdout: []byte(refused)}}
+	old := Priv
+	Priv = fp
+	t.Cleanup(func() { Priv = old })
+	run := func(_ context.Context, name string, args ...string) ([]byte, error) { return nil, nil }
+	a := NewSystemdAddons(r, SystemdServices{Root: r, Run: run})
+	j := newFakeJournal(t)
+	a.Journal = &journald.Writer{Socket: j.sock}
+	res, err := a.Uninstall(context.Background(), "mosq")
+	if err != nil || res.Output != strings.TrimSpace(refused) {
+		t.Fatalf("%v %+v", err, res)
+	}
+	got := j.run()
+	if len(got) != 3 {
+		t.Fatalf("entries %v", got)
+	}
+	want := "mosq: the uninstall ran as the addon's user addon-mosq, as a confined addon's does; the system then removed: " +
+		"/usr/local/etc/config/rc.d/mosq, hm_addons.cfg: mosq, /usr/local/etc/config/addon-policy/mosq.json"
+	if got[0]["MESSAGE"] != strings.TrimSpace(refused) || got[1]["MESSAGE"] != want || got[2]["MESSAGE"] != "mosq: uninstall finished, exit 0 (uninstalled)" {
+		t.Errorf("journal:\n%q\n%q\n%q", got[0]["MESSAGE"], got[1]["MESSAGE"], got[2]["MESSAGE"])
 	}
 }

@@ -10,7 +10,9 @@
     import {i18n, t} from './i18n.svelte';
     import Help from './Help.svelte';
 
-    interface AddonPort { port: number; proto?: string; tls?: boolean; label?: Record<string, string>; listening: boolean; open: boolean }
+    // occulited B-31: listening is the addon's own socket; held_by names another process on the port,
+    // owner_unknown says a socket is open whose owner could not be read
+    interface AddonPort { port: number; proto?: string; tls?: boolean; label?: Record<string, string>; listening: boolean; open: boolean; held_by?: {process?: string; unit?: string}; owner_unknown?: boolean }
     interface FwAddon { id: string; name: string; mode: string; ports: AddonPort[] }
 
     let {admin = false}: {admin?: boolean} = $props();
@@ -61,7 +63,15 @@
                             <td class="hmm-mono">{p.port}</td>
                             <td class="hmm-mono">{p.proto ?? ''}</td>
                             <td>{p.label?.[i18n.language] ?? p.label?.en ?? ''}{#if p.tls} <span class="ol-badge good">TLS</span>{/if}</td>
-                            <td><span class="ol-dot" class:ok={p.listening}></span>{p.listening ? t('listening') : t('not listening')}</td>
+                            <td data-listening={p.held_by ? 'held' : p.owner_unknown ? 'unknown' : p.listening ? 'yes' : 'no'} title={p.held_by?.unit ?? ''}>
+                                {#if p.held_by}
+                                    <span class="ol-dot warn"></span>{t('held by another process ({process})', {process: p.held_by.process || p.held_by.unit || '?'})}
+                                {:else if p.owner_unknown}
+                                    <span class="ol-dot warn"></span>{t('a socket is open (owner unknown)')}
+                                {:else}
+                                    <span class="ol-dot" class:ok={p.listening}></span>{p.listening ? t('listening') : t('not listening')}
+                                {/if}
+                            </td>
                             <td>
                                 <label class="ol-port-switch"><input type="checkbox" checked={p.open} disabled={busy || !admin} onchange={(e) => setPort(a, p, (e.currentTarget as HTMLInputElement).checked)} /> {p.open ? t('open') : t('closed')}</label>
                             </td>
