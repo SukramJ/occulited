@@ -19,6 +19,10 @@ type Preferences struct {
 	// AppFullscreen shows the App without the shell's top bar (task 193): the App is the whole
 	// window, its drawer carries the way back to Status.
 	AppFullscreen bool `json:"app_fullscreen,omitempty"`
+	// AppHidden takes Control's tab out of the shell's top bar (openccu-lite task 306). A
+	// preference, not a permission: the page and its APIs stay, reachable by their address, and a
+	// start page of "app" opens Status while the tab is hidden.
+	AppHidden bool `json:"app_hidden,omitempty"`
 }
 
 // AddonPreference is one addon's place in the dropdown and whether it has a tab.
@@ -42,6 +46,7 @@ var addonIDRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
 func (p Preferences) normalised() (Preferences, error) {
 	out := Preferences{Addons: make([]AddonPreference, 0, len(p.Addons))}
 	out.AppFullscreen = p.AppFullscreen
+	out.AppHidden = p.AppHidden
 	switch p.StartPage {
 	case "", "app", "status":
 		out.StartPage = p.StartPage
@@ -94,7 +99,7 @@ func (s *Store) SetPreferences(name string, p Preferences) error {
 	if err != nil {
 		return err
 	}
-	if len(n.Addons) == 0 && n.StartPage == "" && !n.AppFullscreen {
+	if len(n.Addons) == 0 && n.StartPage == "" && !n.AppFullscreen && !n.AppHidden {
 		u.Preferences = nil // nothing to keep: the account reads as before
 	} else {
 		u.Preferences = &n

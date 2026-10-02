@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
@@ -133,6 +134,13 @@ func TestAddons(t *testing.T) {
 	if strings.Join(p[0].Scopes, " ") != "addon:hmm addon:openccu-loom" || len(p[0].Access) != 0 {
 		t.Fatalf("scopes %v access %v", p[0].Scopes, p[0].Access)
 	}
+	// openccu-lite B-296: the list answers the access as an object, {} rather than null
+	if p[0].Access == nil {
+		t.Fatal("an addons-only request's access is nil")
+	}
+	if js, _ := json.Marshal(p[0]); !strings.Contains(string(js), `"access":{}`) {
+		t.Fatalf("the card's JSON: %s", js)
+	}
 	client, _, err := m.Approve(ans.ID, p[0].Code, "admin")
 	if err != nil || strings.Join(client.Addons, ",") != "openccu-loom,hmm" || strings.Join(f.sc.Strings(), " ") != "addon:hmm addon:openccu-loom" {
 		t.Fatalf("approve: %v %+v minted %v", err, client, f.sc)
@@ -140,6 +148,12 @@ func TestAddons(t *testing.T) {
 	r, err := m.Poll(context.Background(), ans.ID, ans.Poll, "", 0)
 	if err != nil || r.State != StateApproved || strings.Join(r.Addons, ",") != "openccu-loom,hmm" {
 		t.Fatalf("answer %v %+v", err, r)
+	}
+	if js, _ := json.Marshal(r); !strings.Contains(string(js), `"access":{}`) {
+		t.Fatalf("the approved answer's JSON: %s", js)
+	}
+	if js, _ := json.Marshal(client); !strings.Contains(string(js), `"access":{}`) {
+		t.Fatalf("the client record's JSON: %s", js)
 	}
 	// beside the areas: both sets of scopes
 	cn2, commit2 := clientHalf(10)

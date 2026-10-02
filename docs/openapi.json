@@ -949,6 +949,9 @@
           "app_fullscreen": {
             "type": "boolean"
           },
+          "app_hidden": {
+            "type": "boolean"
+          },
           "start_page": {
             "type": "string"
           }
@@ -970,6 +973,9 @@
             ]
           },
           "app_fullscreen": {
+            "type": "boolean"
+          },
+          "app_hidden": {
             "type": "boolean"
           },
           "start_page": {
@@ -6282,6 +6288,42 @@
         ],
         "type": "object"
       },
+      "RadioHmIPExchange": {
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "cause": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string"
+          },
+          "line": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "at",
+          "from",
+          "outcome",
+          "to"
+        ],
+        "type": "object"
+      },
       "RadioHmIPFatal": {
         "properties": {
           "adapter": {
@@ -8591,6 +8633,16 @@
       },
       "SystemFirewallAddonPort": {
         "properties": {
+          "held_by": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SystemPortHolder"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "label": {
             "additionalProperties": {
               "type": "string"
@@ -8604,6 +8656,9 @@
             "type": "boolean"
           },
           "open": {
+            "type": "boolean"
+          },
+          "owner_unknown": {
             "type": "boolean"
           },
           "port": {
@@ -10283,6 +10338,17 @@
           "devices",
           "known"
         ],
+        "type": "object"
+      },
+      "SystemPortHolder": {
+        "properties": {
+          "process": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          }
+        },
         "type": "object"
       },
       "SystemPortInfo": {
@@ -18853,6 +18919,9 @@
             },
             "description": "OK"
           },
+          "204": {
+            "description": "No content"
+          },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
@@ -25757,7 +25826,111 @@
         "parameters": [
           {
             "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "area",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "boot",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "head",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kernel",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
             "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "run",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "severity",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tag",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "unit",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "until",
             "required": false,
             "schema": {
               "type": "string"
@@ -25889,7 +26062,87 @@
         "parameters": [
           {
             "in": "query",
+            "name": "area",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "boot",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
             "name": "format",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kernel",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "run",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "severity",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tag",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "unit",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "until",
             "required": false,
             "schema": {
               "type": "string"
@@ -25945,7 +26198,111 @@
         "parameters": [
           {
             "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "area",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "boot",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "head",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kernel",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
             "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "run",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "severity",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tag",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "unit",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "until",
             "required": false,
             "schema": {
               "type": "string"
@@ -28073,6 +28430,15 @@
                     "exchange_id": {
                       "type": "boolean"
                     },
+                    "exchanges": {
+                      "items": {
+                        "$ref": "#/components/schemas/RadioHmIPExchange"
+                      },
+                      "type": [
+                        "array",
+                        "null"
+                      ]
+                    },
                     "fatal": {
                       "anyOf": [
                         {
@@ -28117,6 +28483,7 @@
                   "required": [
                     "error",
                     "exchange_id",
+                    "exchanges",
                     "fatal",
                     "hostname",
                     "local_key",
@@ -28198,6 +28565,15 @@
                     "exchange_id": {
                       "type": "boolean"
                     },
+                    "exchanges": {
+                      "items": {
+                        "$ref": "#/components/schemas/RadioHmIPExchange"
+                      },
+                      "type": [
+                        "array",
+                        "null"
+                      ]
+                    },
                     "fatal": {
                       "anyOf": [
                         {
@@ -28242,6 +28618,7 @@
                   "required": [
                     "error",
                     "exchange_id",
+                    "exchanges",
                     "fatal",
                     "hostname",
                     "local_key",
@@ -28302,6 +28679,15 @@
                     "exchange_id": {
                       "type": "boolean"
                     },
+                    "exchanges": {
+                      "items": {
+                        "$ref": "#/components/schemas/RadioHmIPExchange"
+                      },
+                      "type": [
+                        "array",
+                        "null"
+                      ]
+                    },
                     "fatal": {
                       "anyOf": [
                         {
@@ -28346,6 +28732,7 @@
                   "required": [
                     "error",
                     "exchange_id",
+                    "exchanges",
                     "fatal",
                     "hostname",
                     "local_key",

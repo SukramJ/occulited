@@ -325,9 +325,14 @@
     // for other lines as the window moves, read once the DOM has settled (one reflow for all).
     // A batch takes the view's anchor first, records the heights, and keeps the view in place.
     const rowOf = new Map<Element, LogLine>();
+    // B-292: a height as the layout has it, fractions included. offsetHeight rounds to whole pixels,
+    // while the observer's borderBoxSize does not: a row of 37.5 px recycled for another line was
+    // recorded as 38, and the offsets drifted from the DOM by half a pixel per such row - the
+    // view's anchor moved by 2-3 px when a page was added above it.
+    const heightOf = (n: Element) => n.getBoundingClientRect().height;
     const ro = typeof ResizeObserver === 'function'
         ? new ResizeObserver((entries) => {
-              applyMeasured(entries.map((e) => [e.target, e.borderBoxSize?.[0]?.blockSize ?? (e.target as HTMLElement).offsetHeight]));
+              applyMeasured(entries.map((e) => [e.target, e.borderBoxSize?.[0]?.blockSize ?? heightOf(e.target)]));
           })
         : null;
     const recycled = new Set<Element>();
@@ -336,7 +341,7 @@
         recycledDue = false;
         const nodes = [...recycled];
         recycled.clear();
-        applyMeasured(nodes.map((n) => [n, (n as HTMLElement).offsetHeight]));
+        applyMeasured(nodes.map((n) => [n, heightOf(n)]));
     }
     function applyMeasured(sizes: [Element, number][]) {
         const a = anchor();
@@ -454,7 +459,7 @@
                 measuredSum = 0;
                 measuredCount = 0;
                 keep(() => (hv += 1));
-                applyMeasured([...rowOf.keys()].map((n) => [n, (n as HTMLElement).offsetHeight]));
+                applyMeasured([...rowOf.keys()].map((n) => [n, heightOf(n)]));
             }
             if (home) scrollHome();
         });
@@ -468,9 +473,9 @@
             edgeTopH = 0;
             return;
         }
-        const observer = new ResizeObserver(() => (edgeTopH = el.offsetHeight));
+        const observer = new ResizeObserver(() => (edgeTopH = heightOf(el)));
         observer.observe(el);
-        edgeTopH = el.offsetHeight;
+        edgeTopH = heightOf(el);
         return () => observer.disconnect();
     });
     function onScroll() {

@@ -602,9 +602,17 @@
     /* task 210 (the maintainer: "too much spacing ... not the font, but the area that i see when
        hovering"): 36 px rows, the hover box 4 px above and below the 28 px icon - still well above
        WCAG 2.5.8's 24 px target on a phone */
-    .ol-addonpop :global(.ol-menurow) { min-height: 36px; align-items: center; }
+    /* task 311 (the maintainer: the name's box too roomy, the actions crowded and of broken heights):
+       the row keeps its 36 px with 2 px above and below; in it the entry is 32 px high with 2 px
+       around the 28 px icon, and every action after it - ↗, the pin, ✕, ⚙ and the empty slots that keep
+       the columns - is a 32 px square, 4 px apart and 4 px from the entry */
+    .ol-addonpop :global(.ol-menurow) { min-height: 36px; padding: 2px 0; gap: 4px; align-items: center; }
     .ol-addonpop :global(.ol-menurow + .ol-menurow) { border-top: 1px solid var(--hmm-border-muted); }
-    .ol-addonpop :global(.ol-menuitem), .ol-addonpop :global(a.ol-menuitem) { min-height: 36px; padding-top: 4px; padding-bottom: 4px; border-radius: 8px; font-size: 14px; }
+    .ol-addonpop :global(.ol-menuitem), .ol-addonpop :global(a.ol-menuitem) { min-height: 32px; height: 32px; padding: 2px 6px; border-radius: 8px; font-size: 14px; }
+    .ol-addonpop :global(.ol-menurow > .ol-newtab) {
+        flex: 0 0 32px; box-sizing: border-box; width: 32px; height: 32px; padding: 0;
+        display: flex; align-items: center; justify-content: center; border-radius: 8px;
+    }
     .ol-addonpop :global(.ol-addonicon) { width: 28px; height: 28px; border-radius: 7px; display: inline-flex; align-items: center; justify-content: center; }
     .ol-addonpop :global(.ol-addonmono) { width: 28px; height: 28px; line-height: 28px; border-radius: 7px; font-size: 13px; }
     .ol-sysfilter { flex: 0 0 auto; display: flex; padding: 2px 2px 8px; }
@@ -620,7 +628,8 @@
     /* the pin: outlined when the addon is not pinned, filled in the accent colour when it is */
     button.ol-pin { border: 0; background: none; font: inherit; padding: 0 6px; cursor: pointer; }
     button.ol-pin:hover, button.ol-pin:focus-visible { color: var(--hmm-fg); background: var(--hmm-control-bg-hover); }
-    button.ol-pin.ol-pinned { color: var(--hmm-accent); }
+    /* the pinned state is the same square, filled - not a box of its own size (task 311) */
+    button.ol-pin.ol-pinned { color: var(--hmm-accent); background: var(--hmm-accent-bg); }
     button.ol-pin.ol-pinned :global(svg) { fill: currentColor; }
     .ol-pin-none { width: 26px; padding: 0; }
     /* a link row has no ⚙: the slot is the icon made invisible, so it is exactly as wide */

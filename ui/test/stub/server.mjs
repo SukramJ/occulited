@@ -809,10 +809,20 @@ function connStatus(jar) {
     const modules = [...(missing ? [] : [connModule(CONN_MODULE, rolesOf(CONN_MODULE.id))]), ...(withBoard ? [connModule(BOARD_MODULE, rolesOf(BOARD_MODULE.id))] : [])];
     return {available: true, choices, options, plan, mode: 'NORMAL', ...(fatal ? {hmip_fatal: fatal} : {}), modules, ...(board ? {hb_rf_eth: board} : {}), running: null, last: s.last};
 }
+// openccu-lite task 301: the local record of adapter exchanges (stub-conn-exchanges=swap adds the
+// local swap onto the previous module that the refused diagnosis names as the cause, B-289)
+function exExchanges(jar) {
+    const list = [
+        {at: '2026-09-27T19:39:12Z', from: '3014F711A0001F5F000000AF', to: EX_PREVIOUS, address: '0xA0B1C2', mode: 'key-server', outcome: 'accepted', line: 'Adapter exchange successful.'},
+        {at: '2026-09-30T16:47:30Z', from: EX_PREVIOUS, to: CONN_MODULE.sgtin, address: '0xA0B1C2', mode: 'key-server', outcome: 'rejected', cause: 'refused', line: 'Adapter exchange was rejected by key server.'},
+    ];
+    if (jar['stub-conn-exchanges'] === 'swap') list[0] = {...list[0], mode: 'local-swap', line: 'Adapter exchange successful.'};
+    return list.reverse();
+}
 function exView(jar) {
     const lk = lkStateOf(jar);
     const fatal = connFatal(jar);
-    return {...(fatal ? {fatal} : {}), module: CONN_MODULE.sgtin, previous: jar['stub-conn-fatal-none'] === '1' ? [] : [EX_PREVIOUS], replaces_snapshots: lk.snapshots.some((x) => x.sgtin === EX_PREVIOUS) ? [EX_PREVIOUS] : undefined, local_key: lk.enabled, exchange_id: false, hostname: 'lab-ccu'};
+    return {...(fatal ? {fatal} : {}), module: CONN_MODULE.sgtin, previous: jar['stub-conn-fatal-none'] === '1' ? [] : [EX_PREVIOUS], replaces_snapshots: lk.snapshots.some((x) => x.sgtin === EX_PREVIOUS) ? [EX_PREVIOUS] : undefined, local_key: lk.enabled, exchange_id: false, exchanges: exExchanges(jar), hostname: 'lab-ccu'};
 }
 const importDismissed = new Set();
 const importRetried = new Set();
@@ -2530,6 +2540,8 @@ function variant(req, u, res) {
         const asked = u.searchParams.get('job');
         const id = asked ?? [...installJobs.keys()].at(-1);
         const job = id && installJobs.get(id);
+        // occulited B-15: the newest of none is 204, an unknown id 404
+        if (!job && !asked) return res.writeHead(204).end(), true;
         if (!job) return sendJSON(res, {error: 'unknown-job', message: 'no such install job'}, 404), true;
         // the newest job, asked for by a page that opens, is history: the stub's jobs are over by
         // then, and that look does not move another test's job along
@@ -3119,7 +3131,7 @@ const srv = http.createServer((req, res) => {
                     if (!Array.isArray(b?.addons) || b.addons.some((a) => typeof a?.id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(a.id))) return sendJSON(res, {error: 'invalid-body', message: 'addons must be a list of {id, pinned?}'}, 422);
                     if (b.start_page !== undefined && !['', 'app', 'status'].includes(b.start_page)) return sendJSON(res, {error: 'invalid-body', message: 'invalid preferences: start_page is app or status'}, 422);
                     // task 193: the App's choices travel with the pins
-                    const stored = {addons: b.addons.map((a) => (a.pinned === true ? {id: a.id, pinned: true} : {id: a.id})), ...(b.start_page ? {start_page: b.start_page} : {}), ...(b.app_fullscreen === true ? {app_fullscreen: true} : {})};
+                    const stored = {addons: b.addons.map((a) => (a.pinned === true ? {id: a.id, pinned: true} : {id: a.id})), ...(b.start_page ? {start_page: b.start_page} : {}), ...(b.app_fullscreen === true ? {app_fullscreen: true} : {}), ...(b.app_hidden === true ? {app_hidden: true} : {})};
                     if (id) prefsStore.set(id, stored);
                     sendJSON(res, stored);
                 });

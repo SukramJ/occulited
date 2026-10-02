@@ -46,7 +46,8 @@ test('the card names the addons asked for', async ({page}) => {
     await page.goto('/');
     const card = page.locator('[data-pair="f0f0f0"]');
     await expect(card).toContainText('homematicip-local on ha asks for access');
-    await expect(card.locator('[data-pair-area="devices"] dd')).toHaveText('none');
+    // B-296: the addon is the only grant - no areas at "none"
+    await expect(card.locator('[data-pair-area]')).toHaveCount(0);
     await expect(card.locator('[data-pair-addon="openccu-loom"] dt')).toHaveText('Addon');
     await expect(card.locator('[data-pair-addon="openccu-loom"] dd')).toContainText('OpenCCU-Loom: its pages through the system');
     await expect(card.locator('[data-pair-addon="openccu-loom"] dd')).toContainText('addon:openccu-loom');
@@ -54,6 +55,34 @@ test('the card names the addons asked for', async ({page}) => {
     await page.goto('/');
     await expect(page.locator('[data-pair="f0f0f0"] [data-pair-addon="openccu-loom"] dt')).toHaveText('Zusatzsoftware');
     await expect(page.locator('[data-pair="f0f0f0"] [data-pair-addon="openccu-loom"] dd')).toContainText('OpenCCU-Loom: ihre Seiten über das System');
+});
+
+// openccu-lite B-296 (@SukramJ, GitHub #3): a system before the fix listed an addons-only request
+// with access: null, the card threw while rendering and was not drawn - the administrator could not
+// approve it. With null as with {}, the card shows the addon as its only grant, and Approve works;
+// beside an area the addon row stays with the areas.
+test('an addons-only request with access null: the card renders and approves', async ({page}) => {
+    await withRequests(page, [
+        {...REQ, id: 'b296aa', name: 'homematicip-local on ha', access: null, purpose: null, scopes: ['addon:openccu-loom'], addons: [{id: 'openccu-loom', name: 'OpenCCU-Loom'}]},
+        {...REQ, id: 'b296bb', code: '111222', access: {system: 'read'}, purpose: {}, scopes: ['system:read', 'addon:hmm'], addons: [{id: 'hmm', name: 'Homematic Manager'}]},
+    ]);
+    let body: unknown;
+    await page.route('**/api/auth/v1/pairing/b296aa/approve', async (route) => {
+        body = route.request().postDataJSON();
+        await route.fulfill({json: {ok: true, token: 'homematicip-local-ha'}});
+    });
+    await page.goto('/');
+    const card = page.locator('[data-pair="b296aa"]');
+    await expect(card).toContainText('homematicip-local on ha asks for access');
+    await expect(card.locator('[data-pair-area]')).toHaveCount(0);
+    await expect(card.locator('[data-pair-addon="openccu-loom"] dd')).toContainText('OpenCCU-Loom: its pages through the system');
+    const mixed = page.locator('[data-pair="b296bb"]');
+    await expect(mixed.locator('[data-pair-area]')).toHaveCount(3);
+    await expect(mixed.locator('[data-pair-area="system"] dd')).toHaveText('read');
+    await expect(mixed.locator('[data-pair-addon="hmm"]')).toBeVisible();
+    await page.locator('[data-notice="pairing"]').filter({has: card}).getByRole('button', {name: 'Approve'}).click();
+    await expect.poll(() => body).toEqual({code: '482719'});
+    await expect(card).toHaveCount(0);
 });
 
 test('no request, no card; German', async ({page}) => {

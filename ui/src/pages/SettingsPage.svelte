@@ -35,7 +35,7 @@
 </div>
 
 <!-- task 193: the App's choices, kept with the account (with the login off: in this browser) -->
-<h2>{t('Control')}<Help>{t('Control is the everyday view - favorites, rooms, functions with their controls. Both choices are kept with your account, so a phone and a desktop agree.')}</Help></h2>
+<h2>{t('Control')}<Help>{t('Control is the everyday view - favorites, rooms, functions with their controls. These choices are kept with your account, so a phone and a desktop agree.')}</Help></h2>
 <div class="ol-cards">
     <div class="ol-card" data-setting="start-page">
         <div class="k">{t('Start page')}</div>
@@ -44,11 +44,19 @@
             <option value="app">{t('Control')}</option>
         </select>
         <div class="ol-card-detail">{t('Where the UI opens after a login and when the address is the system alone.')}</div>
+        {#if prefs.startPage === 'app' && prefs.appHidden}<div class="ol-card-detail" data-start-fallback>{t('While Control is not in the menu, the UI opens on Status.')}</div>{/if}
     </div>
     <div class="ol-card" data-setting="app-fullscreen">
         <div class="k">{t('Control without the top bar')}</div>
         <label class="ol-check" style="margin-top:6px"><input type="checkbox" checked={prefs.appFullscreen} onchange={(e) => setAppPreferences({appFullscreen: e.currentTarget.checked})} disabled={!prefs.loaded} /> {t('Show Control as the whole window')}</label>
         <div class="ol-card-detail">{t('The tab bar and the icons stay away while Control is open; its menu keeps the way back to Status and to these settings.')}</div>
+    </div>
+    <!-- openccu-lite task 306: Control's tab out of the top bar - a preference, not a permission;
+         last, so the public-mode panel below still lines up with the first two -->
+    <div class="ol-card" data-setting="app-in-menu">
+        <div class="k">{t('Control in the menu')}</div>
+        <label class="ol-check" style="margin-top:6px"><input type="checkbox" checked={!prefs.appHidden} onchange={(e) => setAppPreferences({appHidden: !e.currentTarget.checked})} disabled={!prefs.loaded} /> {t('Show "Control" in the menu')}</label>
+        <div class="ol-card-detail">{t('Off: the tab goes from the top bar. Control itself stays and opens at its address, /app.')}</div>
     </div>
 </div>
 

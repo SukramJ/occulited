@@ -38,6 +38,17 @@ func TestPreferencesRoutes(t *testing.T) {
 	if _, _, raw := do(t, srv, "GET", "/api/auth/v1/me/preferences", "", bob); raw != body+"\n" {
 		t.Fatalf("get after put: %s", raw)
 	}
+	// task 306: Control's tab hidden, with the App's other choices; read back as written
+	app := `{"addons":[],"start_page":"app","app_fullscreen":true,"app_hidden":true}`
+	if st, _, raw := do(t, srv, "PUT", "/api/auth/v1/me/preferences", app, bob); st != 200 || raw != app+"\n" {
+		t.Fatalf("put app choices: %d %s", st, raw)
+	}
+	if _, _, raw := do(t, srv, "GET", "/api/auth/v1/me/preferences", "", bob); raw != app+"\n" {
+		t.Fatalf("get app choices: %s", raw)
+	}
+	if st, _, raw := do(t, srv, "PUT", "/api/auth/v1/me/preferences", body, bob); st != 200 || raw != body+"\n" {
+		t.Fatalf("put back: %d %s", st, raw)
+	}
 	// the administrator's own set is another one
 	if _, _, raw := do(t, srv, "GET", "/api/auth/v1/me/preferences", "", admin); raw != "{\"addons\":[]}\n" {
 		t.Fatalf("admin's set: %s", raw)

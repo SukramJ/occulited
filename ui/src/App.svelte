@@ -1,7 +1,7 @@
 <script lang="ts">
     import './app.css';
     import {router, link, replace} from './lib/router.svelte';
-    import {prefs, loadPreferences, resetPreferences} from './lib/prefs.svelte';
+    import {prefs, loadPreferences, resetPreferences, effectiveStartPage} from './lib/prefs.svelte';
     import {onPage, segmentOf, SETTINGS_BASE} from './lib/routes';
     import {opensFilter, shortcutLabel, systemPageAt, worstDot} from './lib/systemmenu';
     import {refreshDots, systemMenu, toggleSystemMenu} from './lib/systemmenu.svelte';
@@ -377,8 +377,12 @@
         return () => clearInterval(timer);
     });
 
-    // task 193: the public principal sees the Control tab alone; the login is where the rest begins
-    const tabs = $derived(TABS.filter((n) => !auth.public || n.path === '/app').map((n) => ({...n, text: t(n.label)})));
+    // task 193: the public principal sees the Control tab alone; the login is where the rest begins.
+    // openccu-lite task 306: an account may take the Control tab out of the bar (Settings) - the page
+    // stays at /app, so a bookmark, the installed app and the start page's fallback still work.
+    const tabs = $derived(
+        TABS.filter((n) => (auth.public ? n.path === '/app' : n.path !== '/app' || !prefs.appHidden)).map((n) => ({...n, text: t(n.label)})),
+    );
     // task 44: the Log page fills the window (the shell bound to the viewport, the page a flex
     // column); the login page and the password notice that can stand in for it on the same route
     // flow as they do everywhere else
@@ -396,7 +400,8 @@
     $effect(() => {
         if (!prefs.loaded || startDone) return;
         startDone = true;
-        if (prefs.startPage === 'app' && router.path === '/') untrack(() => replace('/app'));
+        // task 306: with Control's tab hidden the start page falls back to Status
+        if (effectiveStartPage(prefs) === 'app' && router.path === '/') untrack(() => replace('/app'));
     });
     // Task 99: the top bar stays at the window's top while the page scrolls (app.css). Its height is
     // not one number - the bar wraps on a narrow window, and the German labels or the pinned tabs change it.

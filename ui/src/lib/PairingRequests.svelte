@@ -13,7 +13,8 @@
 
     interface Request {
         id: string; app: string; app_version?: string; instance?: string; name: string; address: string;
-        access: Record<string, string>; purpose?: Record<string, string>; scopes: string[]; code: string;
+        // B-296: null from a system before the fix when the request asks for addons alone
+        access: Record<string, string> | null; purpose?: Record<string, string>; scopes: string[]; code: string;
         fingerprint?: string; created: string; expires: string; look_alike?: boolean;
         // openccu-lite task 307: the addons whose pages the program asks to reach through the system
         addons?: {id: string; name: string}[];
@@ -77,6 +78,9 @@
     const LEVELS: Record<string, string> = {read: 'read', operate: 'operate', configure: 'configure', administer: 'administer'};
     const levelText = (l: string | undefined) => (l && LEVELS[l] ? t(LEVELS[l]) : t('none'));
     const codeText = (c: string) => `${c.slice(0, 3)} ${c.slice(3)}`;
+    // openccu-lite B-296: a request of addons alone shows its addons as the only grant, not three
+    // areas at "none"; its access may come as null or as an empty object
+    const areasOf = (r: Request) => (Object.keys(r.access ?? {}).length > 0 || !r.addons?.length ? AREAS : []);
 </script>
 
 {#each requests as r (r.id)}
@@ -93,11 +97,11 @@
             <p class="pr-code-line">{t('The program shows this code. Approve only when it is the same:')} <strong class="pr-code hmm-mono" data-pair-code>{codeText(r.code)}</strong></p>
             {#if r.look_alike}<p class="ol-warn pr-look" data-pair-lookalike>{t('Another program asks under this name or from this address: compare the code carefully.')}</p>{/if}
             <dl class="pr-access">
-                {#each AREAS as a (a.key)}
+                {#each areasOf(r) as a (a.key)}
                     <div data-pair-area={a.key}>
                         <dt>{t(a.label)}</dt>
-                        <dd class:pr-red={a.key === 'devices' && r.access[a.key] === 'administer'}>
-                            {levelText(r.access[a.key])}{#if a.key === 'devices' && r.access[a.key] === 'administer'}{' · '}{t('may pair and delete devices')}{/if}
+                        <dd class:pr-red={a.key === 'devices' && r.access?.[a.key] === 'administer'}>
+                            {levelText(r.access?.[a.key])}{#if a.key === 'devices' && r.access?.[a.key] === 'administer'}{' · '}{t('may pair and delete devices')}{/if}
                             {#if r.purpose?.[a.key]}<span class="pr-purpose">“{r.purpose[a.key]}”</span>{/if}
                         </dd>
                     </div>

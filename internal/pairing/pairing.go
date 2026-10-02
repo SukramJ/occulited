@@ -161,6 +161,14 @@ type AddonRef struct {
 // MaxAddons is how many addons one request may ask for.
 const MaxAddons = 8
 
+// accessMap is the access as the list answers it: an object, empty when nothing was asked (B-296).
+func accessMap(a map[string]string) map[string]string {
+	if a == nil {
+		return map[string]string{}
+	}
+	return a
+}
+
 // Answer is the 202 to a request.
 type Answer struct {
 	ID        string `json:"id"`
@@ -174,11 +182,13 @@ type Answer struct {
 
 // Result is what a poll answers.
 type Result struct {
-	State  string            `json:"state"`
-	Token  string            `json:"token,omitempty"`
-	Name   string            `json:"name,omitempty"`
-	Scopes []string          `json:"scopes,omitempty"`
-	Access map[string]string `json:"access,omitempty"`
+	State  string   `json:"state"`
+	Token  string   `json:"token,omitempty"`
+	Name   string   `json:"name,omitempty"`
+	Scopes []string `json:"scopes,omitempty"`
+	// Access is {} rather than absent in an approved answer of addons alone (B-296): omitzero
+	// leaves it out of the pending, rejected and expired answers only
+	Access map[string]string `json:"access,omitzero"`
 	Addons []string          `json:"addons,omitempty"`
 }
 
@@ -368,6 +378,11 @@ func (m *Manager) Request(a Ask, addr string, fingerprint []byte) (Answer, error
 	scopes, err := scopesForAccess(a.Access)
 	if err != nil {
 		return Answer{}, err
+	}
+	// openccu-lite B-296: an ask of addons alone has no access map; it is listed and carried as an
+	// empty one, never as null (the card read null as an object and was not drawn)
+	if a.Access == nil {
+		a.Access = map[string]string{}
 	}
 	// the addons' ingress (task 307): installed ones, each once, at most MaxAddons
 	var addons []AddonRef
@@ -591,7 +606,7 @@ func (m *Manager) Pending() []View {
 			continue
 		}
 		out = append(out, View{ID: r.id, App: r.ask.App, AppVersion: r.ask.AppVersion, Instance: r.ask.Instance, Name: r.ask.Name, Address: r.address,
-			Access: r.ask.Access, Purpose: r.ask.Purpose, Addons: r.addons, Scopes: r.scopes.Strings(), Code: Code(r.nonce, r.clientNonce, r.fp),
+			Access: accessMap(r.ask.Access), Purpose: r.ask.Purpose, Addons: r.addons, Scopes: r.scopes.Strings(), Code: Code(r.nonce, r.clientNonce, r.fp),
 			Fingerprint: fingerprintText(r.fp), Created: r.created, Expires: r.expires})
 	}
 	m.mu.Unlock()

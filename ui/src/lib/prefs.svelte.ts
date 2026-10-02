@@ -7,9 +7,15 @@ import {api, ApiError} from './api';
 import {auth} from './auth.svelte';
 import {same, type AddonPref} from './addonorder';
 
-/** task 193: where the UI opens for this account, and whether the App hides the shell's top bar */
+/** task 193: where the UI opens for this account, and whether the App hides the shell's top bar;
+ * openccu-lite task 306: whether Control's tab is out of the top bar (default: in it) */
 export type StartPage = '' | 'app' | 'status';
-export const prefs = $state({addons: [] as AddonPref[], startPage: '' as StartPage, appFullscreen: false, loaded: false});
+export const prefs = $state({addons: [] as AddonPref[], startPage: '' as StartPage, appFullscreen: false, appHidden: false, loaded: false});
+
+/** The start page in force: Control's, unless its tab is hidden - then Status (task 306). */
+export function effectiveStartPage(p: {startPage: StartPage; appHidden: boolean}): 'app' | 'status' {
+    return p.startPage === 'app' && !p.appHidden ? 'app' : 'status';
+}
 
 const KEY = 'ol.prefs';
 const PATH = '/api/auth/v1/me/preferences';
@@ -19,12 +25,13 @@ function clean(list: unknown): AddonPref[] {
     return list.filter((p): p is {id: string; pinned?: boolean} => typeof p === 'object' && p !== null && typeof (p as {id?: unknown}).id === 'string').map((p) => ({id: p.id, pinned: p.pinned === true}));
 }
 
-type Stored = {addons?: unknown; start_page?: unknown; app_fullscreen?: unknown};
+type Stored = {addons?: unknown; start_page?: unknown; app_fullscreen?: unknown; app_hidden?: unknown};
 
 function take(r: Stored | null): void {
     prefs.addons = clean(r?.addons);
     prefs.startPage = r?.start_page === 'app' || r?.start_page === 'status' ? r.start_page : '';
     prefs.appFullscreen = r?.app_fullscreen === true;
+    prefs.appHidden = r?.app_hidden === true;
 }
 
 function fromBrowser(): Stored | null {
@@ -36,10 +43,12 @@ function fromBrowser(): Stored | null {
 }
 
 /** the whole object, as a PUT replaces it (task 193: the App's choices travel with the pins) */
-function body(): {addons: {id: string; pinned?: true}[]; start_page?: StartPage; app_fullscreen?: true} {
-    const out: {addons: {id: string; pinned?: true}[]; start_page?: StartPage; app_fullscreen?: true} = {addons: prefs.addons.map((p) => (p.pinned ? {id: p.id, pinned: true} : {id: p.id}))};
+type Body = {addons: {id: string; pinned?: true}[]; start_page?: StartPage; app_fullscreen?: true; app_hidden?: true};
+function body(): Body {
+    const out: Body = {addons: prefs.addons.map((p) => (p.pinned ? {id: p.id, pinned: true} : {id: p.id}))};
     if (prefs.startPage) out.start_page = prefs.startPage;
     if (prefs.appFullscreen) out.app_fullscreen = true;
+    if (prefs.appHidden) out.app_hidden = true;
     return out;
 }
 
@@ -79,10 +88,11 @@ export function setAddonPreferences(list: readonly AddonPref[]): void {
     save();
 }
 
-/** task 193: the App's choices - the start page, the top bar hidden on the App. */
-export function setAppPreferences(p: {startPage?: StartPage; appFullscreen?: boolean}): void {
+/** task 193: the App's choices - the start page, the top bar hidden on the App; task 306: its tab hidden. */
+export function setAppPreferences(p: {startPage?: StartPage; appFullscreen?: boolean; appHidden?: boolean}): void {
     if (p.startPage !== undefined) prefs.startPage = p.startPage;
     if (p.appFullscreen !== undefined) prefs.appFullscreen = p.appFullscreen;
+    if (p.appHidden !== undefined) prefs.appHidden = p.appHidden;
     save();
 }
 
@@ -106,5 +116,6 @@ export function resetPreferences(): void {
     prefs.addons = [];
     prefs.startPage = '';
     prefs.appFullscreen = false;
+    prefs.appHidden = false;
     prefs.loaded = false;
 }

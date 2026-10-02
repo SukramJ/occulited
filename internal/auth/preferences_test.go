@@ -92,6 +92,24 @@ func TestPreferences(t *testing.T) {
 		t.Fatalf("after a password change: %+v", p)
 	}
 
+	// task 306: Control's tab hidden is a preference of its own; alone it is kept, and the
+	// start page beside it is kept as it was (the shell falls back to Status while it is hidden)
+	if err := s2.SetPreferences("bob", Preferences{AppHidden: true}); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := s2.Preferences("bob"); !p.AppHidden || len(p.Addons) != 0 || p.StartPage != "" {
+		t.Fatalf("hidden alone: %+v", p)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "users.json")); !strings.Contains(string(b), `"app_hidden": true`) {
+		t.Fatalf("hidden not in users.json: %s", b)
+	}
+	if err := s2.SetPreferences("bob", Preferences{StartPage: "app", AppHidden: true}); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := s2.Preferences("bob"); !p.AppHidden || p.StartPage != "app" {
+		t.Fatalf("hidden with the start page: %+v", p)
+	}
+
 	// an empty list clears the field, so the account reads as it did before
 	if err := s2.SetPreferences("bob", Preferences{}); err != nil {
 		t.Fatal(err)
