@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import {backgroundOf, changed, disjoint, normalChoice, normalizeLook, overNormalOption, secondColors, type LEDConfig} from './led';
+import {backgroundOf, changed, dimsAnything, disjoint, hexOf, isColor, normalChoice, normalizeColor, normalizeLook, overNormalOption, radioLevels, rgbOf, secondColors, swatchOf, type LEDConfig} from './led';
 
 const COLORS = ['red', 'green', 'blue', 'yellow', 'cyan', 'magenta', 'white', 'off'];
 
@@ -45,6 +45,49 @@ describe('status LED model', () => {
         expect(backgroundOf({color: 'yellow', pattern: 'slow', over_normal: true}, {color: 'off', pattern: 'solid'})).toBe('');
         expect(backgroundOf({color: 'blue', pattern: 'slow', over_normal: true}, blue)).toBe('');
         expect(backgroundOf({color: 'yellow', pattern: 'slow', over_normal: true}, blue, false)).toBe('');
+    });
+
+    // openccu-lite task 315: any #rrggbb beside the names
+    it('knows a free colour, its channels and its one spelling', () => {
+        expect(isColor('#FF8000')).toBe(true);
+        expect(isColor('orange')).toBe(false);
+        expect(isColor('#12345')).toBe(false);
+        expect(hexOf('blue')).toBe('#0000ff');
+        expect(hexOf('#FF8000')).toBe('#ff8000');
+        expect(hexOf('orange')).toBe('');
+        expect(rgbOf('#ff8000')).toEqual([255, 128, 0]);
+        expect(rgbOf('yellow')).toEqual([255, 255, 0]);
+        expect(normalizeColor('#0000FF')).toBe('blue');
+        expect(normalizeColor('#000000')).toBe('off');
+        expect(normalizeColor('#FF8000')).toBe('#ff8000');
+        expect(normalizeColor('red')).toBe('red');
+        // a free colour alternates with a colour on other channels only, as the names do
+        expect(disjoint('#ff8000', 'blue')).toBe(true);
+        expect(disjoint('#ff8000', 'green')).toBe(false);
+        expect(normalizeLook({color: '#0000FF', pattern: 'breathe'}, COLORS)).toEqual({color: 'blue', pattern: 'breathe'});
+        expect(normalizeLook({color: '#ff8000', pattern: 'alternate'}, COLORS)).toEqual({color: '#ff8000', pattern: 'alternate', color2: 'blue'});
+        // breathe over the normal colour pulses between the two
+        expect(normalizeLook({color: 'red', pattern: 'breathe', over_normal: true}, COLORS)).toEqual({color: 'red', pattern: 'breathe', over_normal: true});
+        expect(overNormalOption({color: 'red', pattern: 'breathe'}, {color: 'blue', pattern: 'solid'})).toBe('yes');
+        // the swatch shows a name's softened colour and a hex value as it is
+        expect(swatchOf('red')).toBe('#e5252c');
+        expect(swatchOf('#FF8000')).toBe('#ff8000');
+        expect(swatchOf('nothing')).toBe('transparent');
+    });
+
+    // openccu-lite task 316: the radio rows' levels by id
+    it('finds a radio row\'s levels', () => {
+        const c = {radio: {duty_cycle: [{enabled: true, threshold: 25, color: 'yellow', pattern: 'breathe'}], carrier_sense: [{enabled: false, threshold: 5, color: 'red', pattern: 'fast'}]}} as unknown as LEDConfig;
+        expect(radioLevels(c, 'radio-duty-cycle').map((l) => l.threshold)).toEqual([25]);
+        expect(radioLevels(c, 'radio-carrier-sense').map((l) => l.threshold)).toEqual([5]);
+    });
+
+    it('says whether a configuration dims, which an on/off LED cannot show', () => {
+        const base = {brightness: 100, night: {enabled: false, from: '22:00', to: '06:30', show: 'errors', dim: 30}} as LEDConfig;
+        expect(dimsAnything(base)).toBe(false);
+        expect(dimsAnything({...base, brightness: 60})).toBe(true);
+        expect(dimsAnything({...base, night: {...base.night, enabled: true}})).toBe(true);
+        expect(dimsAnything({...base, night: {...base.night, enabled: true, dim: 100}})).toBe(false);
     });
 
     it('reads the segmented control of the look when all is fine', () => {

@@ -202,14 +202,18 @@ survives a reboot and is in every backup. These are the defaults:
 ```json
 {
   "enabled": true,
+  "brightness": 100,
+  "fade": true,
   "normal": {"color": "blue", "pattern": "solid"},
-  "night": {"enabled": false, "from": "22:00", "to": "06:30", "show": "errors"},
+  "night": {"enabled": false, "from": "22:00", "to": "06:30", "show": "errors", "dim": 30},
   "states": [
     {"id": "radio-down", "enabled": true, "color": "red", "pattern": "solid"},
     {"id": "no-network", "enabled": true, "color": "yellow", "pattern": "fast"},
     {"id": "service-failed", "enabled": true, "color": "red", "pattern": "slow"},
     {"id": "storage-replace", "enabled": true, "color": "red", "pattern": "double"},
     {"id": "interfaces-starting", "enabled": true, "color": "magenta", "pattern": "double", "over_normal": true},
+    {"id": "radio-duty-cycle", "enabled": false},
+    {"id": "radio-carrier-sense", "enabled": false},
     {"id": "external", "enabled": true},
     {"id": "status-warning", "enabled": true, "color": "yellow", "pattern": "slow"},
     {"id": "system-update", "enabled": true, "color": "cyan", "pattern": "slow"},
@@ -220,14 +224,40 @@ survives a reboot and is in every backup. These are the defaults:
   "addon_units": false,
   "locate": {"color": "white", "pattern": "fast", "duration_s": 300},
   "external": {"max_duration_s": 3600, "allow_until_cleared": true},
-  "pwr_error_light": false
+  "pwr_error_light": false,
+  "radio": {
+    "duty_cycle": [
+      {"enabled": false, "threshold": 25, "color": "yellow", "pattern": "breathe", "over_normal": true},
+      {"enabled": false, "threshold": 50, "color": "#ff4000", "pattern": "slow", "over_normal": true},
+      {"enabled": false, "threshold": 75, "color": "red", "pattern": "fast"}
+    ],
+    "carrier_sense": [
+      {"enabled": false, "threshold": 5, "color": "yellow", "pattern": "breathe", "over_normal": true},
+      {"enabled": false, "threshold": 10, "color": "#ff4000", "pattern": "slow", "over_normal": true},
+      {"enabled": false, "threshold": 20, "color": "red", "pattern": "fast"}
+    ]
+  }
 }
 ```
 
-- **Colours** `red`, `green`, `blue`, `yellow`, `cyan`, `magenta`, `white`, `off`; **patterns**
-  `solid`, `slow` (500/500 ms), `fast` (100/100 ms), `flash` (100/1900 ms), `double` (two 150 ms
-  flashes every 2 s), `alternate` (with `color2`, a colour on other channels: yellow and blue, red
-  and blue, …). `off` is always solid.
+- **`radio`** (openccu-lite task 316): the radio load's levels behind the `radio-duty-cycle` and
+  `radio-carrier-sense` rows - three per kind, thresholds rising within 1–99, each level with its
+  switch and a look that lights (`over_normal` = the page's *overlay*: the blink's dark phase shows
+  the normal colour; off = the level replaces it). The rows carry the place and the switch, the
+  levels the rest; a file without the block gets the defaults above. The hysteresis is fixed at 5
+  points.
+
+- **Colours** `red`, `green`, `blue`, `yellow`, `cyan`, `magenta`, `white`, `off` - or, since
+  openccu-lite task 315, any `#rrggbb` (lower-cased; a value that is exactly a name's becomes the name,
+  black becomes `off`), mixed on an RPI-RF-MOD driven over PWM and shown as the nearest of the seven on
+  an on/off LED; **patterns** `solid`, `slow` (500/500 ms), `fast` (100/100 ms), `flash` (100/1900 ms),
+  `double` (two 150 ms flashes every 2 s), `breathe` (a 2 s pulse from dark to the colour and back;
+  `slow` on an on/off LED), `alternate` (with `color2`, a colour on other channels: yellow and blue,
+  red and blue, …). `off` is always solid.
+- **`brightness`** (10–100, default 100) is the LED's level in percent over PWM; **`fade`** (default
+  true) cross-fades a change of look over 300 ms; **`night.dim`** (1–100, default 30) is the level of
+  what the night still shows, and **`night.show: dimmed`** shows everything at that level. A file
+  from before these fields reads as the defaults. An on/off LED ignores all three.
 - **`over_normal`** (optional, per state; absent = off, and not written while off): the
   state blinks over the `normal` colour instead of over dark — for `slow`, `fast`, `flash` and
   `double` only, dropped for every other pattern and on `normal`, `locate` and the `external` row. With
@@ -241,7 +271,7 @@ survives a reboot and is in every backup. These are the defaults:
   place. `booting`, `shutdown`, the page's test and `locate` are above the list and not in it.
 - **`warnings_off`**: Status page warning ids `status-warning` ignores. **`addon_units`**: a failed
   addon unit counts as `service-failed`. **`night.show`**: `errors` (only `radio-down`,
-  `service-failed`, `storage-replace`) or `off`. **`external.max_duration_s`**: 60 to 86 400.
+  `service-failed`, `storage-replace`), `off` or `dimmed`. **`external.max_duration_s`**: 60 to 86 400.
   **`locate.duration_s`**: 10 to 3600. **`pwr_error_light`**: a system without an RGB LED blinks the
   Pi's red power LED while an error state is active.
 - **Absent** = the defaults — switched off (`enabled: false`) while `hss_led`'s old

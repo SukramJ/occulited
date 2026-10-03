@@ -3,8 +3,11 @@
 // never see each other's changes. stub-led-hw=none is a box without a status LED (a Pi 4 with an
 // HmIP-RFUSB), stub-led-active=<id,id> plants active states.
 
+// stub-led-hw=pwm is an RPI-RF-MOD over PWM (task 315): levels, any #rrggbb, breathe, dimming
 const COLORS = ['red', 'green', 'blue', 'yellow', 'cyan', 'magenta', 'white', 'off'];
 const PATTERNS = ['solid', 'slow', 'fast', 'flash', 'double', 'alternate'];
+const PWM_PATTERNS = ['solid', 'slow', 'fast', 'flash', 'double', 'breathe', 'alternate'];
+const HEX = /^#[0-9a-f]{6}$/i;
 const FIXED = ['shutdown', 'booting', 'preview', 'locate'];
 const ERROR_STATES = ['radio-down', 'service-failed', 'storage-replace'];
 const WARNING_IDS = ['rega', 'arch', 'meta', 'unclean', 'backup-target', 'backup-userfs', 'certificate', 'storage', 'addon-ownership', 'security-key'];
@@ -12,14 +15,18 @@ const WARNING_IDS = ['rega', 'arch', 'meta', 'unclean', 'backup-target', 'backup
 function defaults() {
     return {
         enabled: true,
+        brightness: 100,
+        fade: true,
         normal: {color: 'blue', pattern: 'solid'},
-        night: {enabled: false, from: '22:00', to: '06:30', show: 'errors'},
+        night: {enabled: false, from: '22:00', to: '06:30', show: 'errors', dim: 30},
         states: [
             {id: 'radio-down', enabled: true, color: 'red', pattern: 'solid'},
             {id: 'no-network', enabled: true, color: 'yellow', pattern: 'fast'},
             {id: 'service-failed', enabled: true, color: 'red', pattern: 'slow'},
             {id: 'storage-replace', enabled: true, color: 'red', pattern: 'double'},
             {id: 'interfaces-starting', enabled: true, color: 'magenta', pattern: 'double', over_normal: true},
+            {id: 'radio-duty-cycle', enabled: false},
+            {id: 'radio-carrier-sense', enabled: false},
             {id: 'external', enabled: true},
             {id: 'status-warning', enabled: true, color: 'yellow', pattern: 'slow'},
             {id: 'system-update', enabled: true, color: 'cyan', pattern: 'slow'},
@@ -31,6 +38,19 @@ function defaults() {
         locate: {color: 'white', pattern: 'fast', duration_s: 300},
         external: {max_duration_s: 3600, allow_until_cleared: true},
         pwr_error_light: false,
+        // openccu-lite task 316: the radio load's levels, off
+        radio: {
+            duty_cycle: [
+                {enabled: false, threshold: 25, color: 'yellow', pattern: 'breathe', over_normal: true},
+                {enabled: false, threshold: 50, color: '#ff4000', pattern: 'slow', over_normal: true},
+                {enabled: false, threshold: 75, color: 'red', pattern: 'fast'},
+            ],
+            carrier_sense: [
+                {enabled: false, threshold: 5, color: 'yellow', pattern: 'breathe', over_normal: true},
+                {enabled: false, threshold: 10, color: '#ff4000', pattern: 'slow', over_normal: true},
+                {enabled: false, threshold: 20, color: 'red', pattern: 'fast'},
+            ],
+        },
     };
 }
 
@@ -62,12 +82,20 @@ function available(jar) {
     return jar['stub-led-hw'] !== 'none';
 }
 
+function pwm(jar) {
+    return jar['stub-led-hw'] === 'pwm';
+}
+
+function capabilities(jar) {
+    return pwm(jar) ? {colors: COLORS, patterns: PWM_PATTERNS, brightness: true, max_brightness: 255} : {colors: COLORS, patterns: PATTERNS, brightness: false};
+}
+
 function view(jar, box) {
     const on = available(jar);
     return {
         available: on,
         ...(on ? {} : {reason: 'no-module'}),
-        hardware: {kind: on ? 'rpi-rf-mod' : '', leds: on ? ['red', 'green', 'blue'] : [], colors: COLORS, patterns: PATTERNS, brightness: false},
+        hardware: {kind: on ? 'rpi-rf-mod' : '', leds: on ? ['red', 'green', 'blue'] : [], ...capabilities(jar)},
         pwr: !on,
         config: box.config,
         defaults: defaults(),
@@ -97,7 +125,11 @@ function state(jar, box) {
     if (box.preview) shown = {...box.preview, ...overNormal(box.preview, box.config), source: 'preview', id: 'preview', since: new Date(now).toISOString()};
     else if (box.locate) shown = {color: box.locate.color, pattern: box.locate.pattern, source: 'locate', id: 'locate', since: new Date(now).toISOString()};
     else if (!box.config.enabled) shown = {color: 'off', pattern: 'solid', source: 'off', id: 'off', since: box.since};
-    else if (row) shown = {color: row.color, pattern: row.pattern, ...(row.color2 ? {color2: row.color2} : {}), ...overNormal(row, box.config), source: 'state', id: row.id, since: box.since, ...(active.find((a) => a.id === row.id)?.detail ? {detail: active.find((a) => a.id === row.id).detail} : {})};
+    else if (row && (row.id === 'radio-duty-cycle' || row.id === 'radio-carrier-sense')) {
+        // openccu-lite task 316: the active level's look (level 2 planted), the detail names the interface
+        const lv = (row.id === 'radio-carrier-sense' ? box.config.radio.carrier_sense : box.config.radio.duty_cycle)[1];
+        shown = {color: lv.color, pattern: lv.pattern, ...overNormal(lv, box.config), source: 'state', id: row.id, since: box.since, detail: 'HmIP-RF 63 %', level: 2};
+    } else if (row) shown = {color: row.color, pattern: row.pattern, ...(row.color2 ? {color2: row.color2} : {}), ...overNormal(row, box.config), source: 'state', id: row.id, since: box.since, ...(active.find((a) => a.id === row.id)?.detail ? {detail: active.find((a) => a.id === row.id).detail} : {})};
     else if (box.overrides.length) shown = {...box.overrides[0], source: 'override', since: box.overrides[0].since};
     return {
         available: available(jar),
@@ -111,7 +143,7 @@ function state(jar, box) {
         booting: false,
         conflict: jar['stub-led-conflict'] === '1',
         ...(available(jar) ? {} : {pwr: {enabled: box.config.pwr_error_light, error: false}}),
-        capabilities: {colors: COLORS, patterns: PATTERNS, brightness: false},
+        capabilities: capabilities(jar),
     };
 }
 
@@ -155,7 +187,7 @@ export function ledRoute(req, u, res, jar) {
         case 'POST /api/system/v1/led/preview':
             readBody(req, (b) => {
                 if (!available(jar)) return unsupported();
-                if (!b || !COLORS.includes(b.color)) return send(res, {error: 'invalid', message: 'invalid: colour'}, 422);
+                if (!b || !(COLORS.includes(b.color) || HEX.test(b.color))) return send(res, {error: 'invalid', message: 'invalid: colour'}, 422);
                 box.preview = {color: b.color, pattern: b.pattern || 'solid', ...(b.color2 ? {color2: b.color2} : {}), ...(b.over_normal ? {over_normal: true} : {}), until: new Date(Date.now() + 10_000).toISOString()};
                 send(res, state(jar, box));
             });

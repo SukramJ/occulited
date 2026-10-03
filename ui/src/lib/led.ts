@@ -15,22 +15,49 @@ export interface LEDStateConfig extends Partial<LEDLook> {
     enabled: boolean;
 }
 
+/** openccu-lite task 316: one threshold of the radio load with its look; over_normal is the page's "overlay" */
+export interface LEDRadioLevel extends LEDLook {
+    enabled: boolean;
+    threshold: number;
+}
+
+export interface LEDRadioConfig {
+    duty_cycle: LEDRadioLevel[];
+    carrier_sense: LEDRadioLevel[];
+}
+
+/** the rows whose look is the active level's (task 316) */
+export const RADIO_STATES = ['radio-duty-cycle', 'radio-carrier-sense'];
+
 export interface LEDConfig {
     enabled: boolean;
+    /** task 315: the LED's level in percent (10-100; PWM only) */
+    brightness: number;
+    /** task 315: a 300 ms cross-fade between looks (PWM only); absent = on */
+    fade?: boolean;
     normal: LEDLook;
-    night: {enabled: boolean; from: string; to: string; show: 'errors' | 'off'};
+    /** task 315: dim is the night's level in percent of brightness; dimmed shows everything at it */
+    night: {enabled: boolean; from: string; to: string; show: 'errors' | 'off' | 'dimmed'; dim: number};
     states: LEDStateConfig[];
     warnings_off: string[];
     addon_units: boolean;
     locate: {color: string; pattern: string; duration_s: number};
     external: {max_duration_s: number; allow_until_cleared: boolean};
     pwr_error_light: boolean;
+    /** task 316: the radio load's levels behind the radio-duty-cycle and radio-carrier-sense rows */
+    radio: LEDRadioConfig;
+}
+
+/** The radio levels of a row, by its id (task 316). */
+export function radioLevels(c: LEDConfig, id: string): LEDRadioLevel[] {
+    return id === 'radio-carrier-sense' ? c.radio.carrier_sense : c.radio.duty_cycle;
 }
 
 export interface LEDView {
     available: boolean;
     reason?: string;
-    hardware: {kind?: string; leds: string[]; colors: string[]; patterns: string[]; brightness: boolean};
+    /** brightness (task 315): the LED has levels - colours are mixed from any #rrggbb, breathe, dimming */
+    hardware: {kind?: string; leds: string[]; colors: string[]; patterns: string[]; brightness: boolean; max_brightness?: number};
     pwr: boolean;
     config: LEDConfig;
     defaults: LEDConfig;
@@ -54,8 +81,8 @@ export interface LEDState {
     available: boolean;
     reason?: string;
     /** background: the colour the blink's off phase shows (task 134), absent for dark */
-    shown: LEDLook & {source: string; id: string; detail?: string; since: string; background?: string};
-    active: {id: string; since: string; detail?: string}[];
+    shown: LEDLook & {source: string; id: string; detail?: string; since: string; background?: string; dim?: number; level?: number};
+    active: {id: string; since: string; detail?: string; level?: number}[];
     overrides: LEDOverride[];
     locate?: LEDLook & {until: string};
     preview?: LEDLook & {until: string};
@@ -64,28 +91,64 @@ export interface LEDState {
     conflict: boolean;
     write_error?: string;
     pwr?: {enabled: boolean; error: boolean};
-    capabilities: {colors: string[]; patterns: string[]; brightness: boolean};
+    capabilities: {colors: string[]; patterns: string[]; brightness: boolean; max_brightness?: number};
+}
+
+/** The seven names, each as #rrggbb (task 315: the presets of the colour picker). */
+export const NAMED: Record<string, string> = {
+    red: '#ff0000',
+    green: '#00ff00',
+    blue: '#0000ff',
+    yellow: '#ffff00',
+    cyan: '#00ffff',
+    magenta: '#ff00ff',
+    white: '#ffffff',
+    off: '#000000',
+};
+
+const HEX = /^#[0-9a-fA-F]{6}$/;
+
+/** Whether a colour is one occulited takes: a name or #rrggbb. */
+export function isColor(c: string): boolean {
+    return c in NAMED || HEX.test(c);
+}
+
+/** A colour as #rrggbb: a name's value, a hex value lower-cased; '' for anything else. */
+export function hexOf(c: string): string {
+    const named = NAMED[c];
+    if (named) return named;
+    return HEX.test(c) ? c.toLowerCase() : '';
+}
+
+/** A colour in occulited's one spelling: a hex value that is a name's becomes the name, black off. */
+export function normalizeColor(c: string): string {
+    const h = hexOf(c);
+    if (!h) return c;
+    for (const [name, v] of Object.entries(NAMED)) if (v === h) return name;
+    return h;
+}
+
+/** The red, green and blue of a colour, 0-255 each; [0,0,0] for an unknown one. */
+export function rgbOf(c: string): [number, number, number] {
+    const h = hexOf(c);
+    if (!h) return [0, 0, 0];
+    return [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
 }
 
 /** The rows of the simple view, in the order the page lists them. */
 export const SIMPLE_STATES = ['radio-down', 'no-network', 'service-failed', 'status-warning', 'system-update'];
 
-/** Which of red, green, blue a colour lights. */
-const CHANNELS: Record<string, [boolean, boolean, boolean]> = {
-    off: [false, false, false],
-    red: [true, false, false],
-    green: [false, true, false],
-    blue: [false, false, true],
-    yellow: [true, true, false],
-    cyan: [false, true, true],
-    magenta: [true, false, true],
-    white: [true, true, true],
-};
+/** Which of red, green, blue a colour lights at all. */
+function channels(c: string): [boolean, boolean, boolean] | null {
+    if (!isColor(c)) return null;
+    const [r, g, b] = rgbOf(c);
+    return [r > 0, g > 0, b > 0];
+}
 
 /** Whether two colours share no channel - the pairs that can alternate. */
 export function disjoint(a: string, b: string): boolean {
-    const ca = CHANNELS[a];
-    const cb = CHANNELS[b];
+    const ca = channels(a);
+    const cb = channels(b);
     if (!ca || !cb) return false;
     return !ca.some((on, i) => on && cb[i]);
 }
@@ -95,8 +158,8 @@ export function secondColors(color: string, colors: string[]): string[] {
     return colors.filter((c) => c !== 'off' && c !== color && disjoint(color, c));
 }
 
-/** The patterns that can blink over the normal colour (task 134). */
-export const OVER_NORMAL_PATTERNS = ['slow', 'fast', 'flash', 'double'];
+/** The patterns that can blink over the normal colour (task 134; breathe pulses between the two, task 315). */
+export const OVER_NORMAL_PATTERNS = ['slow', 'fast', 'flash', 'double', 'breathe'];
 
 /**
  * Whether a look can blink over the normal colour: 'yes', 'same' (the normal colour is the blink's
@@ -113,9 +176,11 @@ export function backgroundOf(l: Partial<LEDLook>, normal: LEDLook, enabled = tru
     return enabled && l.over_normal && normal.color !== 'off' && overNormalOption(l, normal) === 'yes' ? normal.color : '';
 }
 
-/** A look in the API's one spelling: off is solid, a second colour only for alternate (and then a valid one), over_normal only set and only for a blinking pattern. */
+/** A look in the API's one spelling: the colour's name where it has one, off is solid, a second colour only for alternate (and then a valid one), over_normal only set and only for a blinking pattern. */
 export function normalizeLook<T extends Partial<LEDLook>>(l: T, colors: string[]): T {
     const out = {...l};
+    if (out.color) out.color = normalizeColor(out.color);
+    if (out.color2) out.color2 = normalizeColor(out.color2);
     if (!out.over_normal || out.color === 'off' || !OVER_NORMAL_PATTERNS.includes(out.pattern ?? '')) delete out.over_normal;
     if (out.color === 'off') {
         out.pattern = 'solid';
@@ -144,7 +209,7 @@ export function changed(a: LEDConfig | null, b: LEDConfig | null): boolean {
     return JSON.stringify(a) !== JSON.stringify(b);
 }
 
-/** The CSS colour of an LED colour for the swatch. */
+/** The CSS colour of the seven names for the swatch: a little softer than the pure values. */
 export const SWATCH: Record<string, string> = {
     red: '#e5252c',
     green: '#22b24a',
@@ -155,3 +220,13 @@ export const SWATCH: Record<string, string> = {
     white: '#f5f5f5',
     off: 'transparent',
 };
+
+/** The CSS colour of any LED colour for the swatch: a name's swatch, a hex value itself. */
+export function swatchOf(c: string): string {
+    return SWATCH[c] ?? (HEX.test(c) ? c.toLowerCase() : 'transparent');
+}
+
+/** Whether the configuration shows a brightness below full, or a dimmed night, that an on/off LED cannot show. */
+export function dimsAnything(c: LEDConfig): boolean {
+    return c.brightness < 100 || (c.night.enabled && c.night.dim < 100);
+}

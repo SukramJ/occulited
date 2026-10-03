@@ -33,7 +33,11 @@ func TestValidate(t *testing.T) {
 		"twice":             func(c *Config) { c.States = append(c.States, c.States[0]) },
 		"fixed state":       func(c *Config) { c.States = append([]StateConfig{{ID: StateBooting, Enabled: true}}, c.States...) },
 		"colour":            func(c *Config) { c.States[0].Color = "orange" },
-		"pattern":           func(c *Config) { c.States[0].Pattern = "breathe" },
+		"pattern":           func(c *Config) { c.States[0].Pattern = "pulse" },
+		"hex colour short":  func(c *Config) { c.States[0].Color = "#12345" },
+		"brightness low":    func(c *Config) { c.Brightness = 5 },
+		"brightness high":   func(c *Config) { c.Brightness = 101 },
+		"night dim":         func(c *Config) { c.Night.Dim = 150 },
 		"alternate overlap": func(c *Config) { c.Normal = Look{Color: Blue, Pattern: Alternate, Color2: Cyan} },
 		"alternate alone":   func(c *Config) { c.Normal = Look{Color: Blue, Pattern: Alternate} },
 		"night time":        func(c *Config) { c.Night.From = "25:00" },
@@ -62,7 +66,7 @@ func TestValidate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{StateRadioDown, StateServiceFailed, StateNoNetwork, StateStorageReplace, StateInterfacesStarting, StateSystemUpdate, StateAddonUpdate, StateNoInternet, StateExternal, StateStatusWarning}
+	want := []string{StateRadioDown, StateServiceFailed, StateNoNetwork, StateStorageReplace, StateInterfacesStarting, StateRadioDutyCycle, StateRadioCarrierSense, StateSystemUpdate, StateAddonUpdate, StateNoInternet, StateExternal, StateStatusWarning}
 	if got := statesOrder(v); !slices.Equal(got, want) {
 		t.Errorf("order %v, want %v", got, want)
 	}
@@ -240,6 +244,9 @@ func TestResolveNightAndOverrides(t *testing.T) {
 	}
 }
 
+// the on/off LED's double strings, as before task 315
+var doublePattern, doubleCounter = doubleOf(1), doubleCounterOf(1)
+
 func TestFrame(t *testing.T) {
 	r, g, b := ChannelLEDs[0], ChannelLEDs[1], ChannelLEDs[2]
 	for _, c := range []struct {
@@ -336,35 +343,70 @@ func pi4() box {
 }
 
 func TestProbe(t *testing.T) {
-	hw := Probe(charly().root(t))
+	hw := Probe(charly().root(t), nil)
 	if !hw.Available || hw.Kind != "rpi-rf-mod" || !hw.PatternTrigger || !hw.Final || hw.PWR || !slices.Contains(hw.Patterns, Double) {
 		t.Errorf("charly: %+v", hw)
 	}
 	noModule := charly()
 	delete(noModule, "lib/modules/6.18.34/kernel/drivers/leds/trigger/ledtrig-pattern.ko.xz")
-	if hw := Probe(noModule.root(t)); !hw.Available || hw.PatternTrigger || slices.Contains(hw.Patterns, Double) {
+	if hw := Probe(noModule.root(t), nil); !hw.Available || hw.PatternTrigger || slices.Contains(hw.Patterns, Double) {
 		t.Errorf("without the pattern trigger: %+v", hw)
 	}
+	// openccu-lite B-299: the daemon's unit hides /lib/modules (ProtectKernelModules=), so the
+	// module file is not the probe's to find - the helper's loader decides
+	if os.Geteuid() != 0 {
+		hidden := charly()
+		delete(hidden, "lib/modules/6.18.34/kernel/drivers/leds/trigger/ledtrig-pattern.ko.xz")
+		root := hidden.root(t)
+		modules := filepath.Join(string(root), "lib/modules")
+		if err := os.MkdirAll(modules, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(modules, 0); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(modules, 0o755) })
+		var asked []string
+		load := func(name string) error { asked = append(asked, name); return nil }
+		if hw := Probe(root, load); !hw.Available || !hw.PatternTrigger || !slices.Contains(hw.Patterns, Double) || !slices.Equal(asked, []string{PatternModule}) {
+			t.Errorf("with the helper loading the module: %+v asked %v", hw, asked)
+		}
+		failing := func(string) error { return errors.New("modprobe: not found") }
+		if hw := Probe(root, failing); !hw.Available || hw.PatternTrigger || slices.Contains(hw.Patterns, Double) {
+			t.Errorf("with a module that cannot be loaded: %+v", hw)
+		}
+		if hw := Probe(root, nil); hw.PatternTrigger {
+			t.Errorf("without a loader the hidden module directory says no: %+v", hw)
+		}
+		// loaded already: /sys/module says so, nothing is asked
+		loadedBox := charly()
+		delete(loadedBox, "lib/modules/6.18.34/kernel/drivers/leds/trigger/ledtrig-pattern.ko.xz")
+		loadedBox["sys/module/ledtrig_pattern/refcnt"] = "0\n"
+		asked = nil
+		if hw := Probe(loadedBox.root(t), load); !hw.PatternTrigger || len(asked) != 0 {
+			t.Errorf("module loaded already: %+v asked %v", hw, asked)
+		}
+	}
 	// the phantom rpi_rf_mod devices of the overlay, an HmIP-RFUSB as the radio
-	if hw := Probe(pi4().root(t)); hw.Available || hw.Reason != ReasonNoModule || !hw.PWR || hw.PWRNormal != "default-on" {
+	if hw := Probe(pi4().root(t), nil); hw.Available || hw.Reason != ReasonNoModule || !hw.PWR || hw.PWRNormal != "default-on" {
 		t.Errorf("pi 4: %+v", hw)
 	}
-	if hw := Probe(box{"var/hm_mode": "HM_HOST='ova'\nHM_MODE='NORMAL'\nHM_HMIP_DEV='HMIP-RFUSB'\n"}.root(t)); hw.Available || hw.Reason != ReasonVirtual || hw.PWR {
+	if hw := Probe(box{"var/hm_mode": "HM_HOST='ova'\nHM_MODE='NORMAL'\nHM_HMIP_DEV='HMIP-RFUSB'\n"}.root(t), nil); hw.Available || hw.Reason != ReasonVirtual || hw.PWR {
 		t.Errorf("ova: %+v", hw)
 	}
 	lgw := charly()
 	lgw["var/hm_mode"] = strings.Replace(lgw["var/hm_mode"], "NORMAL", "HM-LGW", 1)
-	if hw := Probe(lgw.root(t)); hw.Available || !hw.StandDown || hw.Reason != ReasonHMLGW {
+	if hw := Probe(lgw.root(t), nil); hw.Available || !hw.StandDown || hw.Reason != ReasonHMLGW {
 		t.Errorf("hm-lgw: %+v", hw)
 	}
 	early := charly()
 	early["var/hm_mode"] = "HM_HOST='rpi3'\nHM_RTC='rx8130'\n"
-	if hw := Probe(early.root(t)); hw.Available || hw.Final || hw.Reason != ReasonDetecting {
+	if hw := Probe(early.root(t), nil); hw.Available || hw.Final || hw.Reason != ReasonDetecting {
 		t.Errorf("before the detection: %+v", hw)
 	}
 	lxc := charly()
 	lxc["run/systemd/container"] = "lxc\n"
-	if hw := Probe(lxc.root(t)); hw.Available || hw.Reason != ReasonContainer {
+	if hw := Probe(lxc.root(t), nil); hw.Available || hw.Reason != ReasonContainer {
 		t.Errorf("container: %+v", hw)
 	}
 }
@@ -395,6 +437,8 @@ func newRig(t *testing.T, b box) *rig {
 		Root: r.root,
 		File: filepath.Join(t.TempDir(), "led.json"),
 		Now:  func() time.Time { r.mu.Lock(); defer r.mu.Unlock(); return r.clock },
+		// the helper's module loading (openccu-lite B-299): the rig's kernel has the pattern trigger
+		LoadModule: func(string) error { return nil },
 		Write: func(frame []priv.LEDWrite) error {
 			r.mu.Lock()
 			r.frames = append(r.frames, frame)
@@ -1111,7 +1155,7 @@ func TestValidateOverNormal(t *testing.T) {
 			t.Errorf("default %s over normal: %v", s.ID, s.OverNormal)
 		}
 	}
-	if b := mustJSON(t, Defaults()); strings.Count(b, "over_normal") != 1 {
+	if b := mustJSON(t, Defaults().States); strings.Count(b, "over_normal") != 1 {
 		t.Errorf("over_normal written while off: %s", b)
 	}
 	// a led.json of task 95, before the field existed

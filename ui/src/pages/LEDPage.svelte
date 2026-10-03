@@ -6,6 +6,13 @@
      * else (order, colours, patterns, the external control, locate) sits behind "Customise",
      * remembered per browser. On a box without a status LED the page says so, and offers the red
      * power LED as an error light and the board LEDs' switch, which moved here from Network.
+     *
+     * Task 315: on an RPI-RF-MOD driven over PWM (hardware.brightness) a colour is any #rrggbb -
+     * the seven names as presets beside a free picker - the animations gain breathe, and the
+     * brightness, a cross-fade between looks and the night's dimming are settings. A row's look is
+     * edited in one panel that grows out of the row's Change… button (lib/Disclosure, the pattern
+     * of the other system pages: a summary row, a button, its panel), for the states, Everything
+     * fine and Locate alike; the row itself shows the swatch and says the look.
      */
     import {onMount} from 'svelte';
     import {pageLife} from '../lib/pagelife.svelte';
@@ -19,11 +26,12 @@
     import Help from '../lib/Help.svelte';
     import Notice from '../lib/Notice.svelte';
     import LEDSwatch from '../lib/LEDSwatch.svelte';
+    import Disclosure from '../lib/Disclosure.svelte';
     import {revealDetails} from '../lib/reveal';
     import {moved} from '../lib/sortable';
     import {Sortable} from '../lib/sortable.svelte';
     import SortHandle from '../lib/SortHandle.svelte';
-    import {SIMPLE_STATES, backgroundOf, changed, normalChoice, normalizeLook, overNormalOption, secondColors, type LEDConfig, type LEDLook, type LEDState, type LEDStateConfig, type LEDView} from '../lib/led';
+    import {NAMED, RADIO_STATES, SIMPLE_STATES, backgroundOf, changed, dimsAnything, hexOf, normalChoice, normalizeLook, overNormalOption, radioLevels, secondColors, type LEDConfig, type LEDLook, type LEDRadioLevel, type LEDState, type LEDStateConfig, type LEDView} from '../lib/led';
 
     interface BoardLEDs {
         disabled: boolean;
@@ -41,6 +49,8 @@
     const admin = $derived(auth.role === 'admin');
     const dirty = $derived(changed(view?.config ?? null, draft));
     const colors = $derived(view?.hardware.colors?.length ? view.hardware.colors : ['red', 'green', 'blue', 'yellow', 'cyan', 'magenta', 'white', 'off']);
+    // task 315: the LED has levels - any colour, breathe, brightness, fades, the night's dimming
+    const pwm = $derived(!!view?.hardware.brightness);
 
     const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
 
@@ -184,6 +194,57 @@
         if (draft) draft.normal = {color: choice, pattern: 'solid'};
     }
 
+    // task 315: one panel for every row's look, opened from the row's Change… button, which the
+    // Disclosure hides while it is open (the pattern of the Storage page's shares)
+    type Editing = {kind: 'state'; id: string} | {kind: 'normal'} | {kind: 'locate'} | {kind: 'radio'; id: string};
+    let editing = $state<Editing | null>(null);
+    let panelOpen = $state(false);
+    let editButtons = $state<Record<string, HTMLButtonElement>>({});
+    let panelTrigger = $state<HTMLElement | null>(null);
+    function editKey(e: Editing): string {
+        return e.kind === 'state' || e.kind === 'radio' ? e.id : e.kind;
+    }
+    // openccu-lite task 316: the radio rows' levels - a threshold, its switch and its look each
+    function levelsOf(id: string): LEDRadioLevel[] {
+        return draft ? radioLevels(draft, id) : [];
+    }
+    function setThreshold(lv: LEDRadioLevel, e: Event) {
+        lv.threshold = Math.max(1, Math.min(99, Math.round(Number((e.currentTarget as HTMLInputElement).value) || lv.threshold)));
+    }
+    /** the row's one-line summary: the enabled levels' thresholds and looks */
+    function radioSummary(id: string): string {
+        const on = levelsOf(id).filter((l) => l.enabled);
+        if (!on.length) return t('no level switched on');
+        return on.map((l) => t('> {n} %: {look}', {n: l.threshold, look: lookText(lookOf(l), bgOf(l))})).join(' · ');
+    }
+    function edit(e: Editing, from?: HTMLElement | null) {
+        editing = e;
+        panelTrigger = from ?? editButtons[editKey(e)] ?? null;
+        panelOpen = true;
+    }
+    /** the object the panel edits: a state's row, normal, or locate */
+    function target(e: Editing): Partial<LEDLook> | null {
+        if (!draft) return null;
+        if (e.kind === 'normal') return draft.normal;
+        if (e.kind === 'locate') return draft.locate;
+        if (e.kind === 'radio') return null;
+        return stateRow(e.id) ?? null;
+    }
+    function editName(e: Editing): string {
+        return stateLabel(e.kind === 'state' || e.kind === 'radio' ? e.id : e.kind);
+    }
+    /** the colour select's value: a name, or "custom" for a free colour */
+    function presetOf(c: string): string {
+        return c in NAMED ? c : 'custom';
+    }
+    function pickColor(tgt: Partial<LEDLook>, value: string) {
+        if (value !== 'custom') setLook(tgt, {color: value});
+    }
+    /** the brightness slider's and the night level's percent, from the inputs (10-100 and 1-100) */
+    function percent(e: Event, min: number): number {
+        return Math.max(min, Math.min(100, Math.round(Number((e.currentTarget as HTMLInputElement).value) || 100)));
+    }
+
     // task 162: the states are ordered by their handle - drag it, ↑/↓ on it, Alt+↑/↓ in the row; the
     // fixed rows have none, and neither has a user who may only look
     let stateList = $state<HTMLElement | null>(null);
@@ -208,6 +269,7 @@
     }
 
     function colorName(c: string): string {
+        if (!(c in NAMED) && hexOf(c)) return hexOf(c);
         switch (c) {
             case 'red':
                 return t('Red');
@@ -237,17 +299,22 @@
                 return t('short flash');
             case 'double':
                 return t('double flash');
+            case 'breathe':
+                return t('breathing');
             case 'alternate':
                 return t('alternating');
         }
         return t('steady');
     }
 
-    function lookText(l: LEDLook, background = ''): string {
+    function lookText(l: LEDLook, background = '', dim = 0): string {
+        let text: string;
         if (l.color === 'off') return t('Dark');
-        if (l.pattern === 'alternate' && l.color2) return t('{a} and {b}, alternating', {a: colorName(l.color), b: colorName(l.color2).toLowerCase()});
-        if (background && background !== 'off') return t('{color}, {pattern} over {background}', {color: colorName(l.color), pattern: patternName(l.pattern), background: colorName(background).toLowerCase()});
-        return t('{color}, {pattern}', {color: colorName(l.color), pattern: patternName(l.pattern)});
+        if (l.pattern === 'alternate' && l.color2) text = t('{a} and {b}, alternating', {a: colorName(l.color), b: colorName(l.color2).toLowerCase()});
+        else if (background && background !== 'off') text = t('{color}, {pattern} over {background}', {color: colorName(l.color), pattern: patternName(l.pattern), background: colorName(background).toLowerCase()});
+        else text = t('{color}, {pattern}', {color: colorName(l.color), pattern: patternName(l.pattern)});
+        // task 315: the night's level, as the state view says it
+        return dim > 0 && dim < 100 ? t('{look}, dimmed to {n} %', {look: text, n: dim}) : text;
     }
 
     function stateLabel(id: string): string {
@@ -262,6 +329,10 @@
                 return t('Storage should be replaced');
             case 'interfaces-starting':
                 return t('Interfaces starting');
+            case 'radio-duty-cycle':
+                return t('Radio: duty cycle');
+            case 'radio-carrier-sense':
+                return t('Radio: carrier sense');
             case 'external':
                 return t('External control');
             case 'status-warning':
@@ -298,6 +369,11 @@
             case 'interfaces-starting':
                 // task 158: at the boot and whenever one of them is restarted
                 return t('multimacd, rfd, hmipserver or hs485d is starting');
+            case 'radio-duty-cycle':
+                // openccu-lite task 316: the Status page's sampling, with hysteresis; the look is the level's
+                return t('the duty cycle of a radio interface is above one of the levels below (the Interfaces page\'s values; a level holds until the value is 5 points under its threshold)');
+            case 'radio-carrier-sense':
+                return t('the carrier sense of a radio interface is above one of the levels below (the Interfaces page\'s values; a level holds until the value is 5 points under its threshold)');
             case 'external':
                 return t('a colour set through the API, for example by Home Assistant or Node-RED');
             case 'status-warning':
@@ -327,6 +403,8 @@
         switch (id) {
             case 'radio-down':
             case 'interfaces-starting':
+            case 'radio-duty-cycle':
+            case 'radio-carrier-sense':
                 return '/radio';
             case 'no-network':
             case 'no-internet':
@@ -422,9 +500,9 @@
         {/if}
     {:else}
         <div class="ol-card ol-led-now" data-led-now={st.shown.id}>
-            <LEDSwatch look={st.shown} background={st.shown.background} size={44} label={lookText(st.shown, st.shown.background)} />
+            <LEDSwatch look={st.shown} background={st.shown.background} dim={st.shown.dim ?? 0} size={44} label={lookText(st.shown, st.shown.background, st.shown.dim)} />
             <div class="ol-led-now-text">
-                <div class="ol-led-now-look">{lookText(st.shown, st.shown.background)}</div>
+                <div class="ol-led-now-look">{lookText(st.shown, st.shown.background, st.shown.dim)}</div>
                 <div class="ol-muted">{reasonText(st)} · {t('since {time}', {time: timeOf(st.shown.since)})}</div>
                 {#if st.shown.source === 'state' && stateHref(st.shown.id)}<a href={stateHref(st.shown.id)} use:link>{t('Open page')}</a>{/if}
             </div>
@@ -448,6 +526,10 @@
         {/if}
 
         <h2>{t('Settings')}</h2>
+        <!-- task 315: what this LED can do -->
+        <p class="ol-muted" data-led-capability={pwm ? 'pwm' : 'on-off'}>
+            {#if pwm}{t('This LED is dimmable: any colour is mixed from its three channels, animations run smoothly, and the brightness and the night level below apply.')}{:else}{t('This LED switches each of its three colours on or off: the seven colours, blinking, no dimming. A dimmable LED needs the current openccu-lite image on a Raspberry Pi with the radio module on its header.')}{/if}
+        </p>
         <fieldset class="ol-led-settings" disabled={!admin}>
             <label class="ol-led-check"><input type="checkbox" checked={draft.enabled} onchange={setEnabled} data-led="enabled" /> {t('Status LED on')}</label>
 
@@ -458,8 +540,27 @@
                     <button type="button" role="radio" aria-checked={normalChoice(draft.normal) === 'green'} onclick={() => setNormal('green')}>{t('Green')}</button>
                     <button type="button" role="radio" aria-checked={normalChoice(draft.normal) === 'off'} onclick={() => setNormal('off')}>{t('Off')}</button>
                 </div>
-                {#if normalChoice(draft.normal) === 'custom'}<span class="ol-muted">{lookText(draft.normal)}</span>{/if}
+                {#if normalChoice(draft.normal) === 'custom'}<LEDSwatch look={draft.normal} /><span class="ol-muted">{lookText(draft.normal)}</span>{/if}
+                {#if admin}<button type="button" class="hmm-button" onclick={() => edit({kind: 'normal'})} bind:this={editButtons.normal} aria-expanded={panelOpen && editing?.kind === 'normal'} data-action="edit-normal">{t('Change…')}</button>{/if}
             </div>
+
+            {#if pwm}
+                <!-- task 315: the LED's level and the cross-fade, where the hardware has levels -->
+                <div class="ol-led-line">
+                    <label class="ol-led-check ol-led-key-label">
+                        <span class="ol-led-key">{t('Brightness')}</span>
+                        <input class="ol-led-range" type="range" min="10" max="100" step="5" value={draft.brightness} oninput={(e) => draft && (draft.brightness = percent(e, 10))} data-led="brightness" aria-label={t('Brightness')} />
+                        <span class="ol-led-pct">{draft.brightness} %</span>
+                    </label>
+                    <label class="ol-led-check">
+                        <input type="checkbox" checked={draft.fade !== false} onchange={(e) => draft && (draft.fade = e.currentTarget.checked)} data-led="fade" />
+                        {t('Fade between looks')}
+                        <Help>{t('A change of colour or animation blends over 300 ms instead of switching hard.')}</Help>
+                    </label>
+                </div>
+            {:else if dimsAnything(draft)}
+                <div class="ol-muted" data-led-dim-note>{t('The brightness and the night level in this configuration take effect on a dimmable LED only.')}</div>
+            {/if}
 
             <label class="ol-led-check">
                 <input type="checkbox" bind:checked={draft.night.enabled} data-led="night" />
@@ -476,8 +577,21 @@
                     <div class="ol-seg" role="radiogroup" aria-label={t('At night show')}>
                         <button type="button" role="radio" aria-checked={draft.night.show === 'errors'} onclick={() => draft && (draft.night.show = 'errors')}>{t('Only errors')}</button>
                         <button type="button" role="radio" aria-checked={draft.night.show === 'off'} onclick={() => draft && (draft.night.show = 'off')}>{t('Nothing')}</button>
+                        {#if pwm || draft.night.show === 'dimmed'}
+                            <!-- task 315: everything, dimmed to the night level -->
+                            <button type="button" role="radio" aria-checked={draft.night.show === 'dimmed'} onclick={() => draft && (draft.night.show = 'dimmed')}>{t('Everything, dimmed')}</button>
+                        {/if}
                     </div>
                 </div>
+                {#if pwm && draft.night.show !== 'off'}
+                    <div class="ol-led-line ol-led-sub">
+                        <label class="ol-led-check ol-led-key-label">
+                            <span class="ol-led-key">{t('Night level')}<Help>{t('How bright the LED is at night, in percent of the brightness, for what the night still shows. Locate and Test are never dimmed.')}</Help></span>
+                            <input class="ol-led-range" type="range" min="5" max="100" step="5" value={draft.night.dim} oninput={(e) => draft && (draft.night.dim = percent(e, 1))} data-led="night-dim" aria-label={t('Night level')} />
+                            <span class="ol-led-pct">{draft.night.dim} %</span>
+                        </label>
+                    </div>
+                {/if}
                 {#if draft.night.show === 'off'}<div class="ol-warn ol-led-sub">{t('A failed radio will not be visible at night.')}</div>{/if}
             {/if}
 
@@ -501,6 +615,106 @@
             <details class="ol-led-advanced" open={advanced} ontoggle={onToggleAdvanced} use:revealDetails data-led-advanced>
                 <summary>{t('Customise states and order')}</summary>
                 <p class="ol-muted">{t('The first active row decides what the LED shows. The fixed rows stay on top, and Everything fine is what is left.')}</p>
+                <!-- task 315: the one panel every row's Change… opens, for that row's look -->
+                <Disclosure title={editing ? (editing.kind === 'radio' ? t('Levels of {name}', {name: editName(editing)}) : t('Look of {name}', {name: editName(editing)})) : ''} bind:open={panelOpen} trigger={panelTrigger} readOnly>
+                    {#if editing?.kind === 'radio'}
+                        {@const rid = editing.id}
+                        <!-- openccu-lite task 316: three levels, each with its switch, threshold, colour, animation and overlay/replace -->
+                        <div class="ol-led-panel" data-led-panel={rid}>
+                            <p class="ol-muted">{t('The highest level the value is above decides; a level holds until the value has fallen 5 points below its threshold. Overlay shows the level over the colour of Everything fine, Replace instead of it.')}</p>
+                            <ol class="ol-led-levels">
+                                {#each levelsOf(rid) as lv, i (i)}
+                                    <li class="ol-led-level" data-led-level={i + 1}>
+                                        <label class="ol-led-check">
+                                            <input type="checkbox" checked={lv.enabled} onchange={(e) => (lv.enabled = e.currentTarget.checked)} aria-label={t('Level {n} of {name}', {n: i + 1, name: editName(editing)})} />
+                                            <LEDSwatch look={lookOf(lv)} background={bgOf(lv)} />
+                                            {t('above')}
+                                            <input class="hmm-input ol-led-num" type="number" min="1" max="99" value={lv.threshold} onchange={(e) => setThreshold(lv, e)} aria-label={t('Threshold of level {n} of {name}', {n: i + 1, name: editName(editing)})} />
+                                            %
+                                        </label>
+                                        <span class="ol-led-controls">
+                                            <select class="hmm-select" aria-label={t('Colour of level {n} of {name}', {n: i + 1, name: editName(editing)})} value={presetOf(lv.color)} onchange={(e) => pickColor(lv, e.currentTarget.value)}>
+                                                {#each colors.filter((c) => c !== 'off') as c (c)}<option value={c}>{colorName(c)}</option>{/each}
+                                                {#if presetOf(lv.color) === 'custom'}<option value="custom">{t('Custom colour')}</option>{/if}
+                                            </select>
+                                            {#if pwm}<input class="ol-led-color" type="color" value={hexOf(lv.color) || '#ffff00'} oninput={(e) => setLook(lv, {color: e.currentTarget.value})} aria-label={t('Custom colour of level {n} of {name}', {n: i + 1, name: editName(editing)})} data-led-picker />{/if}
+                                            <select class="hmm-select" aria-label={t('Pattern of level {n} of {name}', {n: i + 1, name: editName(editing)})} value={lv.pattern} onchange={(e) => setLook(lv, {pattern: e.currentTarget.value})}>
+                                                {#each patternsFor(lv.pattern, false) as p (p)}<option value={p}>{patternName(p)}</option>{/each}
+                                            </select>
+                                            <div class="ol-seg" role="radiogroup" aria-label={t('Level {n} of {name}: overlay or replace', {n: i + 1, name: editName(editing)})}>
+                                                <button type="button" role="radio" aria-checked={!!lv.over_normal} onclick={() => setLook(lv, {over_normal: true})} disabled={overNormalOption(lv, draft.normal) === 'no'} title={overNormalOption(lv, draft.normal) === 'no' ? t('A steady light cannot be an overlay.') : undefined}>{t('Overlay')}</button>
+                                                <button type="button" role="radio" aria-checked={!lv.over_normal} onclick={() => setLook(lv, {over_normal: false})}>{t('Replace')}</button>
+                                            </div>
+                                            {#if admin}<button type="button" class="hmm-button" onclick={() => test(lookOf(lv))} disabled={busy !== ''}>{t('Test')}</button>{/if}
+                                        </span>
+                                    </li>
+                                {/each}
+                            </ol>
+                        </div>
+                    {:else if editing}
+                        {@const tgt = target(editing)}
+                        {#if tgt}
+                            {@const name = editName(editing)}
+                            {@const look = lookOf(tgt)}
+                            {@const bg = editing.kind === 'state' ? bgOf(tgt) : ''}
+                            <div class="ol-led-panel" data-led-panel={editKey(editing)}>
+                                <div class="ol-led-panel-preview">
+                                    <LEDSwatch look={look} background={bg} size={28} />
+                                    <span>{lookText(look, bg)}</span>
+                                    {#if admin && look.color !== 'off'}<button type="button" class="hmm-button" onclick={() => test(look)} disabled={busy !== ''}>{t('Test')}</button>{/if}
+                                </div>
+                                <div class="ol-led-controls">
+                                    <label class="ol-led-check">
+                                        {t('Colour')}
+                                        <select class="hmm-select" aria-label={t('Colour of {name}', {name})} value={presetOf(tgt.color ?? 'off')} onchange={(e) => pickColor(tgt, e.currentTarget.value)}>
+                                            {#each colors.filter((c) => editing?.kind !== 'locate' || c !== 'off') as c (c)}<option value={c}>{colorName(c)}</option>{/each}
+                                            {#if presetOf(tgt.color ?? 'off') === 'custom'}<option value="custom">{t('Custom colour')}</option>{/if}
+                                        </select>
+                                        {#if pwm && tgt.color !== 'off'}
+                                            <!-- task 315: any colour, mixed on the LED -->
+                                            <input class="ol-led-color" type="color" value={hexOf(tgt.color ?? 'off') || '#000000'} oninput={(e) => setLook(tgt, {color: e.currentTarget.value})} aria-label={t('Custom colour of {name}', {name})} data-led-picker />
+                                        {/if}
+                                    </label>
+                                    {#if tgt.color !== 'off'}
+                                        <label class="ol-led-check">
+                                            {t('Animation')}
+                                            <select class="hmm-select" aria-label={t('Pattern of {name}', {name})} value={tgt.pattern ?? 'solid'} onchange={(e) => setLook(tgt, {pattern: e.currentTarget.value})}>
+                                                {#each patternsFor(tgt.pattern ?? '', editing.kind !== 'locate') as p (p)}<option value={p}>{patternName(p)}</option>{/each}
+                                            </select>
+                                        </label>
+                                    {/if}
+                                    {#if tgt.pattern === 'alternate'}
+                                        <label class="ol-led-check">
+                                            {t('Second colour')}
+                                            <select class="hmm-select" aria-label={t('Second colour of {name}', {name})} value={tgt.color2} onchange={(e) => setLook(tgt, {color2: e.currentTarget.value})}>
+                                                {#each secondColors(tgt.color ?? '', colors) as c (c)}<option value={c}>{colorName(c)}</option>{/each}
+                                            </select>
+                                        </label>
+                                    {/if}
+                                    {#if editing.kind === 'locate'}
+                                        <label class="ol-led-check">
+                                            {t('for')}
+                                            <input class="hmm-input ol-led-num" type="number" min="1" max="60" value={Math.round(draft.locate.duration_s / 60)} onchange={(e) => draft && (draft.locate.duration_s = Math.max(1, Math.min(60, Number(e.currentTarget.value) || 5)) * 60)} aria-label={t('Minutes')} />
+                                            {t('min')}
+                                        </label>
+                                    {/if}
+                                </div>
+                                <!-- task 134: a blink over the normal colour instead of over dark, for the patterns with a dark phase -->
+                                {#if editing.kind === 'state' && overNormalOption(tgt, draft.normal) === 'yes'}
+                                    <div class="ol-led-subs" data-led-over={editing.id}>
+                                        <label class="ol-led-check">
+                                            <input type="checkbox" checked={!!tgt.over_normal} onchange={(e) => setLook(tgt, {over_normal: e.currentTarget.checked})} />
+                                            {t('Blink over the normal colour')}
+                                            <Help>{t('The dark phase of the blink shows the colour of Everything fine. While that is off, and at night, the LED blinks over dark.')}</Help>
+                                        </label>
+                                    </div>
+                                {:else if editing.kind === 'state' && overNormalOption(tgt, draft.normal) === 'same'}
+                                    <div class="ol-led-subs ol-muted" data-led-over={editing.id}>{t('Blinking over the normal colour is not offered: it is the same colour, the blink would not be seen.')}</div>
+                                {/if}
+                            </div>
+                        {/if}
+                    {/if}
+                </Disclosure>
                 <ol class="ol-led-list" bind:this={stateList}>
                     {#each FIXED_ROWS as row (row.id)}
                         <li class="ol-led-item fixed" data-led-fixed={row.id}>
@@ -514,18 +728,8 @@
                         <span class="ol-badge">{t('fixed')}</span>
                         <LEDSwatch look={lookOf(draft.locate)} />
                         <span class="ol-led-name">{stateLabel('locate')}</span>
-                        <span class="ol-led-controls">
-                            <select class="hmm-select" aria-label={t('Colour of {name}', {name: stateLabel('locate')})} value={draft.locate.color} onchange={(e) => draft && setLook(draft.locate, {color: e.currentTarget.value})}>
-                                {#each colors.filter((c) => c !== 'off') as c (c)}<option value={c}>{colorName(c)}</option>{/each}
-                            </select>
-                            <select class="hmm-select" aria-label={t('Pattern of {name}', {name: stateLabel('locate')})} value={draft.locate.pattern} onchange={(e) => draft && setLook(draft.locate, {pattern: e.currentTarget.value})}>
-                                {#each patternsFor(draft.locate.pattern, false) as p (p)}<option value={p}>{patternName(p)}</option>{/each}
-                            </select>
-                            <label class="ol-led-check">
-                                <input class="hmm-input ol-led-num" type="number" min="1" max="60" value={Math.round(draft.locate.duration_s / 60)} onchange={(e) => draft && (draft.locate.duration_s = Math.max(1, Math.min(60, Number(e.currentTarget.value) || 5)) * 60)} aria-label={t('Minutes')} />
-                                {t('min')}
-                            </label>
-                        </span>
+                        <span class="ol-muted">{t('{look} for {n} minutes', {look: lookText(lookOf(draft.locate)), n: Math.round(draft.locate.duration_s / 60)})}</span>
+                        {#if admin}<span class="ol-led-controls"><button type="button" class="hmm-button" onclick={() => edit({kind: 'locate'})} bind:this={editButtons.locate} aria-expanded={panelOpen && editing?.kind === 'locate'} data-action="edit">{t('Change…')}</button></span>{/if}
                     </li>
                     {#each draft.states as s, i (s.id)}
                         <!-- the row takes Alt+↑/↓ from the controls inside it, bubbling up: it is no control itself -->
@@ -533,7 +737,17 @@
                         <li class="ol-led-item ol-sortrow" data-led-row={s.id} class:ol-dragging={sort.dragging(s.id)} class:ol-drop-before={sort.before(i)} class:ol-drop-after={sort.after(i)} onkeydown={(ev) => sort.rowKey(ev, i)}>
                             {#if admin}<SortHandle sortable={sort} index={i} key={s.id} name={stateLabel(s.id)} />{/if}
                             <input type="checkbox" checked={s.enabled} onchange={(e) => (s.enabled = e.currentTarget.checked)} aria-label={stateLabel(s.id)} />
-                            {#if s.id === 'external'}
+                            {#if RADIO_STATES.includes(s.id)}
+                                <!-- openccu-lite task 316: the look is the active level's; the row carries the switch and the place -->
+                                <LEDSwatch look={lookOf(levelsOf(s.id).find((l) => l.enabled) ?? {color: 'off'})} background={bgOf(levelsOf(s.id).find((l) => l.enabled) ?? {})} />
+                                <span class="ol-led-name">{stateLabel(s.id)}<Help>{stateMeaning(s.id)}</Help></span>
+                                <span class="ol-muted ol-led-look" data-led-look={s.id}>{radioSummary(s.id)}</span>
+                                {#if admin}
+                                    <span class="ol-led-controls">
+                                        <button type="button" class="hmm-button" onclick={() => edit({kind: 'radio', id: s.id})} bind:this={editButtons[s.id]} aria-expanded={panelOpen && editing?.kind === 'radio' && editing.id === s.id} data-action="edit">{t('Levels…')}</button>
+                                    </span>
+                                {/if}
+                            {:else if s.id === 'external'}
                                 <span class="ol-led-name">{stateLabel(s.id)}<Help>{t('Home Assistant, Node-RED and other programs set a colour with an API token of the role led. Where this row stands decides which states they may cover.')}</Help></span>
                                 <span class="ol-led-controls">
                                     <label class="ol-led-check">
@@ -546,33 +760,12 @@
                             {:else}
                                 <LEDSwatch look={lookOf(s)} background={bgOf(s)} />
                                 <span class="ol-led-name">{stateLabel(s.id)}</span>
-                                <span class="ol-led-controls">
-                                    <select class="hmm-select" aria-label={t('Colour of {name}', {name: stateLabel(s.id)})} value={s.color} onchange={(e) => setLook(s, {color: e.currentTarget.value})}>
-                                        {#each colors as c (c)}<option value={c}>{colorName(c)}</option>{/each}
-                                    </select>
-                                    {#if s.color !== 'off'}
-                                        <select class="hmm-select" aria-label={t('Pattern of {name}', {name: stateLabel(s.id)})} value={s.pattern} onchange={(e) => setLook(s, {pattern: e.currentTarget.value})}>
-                                            {#each patternsFor(s.pattern ?? '') as p (p)}<option value={p}>{patternName(p)}</option>{/each}
-                                        </select>
-                                    {/if}
-                                    {#if s.pattern === 'alternate'}
-                                        <select class="hmm-select" aria-label={t('Second colour of {name}', {name: stateLabel(s.id)})} value={s.color2} onchange={(e) => setLook(s, {color2: e.currentTarget.value})}>
-                                            {#each secondColors(s.color ?? '', colors) as c (c)}<option value={c}>{colorName(c)}</option>{/each}
-                                        </select>
-                                    {/if}
-                                    {#if admin}<button type="button" class="hmm-button" onclick={() => test(lookOf(s))} disabled={busy !== '' || s.color === 'off'}>{t('Test')}</button>{/if}
-                                </span>
-                                <!-- task 134: a blink over the normal colour instead of over dark, for the patterns with a dark phase -->
-                                {#if overNormalOption(s, draft.normal) === 'yes'}
-                                    <div class="ol-led-subs" data-led-over={s.id}>
-                                        <label class="ol-led-check">
-                                            <input type="checkbox" checked={!!s.over_normal} onchange={(e) => setLook(s, {over_normal: e.currentTarget.checked})} />
-                                            {t('Blink over the normal colour')}
-                                            <Help>{t('The dark phase of the blink shows the colour of Everything fine. While that is off, and at night, the LED blinks over dark.')}</Help>
-                                        </label>
-                                    </div>
-                                {:else if overNormalOption(s, draft.normal) === 'same'}
-                                    <div class="ol-led-subs ol-muted" data-led-over={s.id}>{t('Blinking over the normal colour is not offered: it is the same colour, the blink would not be seen.')}</div>
+                                <span class="ol-muted ol-led-look" data-led-look={s.id}>{lookText(lookOf(s), bgOf(s))}</span>
+                                {#if admin}
+                                    <span class="ol-led-controls">
+                                        <button type="button" class="hmm-button" onclick={() => edit({kind: 'state', id: s.id})} bind:this={editButtons[s.id]} aria-expanded={panelOpen && editing?.kind === 'state' && editing.id === s.id} data-action="edit">{t('Change…')}</button>
+                                        <button type="button" class="hmm-button" onclick={() => test(lookOf(s))} disabled={busy !== '' || s.color === 'off'}>{t('Test')}</button>
+                                    </span>
                                 {/if}
                             {/if}
                             {#if s.id === 'status-warning' && view.warning_ids.length}
@@ -595,21 +788,8 @@
                         <span class="ol-badge">{t('last')}</span>
                         <LEDSwatch look={draft.normal} />
                         <span class="ol-led-name">{stateLabel('normal')}</span>
-                        <span class="ol-led-controls">
-                            <select class="hmm-select" aria-label={t('Colour of {name}', {name: stateLabel('normal')})} value={draft.normal.color} onchange={(e) => draft && setLook(draft.normal, {color: e.currentTarget.value})}>
-                                {#each colors as c (c)}<option value={c}>{colorName(c)}</option>{/each}
-                            </select>
-                            {#if draft.normal.color !== 'off'}
-                                <select class="hmm-select" aria-label={t('Pattern of {name}', {name: stateLabel('normal')})} value={draft.normal.pattern} onchange={(e) => draft && setLook(draft.normal, {pattern: e.currentTarget.value})}>
-                                    {#each patternsFor(draft.normal.pattern) as p (p)}<option value={p}>{patternName(p)}</option>{/each}
-                                </select>
-                            {/if}
-                            {#if draft.normal.pattern === 'alternate'}
-                                <select class="hmm-select" aria-label={t('Second colour of {name}', {name: stateLabel('normal')})} value={draft.normal.color2} onchange={(e) => draft && setLook(draft.normal, {color2: e.currentTarget.value})}>
-                                    {#each secondColors(draft.normal.color, colors) as c (c)}<option value={c}>{colorName(c)}</option>{/each}
-                                </select>
-                            {/if}
-                        </span>
+                        <span class="ol-muted ol-led-look" data-led-look="normal">{lookText(draft.normal)}</span>
+                        {#if admin}<span class="ol-led-controls"><button type="button" class="hmm-button" onclick={(e) => edit({kind: 'normal'}, e.currentTarget)} bind:this={editButtons['normal-row']} aria-expanded={panelOpen && editing?.kind === 'normal'} data-action="edit">{t('Change…')}</button></span>{/if}
                     </li>
                 </ol>
                 <div class="ol-sronly" role="status" aria-live="polite">{sort.live}</div>
@@ -636,7 +816,13 @@
                 <li><LEDSwatch look={lookOf(draft.locate)} /> <span>{lookText(lookOf(draft.locate))}</span> <span class="ol-muted">{stateLabel('locate')}</span></li>
                 {#if draft.enabled}
                     {#each draft.states.filter((s) => s.enabled && s.id !== 'external') as s (s.id)}
-                        <li><LEDSwatch look={lookOf(s)} background={bgOf(s)} /> <span>{lookText(lookOf(s), bgOf(s))}</span> <span class="ol-muted">{stateLabel(s.id)}</span></li>
+                        {#if RADIO_STATES.includes(s.id)}
+                            {#each levelsOf(s.id).filter((l) => l.enabled) as lv (lv.threshold)}
+                                <li><LEDSwatch look={lookOf(lv)} background={bgOf(lv)} /> <span>{lookText(lookOf(lv), bgOf(lv))}</span> <span class="ol-muted">{stateLabel(s.id)} &gt; {lv.threshold} %</span></li>
+                            {/each}
+                        {:else}
+                            <li><LEDSwatch look={lookOf(s)} background={bgOf(s)} /> <span>{lookText(lookOf(s), bgOf(s))}</span> <span class="ol-muted">{stateLabel(s.id)}</span></li>
+                        {/if}
                     {/each}
                     <li><LEDSwatch look={draft.normal} /> <span>{lookText(draft.normal)}</span> <span class="ol-muted">{stateLabel('normal')}</span></li>
                 {/if}
@@ -682,6 +868,16 @@
     .ol-led-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
     .ol-led-subs { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 4px 14px; padding-left: 64px; }
     .ol-led-num { width: 4.5em; }
+    .ol-led-look { flex: 1 1 12em; min-width: 0; }
+    .ol-led-key-label { gap: 8px; }
+    .ol-led-range { width: 160px; max-width: 50vw; accent-color: var(--hmm-accent); }
+    .ol-led-pct { min-width: 3.5em; font-variant-numeric: tabular-nums; }
+    .ol-led-color { width: 36px; height: 28px; padding: 2px; border: 1px solid var(--hmm-border-muted); border-radius: var(--hmm-radius); background: var(--hmm-card-bg); cursor: pointer; }
+    .ol-led-panel { display: flex; flex-direction: column; gap: 10px; }
+    .ol-led-panel-preview { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+    .ol-led-panel .ol-led-subs { padding-left: 0; }
+    .ol-led-levels { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+    .ol-led-level { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
     .ol-led-save { position: sticky; bottom: 0; z-index: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 0; background: var(--hmm-bg); }
     .ol-led-boards { display: flex; flex-direction: column; gap: 8px; max-width: 640px; margin-bottom: 8px; }
     @media (max-width: 640px) {

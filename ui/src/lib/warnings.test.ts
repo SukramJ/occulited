@@ -38,6 +38,14 @@ describe('the Status page warnings (task 81)', () => {
     it('says an HB-RF-ETH whose link is lost is reconnected, not retried (B-218)', () => {
         expect(warningText(w('hb-rf-eth', '192.0.2.209', {address: '192.0.2.209', reconnecting: true}), words)).toBe('The HB-RF-ETH at 192.0.2.209 lost its connection: the radio module on it is not available until it is back. The system reconnects it on its own.');
         expect(warningText(w('hb-rf-eth', '192.0.2.209', {address: '192.0.2.209', reconnecting: false}), words)).toContain('tries again every 30 seconds');
+        // openccu-lite task 316: the radio's load
+        expect(warningText(w('radio-load', 'dc', {interface: 'HmIP-RF', duty_cycle: 63}), words)).toBe('The radio is busy: HmIP-RF reports a duty cycle of 63 %. Devices may answer late or not at all until the load falls; the Interfaces page shows the course.');
+        expect(warningText(w('radio-load', 'dc,cs', {interface: 'HmIP-RF', duty_cycle: 63, carrier_sense: 12}), words)).toContain('a duty cycle of 63 % and a carrier sense of 12 %');
+    });
+
+    it('names the missing module that holds the HmIP network, with the way to the Interfaces page (openccu-lite task 318)', () => {
+        expect(warningText(w('hmip-module-missing', '3014F711A0001F0000000A03', {module: '3014F711A0001F0000000A03'}), words)).toBe('HmIP-RF is down: the radio module 3014F711A0001F0000000A03, which holds the HmIP network, is missing or did not answer. hmipserver runs its virtual devices only, and no other module is taken without asking. Plug it back in, or move HmIP-RF to another module on the Interfaces page.');
+        expect(warningLink(w('hmip-module-missing', 'x', {}, '/system/interfaces#connections'), t)).toEqual({href: '/system/interfaces#connections', label: 'Interfaces'});
     });
 
     it('names a backup target and its cause (task 86)', () => {

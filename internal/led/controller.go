@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/url"
@@ -120,6 +121,18 @@ type Sources struct {
 	InternetTargets func() []string
 	// WarningIDs are the warning ids the page offers to leave off the LED.
 	WarningIDs []string
+	// Radio is the radio interfaces' load as the radio sampler last saw it (task 316): the Status
+	// page's and the sparklines' sampling, nothing of the LED's own. nil = no radio levels.
+	Radio func() []RadioLoad
+}
+
+// RadioLoad is one interface's load (task 316): the duty cycle, and the carrier sense where the
+// interface reports one.
+type RadioLoad struct {
+	Interface    string
+	DutyCycle    int
+	CarrierSense int
+	HasCS        bool
 }
 
 // Controller is the status LED's owner.
@@ -131,6 +144,9 @@ type Controller struct {
 	Log  *slog.Logger
 	// Write applies a frame; nil = the privilege helper under Root's /sys/class/leds.
 	Write func(frame []priv.LEDWrite) error
+	// LoadModule loads a kernel module the LED needs (the pattern trigger, openccu-lite B-299);
+	// nil = the privilege helper's LoadLEDModule.
+	LoadModule func(name string) error
 	// Now is the clock; nil = time.Now.
 	Now func() time.Time
 	// Dial connects the internet check; nil = a net.Dialer with internetTimeout.
@@ -149,6 +165,8 @@ type Controller struct {
 	loc         *time.Location
 	active      map[string]Activity
 	pending     map[string]time.Time
+	// radioLevels is each radio state's level now (task 316), for the hysteresis
+	radioLevels map[string]int
 	overrides   map[string]Override
 	requests    map[string][]time.Time
 	locate      *Timed
@@ -167,6 +185,7 @@ type Controller struct {
 	retryAt    time.Time
 	writeErr   string
 	noPattern  bool
+	moduleErr  string
 
 	conflict, conflictLogged, hold bool
 	diffs                          []time.Time
@@ -345,7 +364,7 @@ func (c *Controller) step(ctx context.Context) {
 	// the slow reads happen outside the lock: systemctl goes through the helper
 	var hw *Hardware
 	if probe {
-		h := Probe(c.Root)
+		h := Probe(c.Root, c.loadModule)
 		hw = &h
 	}
 	var (
@@ -354,6 +373,7 @@ func (c *Controller) step(ctx context.Context) {
 		warns   []warnings.Warning
 		update  string
 		addons  int
+		radio   []RadioLoad
 		loc     *time.Location
 	)
 	if refresh {
@@ -371,19 +391,22 @@ func (c *Controller) step(ctx context.Context) {
 		if c.Src.AddonUpdates != nil {
 			addons = c.Src.AddonUpdates()
 		}
+		if c.Src.Radio != nil {
+			radio = c.Src.Radio()
+		}
 		loc = c.location()
 	}
 
 	c.mu.Lock()
 	if hw != nil {
 		if hw.Available != c.hw.Available || hw.Reason != c.hw.Reason {
-			c.log().Info("status LED: hardware", "available", hw.Available, "reason", hw.Reason, "kind", hw.Kind, "pattern_trigger", hw.PatternTrigger)
+			c.log().Info("status LED: hardware", "available", hw.Available, "reason", hw.Reason, "kind", hw.Kind, "pattern_trigger", hw.PatternTrigger, "max_brightness", hw.MaxBrightness)
 		}
 		c.hw, c.probedAt = *hw, now
 	}
 	if refresh {
 		c.refreshedAt, c.loc = now, loc
-		c.evaluate(now, rows, unitsOK, warns, update, addons)
+		c.evaluate(now, rows, unitsOK, warns, update, addons, radio)
 	}
 	finished := c.exists("var/status/startupFinished")
 	if finished {
@@ -404,10 +427,16 @@ func (c *Controller) step(ctx context.Context) {
 	if shown != c.shown {
 		c.shown, c.shownSince = shown, now
 	}
-	frame := Frame(shown.Look, shown.Background, c.hw.PatternTrigger && !c.noPattern)
-	var write []priv.LEDWrite
+	render := c.render(shown)
+	frame := FrameFor(shown.Look, shown.Background, render)
+	var write, written []priv.LEDWrite
 	if c.hw.Available && !c.hw.StandDown && !slices.Equal(frame, c.applied) && (c.stopping || (now.After(c.retryAt) && c.rateOK(now))) {
+		written = frame
 		write = frame
+		// task 315: a cross-fade from what the LED shows now, unless the box is going down
+		if c.cfg.Fades() && !c.stopping {
+			write = WithFade(frame, c.applied, render)
+		}
 	}
 	readBack := write == nil && c.hw.Available && c.applied != nil && !c.hold && now.Sub(c.readAt) >= readBackEvery
 	pwr, pwrOn := c.pwrFrame(in)
@@ -417,7 +446,7 @@ func (c *Controller) step(ctx context.Context) {
 	if write != nil {
 		err := c.write(write)
 		c.mu.Lock()
-		c.written(write, err, now)
+		c.written(written, err, now)
 		c.mu.Unlock()
 	}
 	if readBack {
@@ -436,6 +465,35 @@ func (c *Controller) step(ctx context.Context) {
 	if checkInternet {
 		go c.checkInternet(ctx)
 	}
+}
+
+// render is what the renderer needs for a look (task 315): the hardware's levels and the pattern
+// trigger, the configured brightness, the night's dimming of what is shown. The caller holds mu.
+func (c *Controller) render(shown Shown) Render {
+	return Render{PatternTrigger: c.hw.PatternTrigger && !c.noPattern, MaxBrightness: max(c.hw.MaxBrightness, 1), Brightness: c.cfg.Brightness, Dim: shown.Dim}
+}
+
+// loadModule is Probe's loader: the hook, or the helper. A failure is logged once per message -
+// a kernel without the module answers the same every minute.
+func (c *Controller) loadModule(name string) error {
+	var err error
+	if c.LoadModule != nil {
+		err = c.LoadModule(name)
+	} else {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		err = system.Priv.LoadLEDModule(ctx, name)
+	}
+	if err != nil {
+		c.mu.Lock()
+		logged := c.moduleErr == err.Error()
+		c.moduleErr = err.Error()
+		c.mu.Unlock()
+		if !logged {
+			c.log().Warn("status LED: the kernel module cannot be loaded, double is shown as flash", "module", name, "err", err)
+		}
+	}
+	return err
 }
 
 func (c *Controller) write(frame []priv.LEDWrite) error {
@@ -514,7 +572,7 @@ func (c *Controller) readBack(now time.Time) {
 		}
 		if w.Trigger == "none" {
 			if br, err := os.ReadFile(c.join("sys/class/leds", w.LED, "brightness")); err == nil {
-				if v := strings.TrimSpace(string(br)); v != "" && v != "0" {
+				if v := strings.TrimSpace(string(br)); v != "" && v != strconv.Itoa(w.Brightness) {
 					diff = w.LED + ": brightness " + v
 					break
 				}
@@ -546,7 +604,7 @@ func (c *Controller) readBack(now time.Time) {
 
 // evaluate turns this refresh's readings into the active states; the caller holds mu. A source that
 // did not answer keeps what its states were (unknown is not fine).
-func (c *Controller) evaluate(now time.Time, rows []system.UnitRow, unitsOK bool, warns []warnings.Warning, update string, addons int) {
+func (c *Controller) evaluate(now time.Time, rows []system.UnitRow, unitsOK bool, warns []warnings.Warning, update string, addons int, radio []RadioLoad) {
 	cond := map[string]string{}
 	known := map[string]bool{}
 	if c.exists("var/status") {
@@ -663,6 +721,36 @@ func (c *Controller) evaluate(now time.Time, rows []system.UnitRow, unitsOK bool
 			cond[StateServiceFailed] = strings.Join(slices.Compact(all), ", ")
 		}
 	}
+	levels := map[string]int{}
+	if c.Src.Radio != nil {
+		// task 316: the radio load's levels, with hysteresis, the highest wins; the detail names
+		// the interface with the highest value
+		known[StateRadioDutyCycle], known[StateRadioCarrierSense] = true, true
+		if c.radioLevels == nil {
+			c.radioLevels = map[string]int{}
+		}
+		for _, id := range RadioStates {
+			value, iface, have := -1, "", false
+			for _, l := range radio {
+				v, ok := l.DutyCycle, true
+				if id == StateRadioCarrierSense {
+					v, ok = l.CarrierSense, l.HasCS
+				}
+				if ok && (!have || v > value) {
+					value, iface, have = v, l.Interface, true
+				}
+			}
+			lv := 0
+			if have {
+				lv = RadioLevelOf(c.cfg.Radio.Levels(id), value, c.radioLevels[id])
+			}
+			c.radioLevels[id] = lv
+			if lv > 0 {
+				cond[id] = fmt.Sprintf("%s %d %%", iface, value)
+				levels[id] = lv
+			}
+		}
+	}
 	if c.Src.SystemUpdate != nil {
 		known[StateSystemUpdate] = true
 		if update != "" {
@@ -686,7 +774,7 @@ func (c *Controller) evaluate(now time.Time, rows []system.UnitRow, unitsOK bool
 			continue
 		}
 		if a, ok := c.active[id]; ok {
-			a.Detail = detail
+			a.Detail, a.Level = detail, levels[id]
 			c.active[id] = a
 			continue
 		}
@@ -703,7 +791,7 @@ func (c *Controller) evaluate(now time.Time, rows []system.UnitRow, unitsOK bool
 			since = first
 			delete(c.pending, id)
 		}
-		c.active[id] = Activity{Since: since, Detail: detail}
+		c.active[id] = Activity{Since: since, Detail: detail, Level: levels[id]}
 		if slices.Contains(ErrorStates, id) {
 			c.log().Warn("status LED: "+id, "detail", detail)
 		}
@@ -899,11 +987,13 @@ type PWRView struct {
 	Error   bool `json:"error"`
 }
 
-// Capabilities are what the hardware can show.
+// Capabilities are what the hardware can show: the preset colours, the patterns, and whether the
+// LED has levels (then any #rrggbb is mixed and the brightness settings apply).
 type Capabilities struct {
-	Colors     []string `json:"colors"`
-	Patterns   []string `json:"patterns"`
-	Brightness bool     `json:"brightness"`
+	Colors        []string `json:"colors"`
+	Patterns      []string `json:"patterns"`
+	Brightness    bool     `json:"brightness"`
+	MaxBrightness int      `json:"max_brightness,omitempty"`
 }
 
 // StateView is GET /led/state: what the LED shows now and why, and what else is active below it.
@@ -965,7 +1055,7 @@ func (c *Controller) State() StateView {
 	}
 	v := StateView{Available: c.hw.Available, Reason: c.hw.Reason, Shown: ShownView{Shown: shown, Since: since}, Active: []ActiveView{}, Overrides: in.Overrides,
 		Locate: c.locate, Preview: c.preview, Night: NightActive(c.cfg.Night, now, c.loc), Booting: c.booting, Conflict: c.conflict, WriteError: c.writeErr,
-		Capabilities: Capabilities{Colors: c.hw.Colors, Patterns: c.hw.Patterns}}
+		Capabilities: Capabilities{Colors: c.hw.Colors, Patterns: c.hw.Patterns, Brightness: c.hw.Brightness, MaxBrightness: c.hw.MaxBrightness}}
 	if v.Capabilities.Colors == nil {
 		v.Capabilities = Capabilities{Colors: Colors, Patterns: Patterns}
 	}
