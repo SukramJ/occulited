@@ -78,14 +78,16 @@ func (r Root) ReadVersion() Version {
 type Status struct {
 	Hostname string  `json:"hostname"`
 	Version  Version `json:"version"`
-	// Occulited is occulited's own build (main.version: the commit, "-hot" for a hot deploy; task 133)
-	Occulited string    `json:"occulited_version,omitempty"`
-	UptimeS   int64     `json:"uptime_s"`
-	Load      []float64 `json:"load"`
-	MemTotal  int64     `json:"mem_total_kb"`
-	MemAvail  int64     `json:"mem_available_kb"`
-	Disks     []Disk    `json:"disks"`
-	Time      time.Time `json:"time"`
+	// Occulited is occulited's own version (main.version, task 133): the image version its commit is
+	// tagged with, `git describe` between build rounds (task 9); OcculitedCommit the commit itself
+	Occulited       string    `json:"occulited_version,omitempty"`
+	OcculitedCommit string    `json:"occulited_commit,omitempty"`
+	UptimeS         int64     `json:"uptime_s"`
+	Load            []float64 `json:"load"`
+	MemTotal        int64     `json:"mem_total_kb"`
+	MemAvail        int64     `json:"mem_available_kb"`
+	Disks           []Disk    `json:"disks"`
+	Time            time.Time `json:"time"`
 	// Timezone is the zone name (Europe/Berlin) the Network page shows too; TZ is the POSIX
 	// string of /etc/config/TZ (CET-1CEST-2,M3.5.0/02:00:00,…), sent only when it is not the same.
 	// The Status page showed the POSIX string, which nobody reads and which wraps on a phone.

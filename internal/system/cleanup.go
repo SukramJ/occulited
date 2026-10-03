@@ -1,6 +1,7 @@
 package system
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -215,27 +216,39 @@ type LeftoverRun struct {
 // (openccu-lite B-264).
 const HardenMarker = "harden-config-dirs.done"
 
+// HardenVersion is the hardening's current pass (openccu-lite task 312). A marker with a lower
+// version - 0 for one written before the field existed - runs the hardening once more: what a new
+// pass adds reaches the systems the earlier one already ran on. Raise it when the pass grows.
+//   - 1: B-257/B-264, world-writable directories under config, the empty addons/mh removed;
+//   - 2: task 312, the files under the CCU's addons/mh lose their world-writable bit as well.
+const HardenVersion = 2
+
 // HardenRun is what the hardening did, as its marker keeps it.
 type HardenRun struct {
 	At       string   `json:"at"`
+	Version  int      `json:"version,omitempty"`
 	Hardened []string `json:"hardened"`
 }
 
-// HardenConfigDirsOnce runs hardenConfigDirs unless its own marker says it ran (openccu-lite
-// B-264). B-257 put the hardening into the leftovers pass, whose marker every system that ran an
+// HardenConfigDirsOnce runs hardenConfigDirs unless its own marker says the current pass
+// (HardenVersion) ran (openccu-lite B-264, task 312). B-257 put the hardening into the leftovers pass, whose marker every system that ran an
 // image with task 250 already had (dev.24 to dev.28, the first public release among them): there
 // the pass never ran again and addons/mh stayed 0777. A marker of its own makes it run once on every
 // system, those included, whatever the leftovers pass did. Not while the ReGa runs (the CCU's own
 // processes may still need the directories as they are). ran is false when the marker was there.
 func (r Root) HardenConfigDirsOnce(stateDir string, now time.Time) (run HardenRun, ran bool, err error) {
 	marker := filepath.Join(stateDir, HardenMarker)
-	if _, err := os.Stat(marker); err == nil {
-		return HardenRun{}, false, nil
+	if b, err := os.ReadFile(marker); err == nil {
+		// an unreadable marker counts as an old one: the pass only ever takes bits away
+		var prev HardenRun
+		if json.Unmarshal(b, &prev) == nil && prev.Version >= HardenVersion {
+			return HardenRun{}, false, nil
+		}
 	}
 	if r.HasReGa() {
 		return HardenRun{}, false, fmt.Errorf("%w: the ReGa runs on this system", ErrMigrationIncomplete)
 	}
-	run = HardenRun{At: now.UTC().Format(time.RFC3339), Hardened: r.hardenConfigDirs()}
+	run = HardenRun{At: now.UTC().Format(time.RFC3339), Version: HardenVersion, Hardened: r.hardenConfigDirs()}
 	if run.Hardened == nil {
 		run.Hardened = []string{}
 	}
@@ -252,9 +265,13 @@ func (r Root) HardenConfigDirsOnce(stateDir string, now time.Time) (run HardenRu
 // lite nothing reads it, so it is the one directory under config any local user may write - a place
 // to drop a file, and a hazard if a later feature ever walks addons/* as root. This removes it when
 // it is empty, and takes the world-writable bit off every directory under config otherwise (a sweep
-// for any 0777 directory, not mh alone). It runs as occulited (occulite) and fixes the mode through
-// the privilege helper; a directory occulite cannot enter (a daemon's 0700 tree) is not world-
-// writable and is skipped. Returns the paths (relative to config) it changed.
+// for any 0777 directory, not mh alone). Inside addons/mh the files lose the bit as well (task 312:
+// the CCU leaves its CloudMatic scripts there 0777, root's, and any local user could rewrite them);
+// nothing in it is removed but the empty directory, so what a user may still want stays. Files
+// elsewhere under config keep their modes: they belong to the daemons and the addons. It runs as
+// occulited (occulite) and fixes the mode through the privilege helper, which takes bits away there
+// and never adds one (B-295); a directory occulite cannot enter (a daemon's 0700 tree) is not
+// world-writable and is skipped. Returns the paths (relative to config) it changed.
 func (r Root) hardenConfigDirs() []string {
 	base := r.join("/usr/local/etc/config")
 	var fixed []string
@@ -277,7 +294,8 @@ func (r Root) hardenConfigDirs() []string {
 		if walkErr != nil {
 			return nil // a directory occulite cannot enter is not world-writable; skip it
 		}
-		if !d.IsDir() {
+		// a regular file under addons/mh: a link is never followed, and its own mode means nothing
+		if !d.IsDir() && (!d.Type().IsRegular() || !strings.HasPrefix(p, mh+string(filepath.Separator))) {
 			return nil
 		}
 		fi, err := d.Info()
@@ -286,12 +304,18 @@ func (r Root) hardenConfigDirs() []string {
 		}
 		mode := fi.Mode().Perm() &^ 0o002 // take the world-writable bit off, keep the rest
 		if err := Priv.Chmod(p, mode); err != nil {
-			slog.Warn("ccu leftovers: could not take the world-writable bit off a directory", "path", p, "err", err)
+			slog.Warn("ccu leftovers: could not take the world-writable bit off", "path", p, "err", err)
 			return nil
 		}
 		rel := strings.TrimPrefix(strings.TrimPrefix(p, base), "/")
 		fixed = append(fixed, fmt.Sprintf("%s (o-w, now %04o)", rel, mode))
-		slog.Info("ccu leftovers: took the world-writable bit off a directory", "path", rel, "mode", fmt.Sprintf("%04o", mode))
+		// a directory a line of its own; mh's files (some 70 on a switched CCU) only at debug: the
+		// caller's summary names them all
+		lvl := slog.LevelInfo
+		if !d.IsDir() {
+			lvl = slog.LevelDebug
+		}
+		slog.Log(context.Background(), lvl, "ccu leftovers: took the world-writable bit off", "path", rel, "mode", fmt.Sprintf("%04o", mode))
 		return nil
 	})
 	return fixed

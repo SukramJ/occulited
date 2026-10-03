@@ -241,9 +241,15 @@ func (r *recorder) Devices(iface, op string, addrs []string) {
 	r.push(Message{Type: "devices", Interface: iface, Op: op, Addresses: addrs})
 }
 
+// testWait bounds every wait for something that is going to happen: the waits end on the event
+// itself, and the bound only says when to give up. It is generous on purpose - a CI runner beside
+// an image build (load 14-19, the race detector) took more than 5 s for one callback (occulited
+// B-40); a test that fails only takes this long when it fails.
+const testWait = 30 * time.Second
+
 func (r *recorder) next(t *testing.T, typ string) Message {
 	t.Helper()
-	deadline := time.After(5 * time.Second)
+	deadline := time.After(testWait)
 	for {
 		select {
 		case m := <-r.ch:
@@ -251,7 +257,7 @@ func (r *recorder) next(t *testing.T, typ string) Message {
 				return m
 			}
 		case <-deadline:
-			t.Fatalf("no %s message within 5 s", typ)
+			t.Fatalf("no %s message within %s", typ, testWait)
 		}
 	}
 }
@@ -268,7 +274,7 @@ func startSub(t *testing.T, cfg Config) (*Subscriber, context.CancelFunc) {
 		cfg.Watch = 50 * time.Millisecond
 	}
 	if cfg.InitTimeout == 0 {
-		cfg.InitTimeout = 3 * time.Second
+		cfg.InitTimeout = testWait // a test that wants an init to fail sets its own bound
 	}
 	if cfg.InitGrace == 0 {
 		cfg.InitGrace = time.Millisecond // the fakes call back inside init; anything later is a restart
@@ -277,8 +283,13 @@ func startSub(t *testing.T, cfg Config) (*Subscriber, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { defer close(done); _ = s.Run(ctx) }()
-	for i := 0; i < 100 && s.Base() == ""; i++ {
+	for end := time.Now().Add(testWait); s.Base() == "" && time.Now().Before(end); {
 		time.Sleep(10 * time.Millisecond)
+	}
+	if s.Base() == "" {
+		cancel()
+		<-done
+		t.Fatalf("the listener did not start within %s", testWait)
 	}
 	t.Cleanup(func() { cancel(); <-done })
 	return s, func() { cancel(); <-done }
@@ -298,15 +309,34 @@ func waitRegistered(t *testing.T, s *Subscriber, name string) {
 	})
 }
 
+// pastInitGrace waits until the interface's last init lies further back than startSub's
+// InitGrace, so that a call the daemon makes now is its own and not one of the init's - on a fast
+// machine the fake's restart could otherwise come within the grace and go unnoticed.
+func pastInitGrace(t *testing.T, s *Subscriber, name string) {
+	t.Helper()
+	waitFor(t, "the init grace of "+name, func() bool {
+		for _, i := range s.Status() {
+			if i.Name == name {
+				at, err := time.Parse(time.RFC3339Nano, i.LastInit)
+				return err == nil && time.Since(at) > 10*time.Millisecond
+			}
+		}
+		return false
+	})
+}
+
 func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	for i := 0; i < 200; i++ {
+	for end := time.Now().Add(testWait); time.Now().Before(end); {
 		if cond() {
 			return
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
-	t.Fatalf("waiting for %s", what)
+	if cond() {
+		return
+	}
+	t.Fatalf("waiting for %s: not within %s", what, testWait)
 }
 
 func TestRegistersAnswersAndForwards(t *testing.T) {
@@ -428,7 +458,7 @@ func TestReplayFromTheRing(t *testing.T) {
 		if m.Type != "event" || m.Value != "3" {
 			t.Fatalf("live %+v", m)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(testWait):
 		t.Fatal("no live message")
 	}
 }
@@ -441,6 +471,7 @@ func TestDeregistersOnStopAndAfterARestartThatKeptTheEntry(t *testing.T) {
 	waitRegistered(t, s, "HmIP-RF")
 	r := newRecorder()
 	s.Attach(r)
+	pastInitGrace(t, s, "HmIP-RF")
 	// the daemon restarts and calls listDevices on its own: restored, the reader is told, and
 	// the entry is registered afresh (B-286)
 	hmip.restart()
@@ -474,6 +505,7 @@ func TestReinitsAKeptEntryAfterTheDaemonsRestart(t *testing.T) {
 	waitRegistered(t, s, "HmIP-RF")
 	r := newRecorder()
 	s.Attach(r)
+	pastInitGrace(t, s, "HmIP-RF")
 	hmip.restart()
 	if m := r.next(t, "interface"); m.State != "restarted" {
 		t.Fatalf("restarted %+v", m)
@@ -501,7 +533,10 @@ func TestReinitsAKeptEntryAfterTheDaemonsRestart(t *testing.T) {
 
 func TestPingsAfterSilenceAndRegistersAgainWhenForgotten(t *testing.T) {
 	rfd := newFakeDaemon(t)
-	s, _ := startSub(t, Config{PingAfter: 300 * time.Millisecond, PingTimeout: 200 * time.Millisecond})
+	// the PONG must come back within PingTimeout or the answered ping counts as unanswered: a
+	// second, not 200 ms, for a loaded runner (B-40)
+	const pingTimeout = time.Second
+	s, _ := startSub(t, Config{PingAfter: 300 * time.Millisecond, PingTimeout: pingTimeout})
 	s.Set([]Entry{{Name: "BidCos-RF", URL: rfd.url()}})
 	waitRegistered(t, s, "BidCos-RF")
 	// silence: a ping goes out, the PONG comes back, the state stays up and nothing re-inits
@@ -523,8 +558,9 @@ func TestPingsAfterSilenceAndRegistersAgainWhenForgotten(t *testing.T) {
 	if v := s.View(); !v.Connected || len(v.Interfaces) != 1 || v.Interfaces[0].State != "up" {
 		t.Fatalf("view %+v", v)
 	}
-	// a daemon that forgot us and calls back on the new registration is not stuck (B-201)
-	time.Sleep(300 * time.Millisecond)
+	// a daemon that forgot us and calls back on the new registration is not stuck (B-201): the
+	// check runs once PingTimeout has passed since the re-registration
+	time.Sleep(pingTimeout + 300*time.Millisecond)
 	if st := s.Stalls(); len(st) != 0 {
 		t.Fatalf("a restart taken for a stall: %+v", st)
 	}
@@ -558,7 +594,9 @@ func TestDeliveryStall(t *testing.T) {
 // B-201: the daemon's calls do not answer at all (rfd held in an init). An answered call ends it.
 func TestCallStall(t *testing.T) {
 	rfd := newFakeDaemon(t)
-	s, _ := startSub(t, Config{PingAfter: 200 * time.Millisecond, PingTimeout: 150 * time.Millisecond, InitTimeout: 200 * time.Millisecond})
+	// InitTimeout bounds the held calls; a second rather than 200 ms, so that the re-init after the
+	// hold ends is not taken for another stall on a loaded runner (B-40)
+	s, _ := startSub(t, Config{PingAfter: 200 * time.Millisecond, PingTimeout: 150 * time.Millisecond, InitTimeout: time.Second})
 	s.Set([]Entry{{Name: "BidCos-RF", URL: rfd.url()}})
 	waitRegistered(t, s, "BidCos-RF")
 	hang := make(chan struct{})
@@ -575,7 +613,9 @@ func TestCallStall(t *testing.T) {
 }
 
 func TestDaemonDownThenBack(t *testing.T) {
-	s, _ := startSub(t, Config{})
+	// the call to a port nobody listens on can end only at the init's bound, so the test keeps a
+	// short one of its own rather than startSub's generous default
+	s, _ := startSub(t, Config{InitTimeout: 3 * time.Second})
 	r := newRecorder()
 	s.Attach(r)
 	// a port nobody listens on: down, retried with backoff, and never fatal
@@ -655,7 +695,7 @@ func TestCallbackTrace(t *testing.T) {
 	waitRegistered(t, s, "BidCos-RF")
 	rfd.send([][3]string{{"A:1", "K", "1"}}, false)
 	rfd.send([][3]string{{"A:1", "K", "2"}, {"A:2", "K", "3"}}, true)
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(testWait)
 	for {
 		tr.mu.Lock()
 		n := len(tr.lines)
@@ -743,7 +783,7 @@ func TestLateInitStaleEntryIsNotTaken(t *testing.T) {
 func TestInitTimeoutPerInterface(t *testing.T) {
 	vd, rfd := newFakeDaemon(t), newFakeDaemon(t)
 	vd.slow, rfd.slow = 300*time.Millisecond, 300*time.Millisecond
-	s, _ := startSub(t, Config{InitTimeout: 150 * time.Millisecond, InitTimeouts: map[string]time.Duration{"VirtualDevices": 2 * time.Second}, PingAfter: time.Hour})
+	s, _ := startSub(t, Config{InitTimeout: 150 * time.Millisecond, InitTimeouts: map[string]time.Duration{"VirtualDevices": testWait}, PingAfter: time.Hour})
 	s.Set([]Entry{{Name: "VirtualDevices", URL: vd.url()}, {Name: "BidCos-RF", URL: rfd.url()}})
 	waitRegistered(t, s, "VirtualDevices")
 	waitFor(t, "BidCos-RF down", func() bool {
