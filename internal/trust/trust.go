@@ -76,6 +76,8 @@ type Info struct {
 	NotBefore   time.Time `json:"not_before"`
 	NotAfter    time.Time `json:"not_after"`
 	Fingerprint string    `json:"fingerprint"`
+	// SPKI is the SHA-256 of the public key, base64 (task 232: what a pin matches)
+	SPKI string `json:"spki"`
 	// CA: a certificate authority; false: a server's own certificate, pinned
 	CA          bool      `json:"ca"`
 	SelfSigned  bool      `json:"self_signed"`
@@ -133,7 +135,7 @@ func Describe(c *x509.Certificate, now time.Time) Info {
 	}
 	return Info{
 		ID: idOf(c), Subject: c.Subject.String(), Issuer: c.Issuer.String(), NotBefore: c.NotBefore, NotAfter: c.NotAfter,
-		Fingerprint: Fingerprint(c), CA: c.IsCA, SelfSigned: bytes.Equal(c.RawIssuer, c.RawSubject) && c.CheckSignature(c.SignatureAlgorithm, c.RawTBSCertificate, c.Signature) == nil,
+		Fingerprint: Fingerprint(c), SPKI: SPKI(c), CA: c.IsCA, SelfSigned: bytes.Equal(c.RawIssuer, c.RawSubject) && c.CheckSignature(c.SignatureAlgorithm, c.RawTBSCertificate, c.Signature) == nil,
 		Names: names, Expired: now.After(c.NotAfter), ExpiresSoon: !now.After(c.NotAfter) && c.NotAfter.Sub(now) < ExpiresSoon,
 	}
 }
@@ -214,6 +216,11 @@ type file struct {
 	// Failures are the TLS handshakes occulited's own clients lost to a CA their store does not
 	// hold (task 231, strict): one per host, until the CA is added or the host answers again.
 	Failures []Failure `json:"failures,omitempty"`
+	// Pins are the pinned public keys per purpose (task 232), PinFailures the connections whose
+	// chain matched none of them: one per purpose and host, until a pin matches or the host
+	// verifies again.
+	Pins        []Pin        `json:"pins,omitempty"`
+	PinFailures []PinFailure `json:"pin_failures,omitempty"`
 }
 
 func (s *Store) load() (file, error) {

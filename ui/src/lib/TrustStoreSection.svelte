@@ -14,17 +14,20 @@
     import {ask} from './dialog.svelte';
     import {t} from './i18n.svelte';
     import Disclosure from './Disclosure.svelte';
+    import Pins from './Pins.svelte';
     import SearchInput from './SearchInput.svelte';
     import SectionHead from './SectionHead.svelte';
-    import {commonName, copyTargets, matches, removalIsDanger, shortFingerprint, sourceText, storeTitle, uploadBody, type StoreID, type TrustCert, type TrustStore} from './trust';
+    import {commonName, copyTargets, isPinPurpose, matches, removalIsDanger, shortFingerprint, sourceText, storeTitle, uploadBody, type PinFailure, type StoreID, type TrustCert, type TrustStore} from './trust';
 
     interface Props {
         store: TrustStore;
         stores: TrustStore[];
         /** reloads the whole view after a change (a copy changes another store too) */
         reload: () => Promise<void>;
+        /** openccu-lite task 232: the page's Re-pin for this store, handed down to its pins */
+        repin?: PinFailure | null;
     }
-    let {store, stores, reload}: Props = $props();
+    let {store, stores, reload, repin = null}: Props = $props();
     const admin = $derived(auth.role === 'admin');
     const title = $derived(storeTitle(store.id, t));
     let addOpen = $state(false);
@@ -233,6 +236,10 @@
                 {/each}
             </tbody>
         </table>
+    {/if}
+    {#if isPinPurpose(store.id)}
+        <!-- openccu-lite task 232: the purpose's pinned public keys, below its certificates -->
+        <Pins purpose={store.id} pins={store.pins ?? []} {reload} {repin} level={2} />
     {/if}
 </section>
 

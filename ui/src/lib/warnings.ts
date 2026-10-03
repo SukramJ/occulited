@@ -45,7 +45,7 @@ export interface Warning {
     id: string;
     variant: string;
     severity: Severity;
-    params?: {addons?: WarnAddon[]; account?: string; at?: string; path?: string; days?: number; verdict?: string; reasons?: StorageReason[]; devices?: WarnDevice[]; mode?: string; reason?: string; adapter?: string; cause?: string; line?: string; families?: string[]; unreachable?: number; total?: number; port?: number; addresses?: string; sgtin?: string; address?: string; name?: string; detail?: string; label?: string; dir?: string; target?: string; share?: string; reconnecting?: boolean; interface?: string; kind?: string; since?: string; checked?: boolean; listeners?: StallListener[]; folder?: string; device?: string; running?: string; newest?: string; node?: string; drops_off?: boolean; hosts?: string[]; issuer?: string; store?: string; candidate?: boolean; from?: string; module?: string; count?: number; units?: WarnLoopUnit[]; fails?: number; restarts?: number; result?: string; first?: string; last?: string; written?: number; calc?: number; current?: number; offset?: number; wraps_at?: string; clock_state?: string; behind?: boolean; source?: string};
+    params?: {addons?: WarnAddon[]; account?: string; at?: string; path?: string; days?: number; verdict?: string; reasons?: StorageReason[]; devices?: WarnDevice[]; mode?: string; reason?: string; adapter?: string; cause?: string; line?: string; families?: string[]; unreachable?: number; total?: number; port?: number; addresses?: string; sgtin?: string; address?: string; name?: string; detail?: string; label?: string; dir?: string; target?: string; share?: string; reconnecting?: boolean; interface?: string; kind?: string; since?: string; checked?: boolean; listeners?: StallListener[]; folder?: string; device?: string; running?: string; newest?: string; node?: string; drops_off?: boolean; hosts?: string[]; issuer?: string; store?: string; candidate?: boolean; from?: string; module?: string; version?: string; minimum?: string; count?: number; units?: WarnLoopUnit[]; fails?: number; restarts?: number; result?: string; first?: string; last?: string; written?: number; calc?: number; current?: number; offset?: number; wraps_at?: string; clock_state?: string; behind?: boolean; source?: string; duty_cycle?: number; carrier_sense?: number; purpose?: string; host?: string; subject?: string; fingerprint?: string; spki?: string};
     href?: string;
     /** this administrator's own silence (D-64) */
     silenced?: Silence;
@@ -122,6 +122,12 @@ export function warningText(w: Warning, words: Words): string {
             const base = t('{hosts}: the server presents a certificate from {issuer}, which the {store} trust store does not hold. The call fails until the authority is added.', {hosts, issuer: p.issuer ?? '', store: p.store ?? 'occulited'});
             return p.candidate ? `${base} ${t('The System store holds it: one click on the Trust stores page copies it.')}` : base;
         }
+        case 'trust-pin': {
+            // openccu-lite task 232: a connection's certificate matched none of its purpose's pins
+            const store = p.purpose === 'acme' ? 'ACME' : t('OAuth / OIDC');
+            const base = t('{host} presents a certificate none of the {store} store\'s pins match. The connection fails until the key is pinned on the Trust stores page (Re-pin) or the server presents a pinned key again.', {host: String(p.host ?? w.variant), store});
+            return p.fingerprint ? `${base} ${t('Presented: {subject}, SHA-256 {fingerprint}.', {subject: String(p.subject ?? ''), fingerprint: String(p.fingerprint)})}` : base;
+        }
         case 'app-public':
             return t('Control is public: anyone who reaches the web port operates the house, as {account}, without a login.', {account: String(p.account ?? w.variant)});
         case 'unclean':
@@ -174,6 +180,12 @@ export function warningText(w: Warning, words: Words): string {
             if (w.variant === 'adapter-exchange-rejected' && p.cause === 'refused') return t("HmIP-RF is down: eQ-3's key server refused to move the HmIP network of this system to the module {adapter}. The Interfaces page names the ways out: the module the network is on now, the saved files of an earlier module, or a fresh start with this module (every HmIP device is paired again).", {adapter: p.adapter ?? ''});
             if (w.variant === 'adapter-exchange-rejected') return t("HmIP-RF is down: eQ-3's key server rejected the adapter exchange to {adapter}. This system's HmIP devices belong to the adapter it was set up with, and the key server does not hand them to this one. Put the previous adapter back, or set HmIP up afresh (all HmIP devices have to be paired again).", {adapter: p.adapter ?? ''});
             return t('HmIP-RF is down: hmipserver stopped on a known error ({code}).', {code: w.variant});
+        case 'hmip-local-swap':
+            // openccu-lite B-289: the network was moved onto the module in use without its key
+            return t('HmIP-RF runs on module {module} without the HmIP network\'s key: the network was moved onto it from {from}, but its application firmware {version} is below {minimum} and could not take the key. HmIP devices do not answer, and eQ-3\'s key server refuses every move away from it. The way out is the saved files of {from} - a kept identity or a backup; update the module\'s firmware before the network moves onto it again.', {module: p.module ?? w.variant, from: p.from ?? '', version: p.version ?? '', minimum: p.minimum ?? '2.8.0'});
+        case 'hmip-module-missing':
+            // openccu-lite task 318 (D-120): the module holding the HmIP network is gone; no other is taken unasked
+            return t('HmIP-RF is down: the radio module {module}, which holds the HmIP network, is missing or did not answer. hmipserver runs its virtual devices only, and no other module is taken without asking. Plug it back in, or move HmIP-RF to another module on the Interfaces page.', {module: p.module ?? w.variant});
         case 'rpc-stalled':
             // B-201: an interface process held by a callback listener that never answers
             return stallSentence({interface: p.interface ?? w.variant, kind: p.kind ?? 'delivery', checked: p.checked ?? false, stuck: p.listeners ?? []}, t);
@@ -190,6 +202,12 @@ export function warningText(w: Warning, words: Words): string {
         case 'radio-module-unusable':
             // task 137: an HmIP-RFUSB the detection found but could not read
             return t('The radio module {device} at {node} does not answer with a usable firmware: the system has no radio on it. Flash it in the radio firmware section to use it.', {device: p.device ?? '', node: p.node ?? w.variant});
+        case 'radio-load': {
+            // openccu-lite task 316: the radio's load high - the duty cycle above 50 %, the carrier sense above 10 %
+            const kinds = w.variant.split(',');
+            const parts = [kinds.includes('dc') ? t('a duty cycle of {n} %', {n: p.duty_cycle ?? '?'}) : '', kinds.includes('cs') ? t('a carrier sense of {n} %', {n: p.carrier_sense ?? '?'}) : ''].filter(Boolean);
+            return t('The radio is busy: {interface} reports {what}. Devices may answer late or not at all until the load falls; the Interfaces page shows the course.', {interface: p.interface ?? '', what: parts.join(t(' and '))});
+        }
         case 'hb-rf-eth':
             // task 218: a configured board that does not answer; the system retries in the background
             if (p.reconnecting) return t('The HB-RF-ETH at {address} lost its connection: the radio module on it is not available until it is back. The system reconnects it on its own.', {address: p.address ?? w.variant});
@@ -283,6 +301,7 @@ const LINK_LABELS: Record<string, string> = {
     meta: 'Control',
     'app-public': 'Settings',
     'trust-ca': 'Trust stores',
+    'trust-pin': 'Trust stores',
     unclean: 'Log',
     'backup-target': 'Backup',
     'backup-userfs': 'Backup',
@@ -297,8 +316,11 @@ const LINK_LABELS: Record<string, string> = {
     'occulited-crash-loop': 'Log',
     'security-key': 'Set security key',
     'hmip-adapter': 'Interfaces',
+    'hmip-local-swap': 'Interfaces',
+    'hmip-module-missing': 'Interfaces',
     'devices-import': 'Interfaces',
     'hb-rf-eth': 'LAN devices',
+    'radio-load': 'Interfaces',
     'radio-firmware': 'Radio firmware',
     'addon-update': 'Manage addons',
     'radio-module-unusable': 'Radio firmware',

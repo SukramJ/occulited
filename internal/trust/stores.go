@@ -136,12 +136,16 @@ type StoreView struct {
 	// Editable: additions and removals work (the system store needs the helper and the rebuild)
 	Editable     bool   `json:"editable"`
 	Certificates []Info `json:"certificates"`
+	// Pins are the purpose's pinned public keys (task 232); only the OIDC and ACME stores have them
+	Pins []Pin `json:"pins,omitempty"`
 }
 
 // TrustView is GET /trust's answer.
 type TrustView struct {
 	Stores  []StoreView `json:"stores"`
 	Pending []Failure   `json:"pending"`
+	// PinFailures are the connections whose chain matched none of their purpose's pins (task 232)
+	PinFailures []PinFailure `json:"pin_failures"`
 }
 
 func (s *Store) log() *slog.Logger {
@@ -639,16 +643,20 @@ func (s *Store) View() (TrustView, error) {
 	if err != nil {
 		return TrustView{}, err
 	}
-	v := TrustView{Stores: []StoreView{}, Pending: []Failure{}}
+	v := TrustView{Stores: []StoreView{}, Pending: []Failure{}, PinFailures: []PinFailure{}}
 	for _, id := range StoreIDs {
 		es, _ := s.entries(f, id)
 		sv := StoreView{ID: id, Editable: id != StoreSystem || (s.Sys != nil && s.hasBundle()), Certificates: []Info{}}
 		for _, e := range es {
 			sv.Certificates = append(sv.Certificates, e.Info)
 		}
+		if validPinPurpose(id) {
+			sv.Pins = pinsOf(f, id)
+		}
 		v.Stores = append(v.Stores, sv)
 	}
 	v.Pending = append(v.Pending, f.Failures...)
+	v.PinFailures = append(v.PinFailures, f.PinFailures...)
 	return v, nil
 }
 

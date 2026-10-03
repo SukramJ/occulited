@@ -26,7 +26,8 @@
     import SystemTitle from '../lib/SystemTitle.svelte';
     import TrustStoreSection from '../lib/TrustStoreSection.svelte';
     import Tabs from '../lib/Tabs.svelte';
-    import {STORE_ORDER, commonName, storeFromHash, storeTitle, type StoreID, type TrustFailure, type TrustView} from '../lib/trust';
+    import {STORE_ORDER, commonName, storeFromHash, storeTitle, type PinFailure, type StoreID, type TrustFailure, type TrustView} from '../lib/trust';
+    import {warnFor} from '../lib/systemmenu.svelte';
 
     const life = pageLife();
     const admin = $derived(auth.role === 'admin');
@@ -37,6 +38,13 @@
     let selected = $state<StoreID>(storeFromHash(typeof location === 'undefined' ? '' : location.hash));
     const tabs = $derived((view?.stores ?? []).map((s) => ({id: s.id, label: storeTitle(s.id, t), count: s.certificates.length})));
     const shownStore = $derived(view?.stores.find((s) => s.id === selected));
+    // openccu-lite task 232: a pin failure's Re-pin opens the store's pin panel with the key the
+    // server presents now
+    let repin = $state<PinFailure | null>(null);
+    function startRepin(f: PinFailure) {
+        choose(f.purpose);
+        repin = f;
+    }
 
     /** the chosen store into the URL's anchor, without a jump and without a history entry per tab */
     function choose(id: StoreID) {
@@ -94,7 +102,7 @@
     {#if error}<div class="ol-notice error" data-notice="trust-page-error">{error}</div>{/if}
     {#if notice}<div class="ol-notice" data-notice="trust-page">{notice}</div>{/if}
     {#each view.pending as f (f.store + f.host)}
-        <div class="ol-panel ol-notice-panel err tp-pending" data-trust-pending={f.host}>
+        <div class="ol-panel ol-notice-panel err tp-pending" data-trust-pending={f.host} {...warnFor(['trust-ca'], f.host)}>
             <p>
                 <strong>{t('{host} presents a certificate from {issuer}, which the {store} store does not hold.', {host: f.host, issuer: commonName(f.issuer), store: storeTitle(f.store, t)})}</strong>
                 {t('The call fails until the authority is added.')}
@@ -112,11 +120,33 @@
             <div class="ol-muted tp-error hmm-mono">{f.error}</div>
         </div>
     {/each}
+    {#each view.pin_failures ?? [] as f (f.purpose + f.host)}
+        <!-- openccu-lite task 232: a connection whose certificate matched none of the purpose's pins -->
+        <div class="ol-panel ol-notice-panel err tp-pending" data-trust-pin-failure={f.host} {...warnFor(['trust-pin'], f.host)}>
+            <p>
+                <strong>{t('{host} presents a certificate none of the {store} store\'s pins match.', {host: f.host, store: storeTitle(f.purpose, t)})}</strong>
+                {t('The connection fails until the key is pinned here or the server presents a pinned key again.')}
+            </p>
+            {#if f.chain?.[0]}
+                <dl class="ol-kv tp-presented">
+                    <dt>{t('Presented')}</dt><dd>{commonName(f.chain[0].subject)}</dd>
+                    <dt>SHA-256</dt><dd class="hmm-mono" data-presented-fingerprint>{f.chain[0].fingerprint}</dd>
+                    <dt>{t('Public key')}</dt><dd class="hmm-mono" data-presented-spki>{f.chain[0].spki}</dd>
+                </dl>
+            {/if}
+            {#if admin}
+                <button type="button" class="hmm-button primary" onclick={() => startRepin(f)} disabled={busy !== ''} data-action="trust-repin">{t('Re-pin…')}</button>
+            {:else}
+                <span class="ol-muted">{t('An administrator compares the key with the server\'s and pins it again.')}</span>
+            {/if}
+            <div class="ol-muted tp-error hmm-mono">{f.error}</div>
+        </div>
+    {/each}
     <Tabs {tabs} value={selected} onchange={choose} label={t('Trust stores')} idPrefix="tp" class="tp-tabs" />
     {#if shownStore}
         <div role="tabpanel" id={`tp-panel-${shownStore.id}`} aria-labelledby={`tp-tab-${shownStore.id}`}>
             {#key shownStore.id}
-                <TrustStoreSection store={shownStore} stores={view.stores} reload={load} />
+                <TrustStoreSection store={shownStore} stores={view.stores} reload={load} repin={repin?.purpose === shownStore.id ? repin : null} />
             {/key}
         </div>
     {/if}
@@ -124,6 +154,8 @@
 
 <style>
     .tp-pending p { margin: 10px 0 8px; }
+    .tp-presented { margin: 0 0 10px; gap: 2px 14px; }
+    .tp-presented dd { overflow-wrap: anywhere; min-width: 0; }
     :global(.tp-tabs) { margin: 4px 0 14px; }
     .tp-error { font-size: var(--hmm-font-size-small); margin-top: 8px; overflow-wrap: anywhere; }
 </style>

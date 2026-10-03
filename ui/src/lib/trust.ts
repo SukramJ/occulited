@@ -15,6 +15,8 @@ export interface TrustCert {
     not_before: string;
     not_after: string;
     fingerprint: string;
+    /** the SHA-256 of the public key, base64 (task 232: what a pin matches) */
+    spki: string;
     ca: boolean;
     self_signed: boolean;
     names?: string[];
@@ -31,10 +33,55 @@ export interface TrustCert {
     removable?: boolean;
 }
 
+/** openccu-lite task 232: a pinned public key of the OIDC or ACME store */
+export interface Pin {
+    id: string;
+    purpose: PinPurpose;
+    /** the SHA-256 of the public key, base64 */
+    spki: string;
+    /** with-ca: the CA check as well (the default); only: the pin alone vouches */
+    mode: PinMode;
+    /** the certificate the pin was taken from; absent for a bare hash (a backup pin) */
+    subject?: string;
+    not_after?: string;
+    fingerprint?: string;
+    added: string;
+    added_by?: string;
+}
+export type PinMode = 'with-ca' | 'only';
+export type PinPurpose = 'oidc' | 'acme';
+
+/** a connection whose chain matched none of its purpose's pins */
+export interface PinFailure {
+    purpose: PinPurpose;
+    host: string;
+    at: string;
+    error: string;
+    /** what the server presented, the leaf first */
+    chain?: TrustCert[];
+}
+
+/** one certificate of the chain the purpose's server presents (POST /trust/{store}/pins/peer) */
+export interface PeerCert extends TrustCert {
+    pem: string;
+    /** its key is one of the purpose's pins already */
+    pinned: boolean;
+}
+export interface PeerAnswer {
+    url: string;
+    host: string;
+    chain: PeerCert[];
+    verified: boolean;
+    error?: string;
+    pin_only?: boolean;
+}
+
 export interface TrustStore {
     id: StoreID;
     editable: boolean;
     certificates: TrustCert[];
+    /** only the oidc and acme stores have pins */
+    pins?: Pin[];
 }
 
 /** a TLS handshake one of occulited's own clients lost to an authority its store lacks */
@@ -52,6 +99,39 @@ export interface TrustFailure {
 export interface TrustView {
     stores: TrustStore[];
     pending: TrustFailure[];
+    pin_failures?: PinFailure[];
+}
+
+/** the stores that take pins (the maintainer, 2026-10-03: OIDC and ACME, nothing else) */
+export function isPinPurpose(id: string): id is PinPurpose {
+    return id === 'oidc' || id === 'acme';
+}
+
+/** the mode's words: what the pin is checked besides */
+export function pinModeText(mode: PinMode, t: Translate): string {
+    return mode === 'only' ? t('pin only') : t('with the CA check');
+}
+
+/** the first twelve characters of a base64 key hash, for a table; the whole one is the title */
+export function shortSPKI(spki: string): string {
+    return spki.length > 14 ? spki.slice(0, 12) + '…' : spki;
+}
+
+/** the pin's name in a list: the certificate's common name, or the bare hash */
+export function pinName(p: Pin, t: Translate): string {
+    return p.subject ? commonName(p.subject) : t('Key hash (backup pin)');
+}
+
+/** the leaf of a fetched chain: the first certificate, the one Pin the current certificate takes */
+export function leafOf(chain: PeerCert[]): PeerCert | undefined {
+    return chain[0];
+}
+
+/** whether a typed key hash has the shape the server accepts: 44 base64 characters or 64 hex digits */
+export function looksLikeSPKI(s: string): boolean {
+    const v = s.trim().replace(/^sha256\/\//, '');
+    if (/^[A-Za-z0-9+/]{43}=$/.test(v)) return true;
+    return /^[0-9A-Fa-f]{64}$/.test(v.replace(/[:\s-]/g, ''));
 }
 
 export const STORE_ORDER: StoreID[] = ['system', 'occulited', 'oidc', 'acme'];

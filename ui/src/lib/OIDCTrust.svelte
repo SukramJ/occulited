@@ -13,7 +13,9 @@
     import {ask} from './dialog.svelte';
     import {t} from './i18n.svelte';
     import Help from './Help.svelte';
+    import Pins from './Pins.svelte';
     import {link} from './router.svelte';
+    import {pinModeText, type Pin, type TrustView} from './trust';
 
     interface Anchor {
         id: string;
@@ -40,6 +42,10 @@
         issuer_mismatch?: boolean;
         token_endpoint?: string;
         verified_by?: Anchor & {trusted_here: boolean};
+        /** openccu-lite task 232: what the server presented, the pin that matched */
+        leaf?: Anchor;
+        pinned?: Pin;
+        pin_only?: boolean;
     }
 
     let {issuer = ''}: {issuer?: string} = $props();
@@ -51,12 +57,24 @@
     let test = $state<TestAnswer | null>(null);
     let chain = $state<{chain: PeerCert[]; verified: boolean; error: string} | null>(null);
 
+    // openccu-lite task 232: the OIDC store's pins, from the Trust stores API (admins)
+    let pins = $state<Pin[]>([]);
+    let pinsRef = $state<Pins | null>(null);
+    async function loadPins() {
+        try {
+            const v = await api.get<TrustView>('/api/system/v1/trust');
+            pins = v.stores.find((s) => s.id === 'oidc')?.pins ?? [];
+        } catch {
+            pins = [];
+        }
+    }
     async function load() {
         try {
             anchors = (await api.get<{anchors: Anchor[]}>('/api/auth/v1/oidc/trust')).anchors;
         } catch (e) {
             error = (e as Error).message;
         }
+        await loadPins();
     }
     onMount(load);
 
@@ -202,12 +220,21 @@
                 {:else if !test.tls}
                     {t('Plain http: no certificate is checked, and the client secret travels in clear text.')}
                 {/if}
+                {#if test.pinned}
+                    <span data-oidc-test-pinned>{test.pin_only ? t('The pinned key matched; it alone vouches for the connection (pin only).') : t('The pinned key matched ({mode}).', {mode: pinModeText(test.pinned.mode, t)})}</span>
+                {:else if test.tls && test.leaf}
+                    <!-- openccu-lite task 232: Pin the current certificate after a successful check -->
+                    <button type="button" class="ol-textbutton" onclick={() => pinsRef?.pinCurrent(false)} data-action="oidc-pin-current">{t('Pin the current certificate…')}</button>
+                {/if}
                 {#if test.issuer_mismatch}<div class="ol-warn">{t('The provider calls itself {issuer}: use exactly that as the Issuer.', {issuer: test.issuer ?? ''})}</div>{/if}
             {:else}
                 <strong>{t('The test failed:')}</strong> <span class="hmm-mono">{test.error}</span>
             {/if}
         </div>
     {/if}
+
+    <!-- openccu-lite task 232: the pinned keys of the OIDC store, the same list as on the Trust stores page -->
+    <Pins purpose="oidc" {pins} reload={loadPins} target={issuer} bind:this={pinsRef} />
 
     {#if chain}
         <div class="ot-chain" data-oidc-chain>

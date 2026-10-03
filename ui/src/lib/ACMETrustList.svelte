@@ -13,13 +13,16 @@
 
     let {refresh = 0}: {refresh?: number} = $props();
     let certs = $state<TrustCert[] | null>(null);
+    let pins = $state(0); // openccu-lite task 232: the ACME store's pinned keys
     let busy = $state('');
     let error = $state('');
 
     async function load() {
         try {
             const v = await api.get<TrustView>('/api/system/v1/trust');
-            certs = v.stores.find((s) => s.id === 'acme')?.certificates ?? [];
+            const acme = v.stores.find((s) => s.id === 'acme');
+            certs = acme?.certificates ?? [];
+            pins = acme?.pins?.length ?? 0;
         } catch (e) {
             error = (e as Error).message;
         }
@@ -56,7 +59,7 @@
             {/each}
         </ul>
     {/if}
-    <p class="ol-muted atl-note">{t('Trusted for the ACME directory besides the occulited store: {n}.', {n: certs?.length ?? 0})} <a href="/system/trust#acme" use:link>{t('Trust stores')}</a></p>
+    <p class="ol-muted atl-note">{t('Trusted for the ACME directory besides the occulited store: {n}.', {n: certs?.length ?? 0})} {#if pins}<span data-acme-pins>{t('Pinned keys: {n}.', {n: pins})}</span>{/if} <a href="/system/trust#acme" use:link>{t('Trust stores')}</a></p>
 </div>
 
 <style>

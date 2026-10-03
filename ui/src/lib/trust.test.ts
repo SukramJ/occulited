@@ -1,12 +1,12 @@
 import {describe, expect, it} from 'vitest';
-import {commonName, copyTargets, derBase64, isPEM, matches, removalIsDanger, shortFingerprint, sourceText, storeFromHash, storeTitle, uploadBody, type TrustCert, type TrustStore} from './trust';
+import {commonName, copyTargets, derBase64, isPEM, isPinPurpose, looksLikeSPKI, matches, pinModeText, pinName, removalIsDanger, shortFingerprint, shortSPKI, sourceText, storeFromHash, storeTitle, uploadBody, type Pin, type TrustCert, type TrustStore} from './trust';
 
 const t = (key: string, params?: Record<string, string | number>) => {
     let s = key;
     for (const [k, v] of Object.entries(params ?? {})) s = s.replaceAll(`{${k}}`, String(v));
     return s;
 };
-const cert = (o: Partial<TrustCert> = {}): TrustCert => ({id: 'a', subject: 'CN=ISRG Root X1,O=Internet Security Research Group,C=US', issuer: 'CN=ISRG Root X1,O=Internet Security Research Group,C=US', not_before: '2015-06-04T11:04:38Z', not_after: '2035-06-04T11:04:38Z', fingerprint: '96:BC:EC:06:26:49:76:F3:74:60:77:9A:CF:28:C5:A7:CF:E8:A3:C0:AA:E1:1A:8F:FC:EE:05:C0:BD:DF:08:C6', ca: true, self_signed: true, ...o});
+const cert = (o: Partial<TrustCert> = {}): TrustCert => ({id: 'a', subject: 'CN=ISRG Root X1,O=Internet Security Research Group,C=US', issuer: 'CN=ISRG Root X1,O=Internet Security Research Group,C=US', not_before: '2015-06-04T11:04:38Z', not_after: '2035-06-04T11:04:38Z', fingerprint: '96:BC:EC:06:26:49:76:F3:74:60:77:9A:CF:28:C5:A7:CF:E8:A3:C0:AA:E1:1A:8F:FC:EE:05:C0:BD:DF:08:C6', spki: 'C5+lpZ7tcVwmwQIMcRtPbsQtWLABXhQzejna0wHFr8M=', ca: true, self_signed: true, ...o});
 
 describe('the Trust stores page (openccu-lite task 231)', () => {
     it('names the four stores', () => {
@@ -87,5 +87,36 @@ describe('storeFromHash', () => {
         expect(storeFromHash('')).toBe('system');
         expect(storeFromHash('#nope')).toBe('system');
         expect(storeFromHash('#OIDC')).toBe('system');
+    });
+});
+
+// openccu-lite task 232: the pins' pure parts
+describe('pins', () => {
+    const pin = (o: Partial<Pin> = {}): Pin => ({id: 'p1', purpose: 'oidc', spki: 'LeafKeyHash0000000000000000000000000000000=', mode: 'with-ca', added: '2026-10-03T10:00:00Z', ...o});
+
+    it('only the OIDC and ACME stores take pins', () => {
+        expect(['system', 'occulited', 'oidc', 'acme', 'downloads'].map(isPinPurpose)).toEqual([false, false, true, true, false]);
+    });
+
+    it('words the mode and names a pin by its certificate or as a bare hash', () => {
+        expect(pinModeText('with-ca', t)).toBe('with the CA check');
+        expect(pinModeText('only', t)).toBe('pin only');
+        expect(pinName(pin({subject: 'CN=auth.example.org,O=Lab'}), t)).toBe('auth.example.org');
+        expect(pinName(pin(), t)).toBe('Key hash (backup pin)');
+    });
+
+    it('shortens a key hash for the table', () => {
+        expect(shortSPKI('LeafKeyHash0000000000000000000000000000000=')).toBe('LeafKeyHash0…');
+        expect(shortSPKI('short')).toBe('short');
+    });
+
+    it('knows the shapes of a typed key hash: 44 base64 characters or 64 hex digits, colons and a sha256// prefix forgiven', () => {
+        expect(looksLikeSPKI('C5+lpZ7tcVwmwQIMcRtPbsQtWLABXhQzejna0wHFr8M=')).toBe(true);
+        expect(looksLikeSPKI('sha256//C5+lpZ7tcVwmwQIMcRtPbsQtWLABXhQzejna0wHFr8M=')).toBe(true);
+        expect(looksLikeSPKI('AB:CD:' + 'EF:'.repeat(29) + '01')).toBe(true);
+        expect(looksLikeSPKI('abcd' + 'ef'.repeat(29) + '01')).toBe(true);
+        expect(looksLikeSPKI('not a hash')).toBe(false);
+        expect(looksLikeSPKI('C5+lpZ7tcVwmwQIMcRtPbsQtWLABXhQzejna0wHFr8M')).toBe(false);
+        expect(looksLikeSPKI('')).toBe(false);
     });
 });
