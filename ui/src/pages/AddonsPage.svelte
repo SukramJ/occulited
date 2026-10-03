@@ -24,11 +24,17 @@
     import Loading from '../lib/Loading.svelte';
     import TokenNotice from '../lib/TokenNotice.svelte';
     import Help from '../lib/Help.svelte';
+    import {warnEdge} from '../lib/systemmenu.svelte';
+    import {worse, type Edge} from '../lib/warnedge';
     import InstallProgress from '../lib/InstallProgress.svelte';
+    import {addonsChanged} from '../lib/addonsync';
     import AddonPorts from '../lib/AddonPorts.svelte';
     import AddonSessionSettings from '../lib/AddonSessionSettings.svelte';
     import AddonStartSettings from '../lib/AddonStartSettings.svelte';
     import {addonIconSrc} from '../lib/addonicon';
+    import {imageCandidates, type AddonImages} from '../lib/addonimages';
+    import AddonImage from '../lib/AddonImage.svelte';
+    import {isDark} from '../lib/theme.svelte';
     import {compareEntries, formatStars, httpURL, releasesProblemKind, repoURL} from '../lib/catalog';
     import {askStartStopped, installFromCatalog, type StoppedAddon} from '../lib/install';
     import ReleasesProblem from '../lib/ReleasesProblem.svelte';
@@ -46,6 +52,8 @@
         id?: string; name?: Text; description?: Text; homepage?: string; licence?: string;
         release?: {github?: string; prerelease?: boolean}; requires?: {architectures?: string[]; lite?: string};
         ui?: {own_updater?: boolean}; runtime?: {note?: Text};
+        /** openccu-lite task 100: the manifest's images as the check fetched them, kind → URL on this origin */
+        images?: AddonImages;
         tag?: string; fetched?: string; error?: string; stars?: number;
         latest?: {version: string; asset?: string}; update_available?: boolean;
     }
@@ -68,8 +76,6 @@
     let updates = $state<Record<string, UpdateInfo>>({});
     let installBusy = $state(false);
     let progressView: InstallProgress | undefined = $state();
-    // a logo whose file does not load falls back to the letter
-    let broken = $state<Record<string, boolean>>({});
     // ?q=<id> deep-links a card (the old Catalogue's way; /catalog?q= is an alias of this page)
     let filter = $state(new URLSearchParams(location.search).get('q') ?? '');
     const INSTALLED_KEY = 'ol.addons.installedOnly';
@@ -181,14 +187,30 @@
     const pending = $derived(cards.filter((c) => c.update));
     const archs = (e: Entry) => e.requires?.architectures ?? [];
     const supportsArch = (e: Entry) => archs(e).length === 0 || archs(e).includes(arch) || archs(e).includes('any');
-    // the logo: only what the addon itself brings, from its own /addons/<id>/ (lib/addonicon.ts)
-    const logo = (c: Card) => (c.addon && !broken[c.id] ? addonIconSrc(c.addon.id, c.addon.info) : '');
+    // the logo (openccu-lite task 100): what the manifest declares, in the theme's variant - the
+    // installed addon's images, else the catalogue's copy (lib/addonimages.ts) - then the logo of
+    // the addon's own Info: line from its /addons/<id>/ (lib/addonicon.ts); the letter when none loads
+    const logo = (c: Card): string[] => {
+        const out = imageCandidates(c.addon?.images ?? c.entry?.images, 'logo', isDark());
+        const info = c.addon ? addonIconSrc(c.addon.id, c.addon.info) : '';
+        if (info) out.push(info);
+        return out;
+    };
     const letter = (c: Card) => c.name.trim().slice(0, 1).toUpperCase();
     // the addon's frontend, as the shell routes it (/nav/<id>, task 88)
     const frontend = (a: Addon): NavEntry | undefined => nav.find((n) => (n.addon ?? n.id) === a.id && n.source === 'addon');
     // the unit's state as the Services page shows it (lib/units.ts), from the same listing; an
     // addon the listing does not carry (a busybox box) falls back on the addon's own running flag
     const unitOf = (a: Addon): Service | null => services[`addon-${a.id}`] ?? null;
+    // occulited task 12: the warnings of the Status page that name an addon lead here, and its card
+    // shows their edge; a card in an error state of its own (failed, ended) keeps the red one
+    // addon-update is no edge (the maintainer, 2026-10-03): the card's update button says it
+    const ADDON_WARNINGS = ['addon-payload', 'addon-ended', 'addon-failed', 'rega', 'arch', 'legacy-session'];
+    const cardEdge = (a: Addon | null | undefined): Edge => {
+        if (!a) return '';
+        const own: Edge = ['failed', 'ended'].includes(statusKind(unitOf(a) ?? {running: a.running, oneshot: a.oneshot, result: a.result, ended: a.ended})) ? 'err' : '';
+        return worse(own, warnEdge(ADDON_WARNINGS, a.id));
+    };
     const dotOf = (a: Addon) => statusDot(unitOf(a) ?? {running: a.running, oneshot: a.oneshot, result: a.result, ended: a.ended});
     const stateWord = (a: Addon): string => {
         const k = statusKind(unitOf(a) ?? {running: a.running, oneshot: a.oneshot, result: a.result, ended: a.ended});
@@ -258,6 +280,7 @@
         } finally {
             busy = '';
             await load();
+            addonsChanged(); // openccu-lite B-297: the menu follows at once
         }
     }
     async function install(c: Card) {
@@ -411,6 +434,7 @@
         } finally {
             installing = false;
             await load();
+            addonsChanged(); // openccu-lite B-297
         }
         await askAfterInstall();
     }
@@ -437,6 +461,7 @@
         } finally {
             installing = false;
             await load();
+            addonsChanged(); // openccu-lite B-297
         }
         await askAfterInstall();
     }
@@ -503,13 +528,14 @@
     </div>
 {/if}
 <!-- one bar for a catalogue run, wherever it was started -->
-<InstallProgress bind:this={progressView} bind:busy={installBusy} onfinished={() => load()} />
+<InstallProgress bind:this={progressView} bind:busy={installBusy} onfinished={() => { void load(); addonsChanged(); }} />
 {#if !addons || !catalogue}
     <Loading {error} />
 {:else}
     {#if toReinstall.length > 0}
         <!-- task 146 (D-106): the addons a restore brought back without their program files -->
-        <section class="ol-notice ad-reinstall" id="reinstall" data-section="reinstall" aria-labelledby="reinstall-title">
+        <!-- occulited task 12: red, as the maintainer asked - these addons do not run -->
+        <section class="ol-panel err ad-reinstall" id="reinstall" data-section="reinstall" data-warn-for="addon-payload" data-warn-edge="err" aria-labelledby="reinstall-title">
             <h2 id="reinstall-title">{t('Addons to reinstall after the restore')}<Help>{t("A backup keeps an addon's settings and data but not its program files (the directories marked .nobackup), as on a CCU. After a restore these addons are back without them: the system does not start them, and nothing reinstalls them by itself. Reinstalling from the catalogue puts the program back; the settings stay.")}</Help></h2>
             {#if !catalogue.checked}
                 <p class="ol-muted">{t('Check for updates first, so the catalogue knows which of them it can reinstall.')}</p>
@@ -563,24 +589,26 @@
         {#each shown as c (c.id)}
             {@const a = c.addon}
             {@const e = c.entry}
-            {@const src = logo(c)}
             {@const repo = e ? repoURL({id: e.id, name: c.name, git: e.git, release: e.release}) : ''}
             {@const fe = a ? frontend(a) : undefined}
             {@const u = a ? updates[a.id] : undefined}
             <!-- the id is what the Addons popup's ⚙ scrolls to (/addons?addon=<id>, task 55) -->
-            <div class="ol-card ad-card" class:dim={!!e && !e.id && !a} class:err={a ? ['failed', 'ended'].includes(statusKind(unitOf(a) ?? {running: a.running, oneshot: a.oneshot, result: a.result, ended: a.ended})) : false} id={`addon-row-${c.id}`} data-addon-card={c.id} data-installed={a ? '1' : '0'}>
+            {@const edge = cardEdge(a)}
+            <div class="ol-card ad-card {edge}" class:dim={!!e && !e.id && !a} id={`addon-row-${c.id}`} data-addon-card={c.id} data-installed={a ? '1' : '0'} data-warn-for={a ? ADDON_WARNINGS.join(' ') : undefined} data-warn-edge={edge || undefined}>
                 <div class="ad-head">
-                    <span class="ad-logo" class:has-img={!!src}>
-                        {#if src}
-                            <img {src} alt="" onerror={() => (broken = {...broken, [c.id]: true})} />
-                        {:else}
-                            <span class="ad-letter" aria-hidden="true">{letter(c)}</span>
-                        {/if}
+                    <span class="ad-logo">
+                        <AddonImage candidates={logo(c)}>
+                            {#snippet fallback()}<span class="ad-letter" aria-hidden="true">{letter(c)}</span>{/snippet}
+                        </AddonImage>
                     </span>
                     <div class="ad-titles">
                         <h3 class="ad-name">{#if a}<span class="ol-dot {dotOf(a)}" role="img" aria-label={stateWord(a)} title={stateWord(a)} data-addon-dot={statusKind(unitOf(a) ?? {running: a.running, oneshot: a.oneshot, result: a.result, ended: a.ended})}></span>{/if}{c.name}</h3>
                         <div class="ad-sub ol-muted">
-                            {#if a}
+                            {#if a?.payload_missing}
+                                <!-- occulited task 12: a restore brought it back without its program files (task 146) -->
+                                <span class="ad-needs-reinstall" data-addon-reinstall>{t('Needs reinstalling')}</span>
+                                {#if !a.reinstall_dismissed}{' · '}<a href="#reinstall" data-addon-reinstall-link>{t('Reinstall')}</a>{/if}
+                            {:else if a}
                                 <span class="ad-version">{a.version}</span>
                                 {#if c.update}<span class="ol-upd"> → {c.update}</span>{/if}
                                 <span class="ad-state" data-addon-state>· {stateWord(a)}</span>
@@ -603,7 +631,7 @@
                     {/if}
                 </div>
                 <div class="ad-badges">
-                    {#if e?.untested}{@render badge('ol-badge ad-untested', t('untested'), t('Not tested on openccu-lite yet: install it at your own risk. Every addon declares what it needs itself; the label neither grants nor refuses anything.'))}{/if}
+                    {#if e?.untested}{@render badge('ol-badge warn ad-untested', t('untested'), t('Not tested on openccu-lite yet: install it at your own risk. Every addon declares what it needs itself; the label neither grants nor refuses anything.'))}{/if}
                     {#if e?.release?.prerelease}<span class="ol-badge">{t('prerelease')}</span>{/if}
                     {#if e?.ui?.own_updater}{@render badge('ol-badge warn', t('own updater'), t('This addon still carries an update mechanism of its own. On openccu-lite the system installs its updates; what the addon\'s own updater does bypasses that.'))}{/if}
                     {#if a}
@@ -615,7 +643,7 @@
                         {#if a.policy_mode === 'root'}
                             {@render badge('ol-badge warn', t('root (unsafe)'), t('This addon runs as root: it can change anything on the system. The Services page switches it to its own user.'))}
                         {:else if a.policy_mode === 'confined'}
-                            {@render badge('ol-badge', t('confined'), t('This addon runs as its own user and cannot write outside its own directories.'))}
+                            {@render badge('ol-badge ok ad-confined', t('confined'), t('This addon runs as its own user and cannot write outside its own directories.'))}
                         {/if}
                         {#if a.undeclared}
                             {@render badge('ol-badge', t('undeclared'), t('This addon declared no compatibility: its manifest carries no runtime block, so nobody has said what it needs.'))}
@@ -639,7 +667,7 @@
                         {/if}
                         {#if a.start_early_declared}
                             {#if a.start_early}
-                                {@render badge('ol-badge ad-early', t('starts early'), t('This addon copes with radio interfaces that are not ready yet, so the system starts it before them and it connects when they are. The ⋯ menu switches that off for this addon; the switch for all addons is under Addon start, below the list. A change takes effect at the next boot.'))}
+                                {@render badge('ol-badge ok ad-early', t('starts early'), t('This addon copes with radio interfaces that are not ready yet, so the system starts it before them and it connects when they are. The ⋯ menu switches that off for this addon; the switch for all addons is under Addon start, below the list. A change takes effect at the next boot.'))}
                             {:else}
                                 {@render badge('ol-badge ad-early-off', t('early start off'), t('This addon could start before the radio interfaces, but the early start is switched off for it, so it waits for them. The ⋯ menu switches it on again; the switch for all addons is under Addon start, below the list. A change takes effect at the next boot.'))}
                             {/if}
@@ -751,6 +779,7 @@
     .ad-toolbar { align-items: center; flex-wrap: wrap; gap: 10px; }
     /* task 146: the addons to reinstall after a restore, above the toolbar */
     .ad-reinstall { margin-bottom: 14px; }
+    .ad-needs-reinstall { color: var(--hmm-error); font-weight: 600; }
     .ad-reinstall h2 { margin: 0 0 6px; font-size: 1.05em; }
     .ad-reinstall-list { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 8px; }
     .ad-reinstall-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
@@ -769,7 +798,7 @@
     .ad-head { display: flex; align-items: center; gap: 14px; min-width: 0; }
     /* the logos are wide wordmarks (width="240", height="48"): a strip, fitted, never stretched */
     .ad-logo { flex: 0 0 auto; display: flex; align-items: center; height: 56px; max-width: 140px; }
-    .ad-logo img { display: block; max-width: 140px; max-height: 56px; width: auto; height: auto; object-fit: contain; }
+    .ad-logo :global(img) { display: block; max-width: 140px; max-height: 56px; width: auto; height: auto; object-fit: contain; }
     .ad-letter {
         display: flex; align-items: center; justify-content: center; width: 48px; height: 48px;
         border-radius: var(--hmm-radius-card); background: var(--hmm-accent-bg); color: var(--hmm-accent);

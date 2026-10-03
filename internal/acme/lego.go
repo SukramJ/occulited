@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -96,7 +95,10 @@ func (li LegoIssuer) Issue(ctx context.Context, req Request) (*Result, error) {
 	cfg.CADirURL = req.DirectoryURL
 	cfg.UserAgent = li.UserAgent
 	cfg.Certificate.KeyType = certcrypto.EC256
-	cfg.HTTPClient = httpClient(req.Roots)
+	cfg.HTTPClient = req.HTTP
+	if cfg.HTTPClient == nil {
+		cfg.HTTPClient = httpClient()
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -181,18 +183,16 @@ func emailNote(email string) string {
 	return " for " + email
 }
 
-// httpClient is lego's default client on the pool the caller trusts for the directory (task 231:
-// occulited's store plus the ACME anchors); nil = Go's own roots.
-func httpClient(roots *x509.CertPool) *http.Client {
+// httpClient is lego's default client on Go's own roots, for a Request without one (a test).
+// On the box the request carries the trust store's client (task 231, task 232).
+func httpClient() *http.Client {
 	tr := &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
 		DialContext:           (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 		TLSHandshakeTimeout:   30 * time.Second,
 		ResponseHeaderTimeout: 30 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
-	}
-	if roots != nil {
-		tr.TLSClientConfig = &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}
+		TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
 	}
 	return &http.Client{Timeout: 2 * time.Minute, Transport: tr}
 }

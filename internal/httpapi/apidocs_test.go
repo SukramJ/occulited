@@ -302,6 +302,10 @@ func streamChannels(t *testing.T, an *apidoc.Analyzer) []apidoc.Channel {
 				{Name: "message", Summary: "One journal line", Bodies: marshal(".(*SystemAPI).logStream")},
 				{Name: "error", Summary: "The journal could not be followed; the stream ends", Payload: apidoc.Schema{"type": "string"}},
 			}},
+		{ID: "addons", Address: "/api/system/v1/addons/stream", Scopes: scopes("GET /api/system/v1/addons/stream"),
+			Summary: "The addons' revision, at once and again whenever the installed addons or the menu may have changed", Messages: []apidoc.ChannelMessage{
+				{Name: "addons", Summary: "{revision}: read GET /addons and GET /nav again when it differs from the one seen before", Bodies: marshal(".(*SystemAPI).addonsStream")},
+			}},
 		{ID: "serviceMessages", Address: "/api/system/v1/service-messages/stream", Scopes: scopes("GET /api/system/v1/service-messages/stream"),
 			Summary: "The service messages, the whole view again on every change", Messages: []apidoc.ChannelMessage{
 				{Name: "messages", Summary: "The view of GET /api/system/v1/service-messages", Bodies: marshal(".(*SystemAPI).serviceMessagesStream")},

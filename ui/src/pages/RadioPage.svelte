@@ -9,13 +9,15 @@
     import Loading from '../lib/Loading.svelte';
     import Disclosure from '../lib/Disclosure.svelte';
     import SystemTitle from '../lib/SystemTitle.svelte';
-    import RadioConnections, {type ConnBoard, type ConnModule} from '../lib/RadioConnections.svelte';
+    import RadioConnections, {type ConnView} from '../lib/RadioConnections.svelte';
     import SectionHead from '../lib/SectionHead.svelte';
     import Subscribers from '../lib/Subscribers.svelte';
     import Icon from '../lib/Icon.svelte';
     import {carrierOf} from '../lib/radiocarrier';
     import type {HealthSample} from '../lib/history';
     import {anyStarting, detecting, type InterfaceUnit} from '../lib/starting';
+    import WarnEdge from '../lib/WarnEdge.svelte';
+    import {warnEdge, warnFor} from '../lib/systemmenu.svelte';
 
     // task 68: carrier_sense_source says where the level comes from - the interface list, or channel 0
     // of the module's own device; "device" without a value is a module that has not reported it yet
@@ -35,7 +37,7 @@
     // a module on an HB-RF-ETH added while both processes are pinned to a stick appeared nowhere. The
     // connections' status lists every detected module with its roles: the ones in none get a card of
     // their own, and a configured board whose module is not detected yet is said, with Try now.
-    let conn = $state<{modules?: ConnModule[]; hb_rf_eth?: ConnBoard} | null>(null);
+    let conn = $state<ConnView | null>(null);
     let connView = $state<RadioConnections | undefined>(undefined);
     const unusedModules = $derived((conn?.modules ?? []).filter((m) => m.roles.length === 0));
     const boardPending = $derived(conn?.hb_rf_eth && !conn.hb_rf_eth.detected ? conn.hb_rf_eth : null);
@@ -288,6 +290,12 @@
             {#if boardErr}<div class="ol-warn">{boardErr}</div>{/if}
         </div>
     {/if}
+    {#if conn?.header_silent}
+        {@const h = conn.header_silent}
+        <!-- openccu-lite B-300: an empty GPIO header has no card; this is said only while a chosen
+             module is missing, where the silent header may be the module that went quiet -->
+        <div class="ol-notice warn" data-notice="header-silent" data-node={h.node}>{t('No radio module answered on the GPIO header ({node}: {why}), and the module chosen under Connections ({ids}) is missing. Check that the module is seated, or choose another one.', {node: h.node, why: h.detail || h.probe, ids: h.missing.join(', ')})}</div>
+    {/if}
     {#if radio.modules.length === 0 && unusedModules.length === 0}
         {#if detecting(health?.units)}
             <!-- task 94: the detection writes /var/hm_mode seconds after the web UI is up (22 s on a Pi 4
@@ -299,7 +307,8 @@
     {:else}
         <div class="ol-cards ol-cards-radio">
             {#each radio.modules as m (m.protocol)}
-                <div class="ol-card" id={`ol-module-${m.protocol}`}>
+                <!-- occulited task 12: the radio's load (openccu-lite task 316) is the modules' -->
+                <div class="ol-card {warnEdge(['radio-load'])}" id={`ol-module-${m.protocol}`} {...warnFor(['radio-load'])}>
                     <!-- task 53: the card's head row, the protocol as its title -->
                     <div class="ol-card-head">
                         <span class="ol-card-icon"><Icon name="radio" size={14} /></span>
@@ -365,10 +374,11 @@
          page of their own; the way there stands where they were -->
     <p class="ol-muted if-lan" data-lan-link><a href="/system/lan-devices" use:link>{t('BidCoS gateways, the HB-RF-ETH, HmIP access points and other LAN devices: LAN devices')}</a></p>
     <!-- task 129 phase 3: which module each interface process uses -->
-    <RadioConnections bind:this={connView} {admin} order={(radio.modules ?? []).map((m) => m.protocol)} onchanged={() => void reloadRadio().catch(() => undefined)} onstatus={(s) => (conn = s)} />
+    <!-- occulited task 12: the HmIP warnings of the Status page lead to the connections -->
+    <WarnEdge ids={['hmip-adapter', 'hmip-local-swap', 'hmip-module-missing', 'devices-import', 'hmip-security-counter']}><RadioConnections bind:this={connView} {admin} order={(radio.modules ?? []).map((m) => m.protocol)} onchanged={() => void reloadRadio().catch(() => undefined)} onstatus={(s) => (conn = s)} /></WarnEdge>
     <!-- the maintainer, 2026-09-19: the clients on this system after the connections; the ones on
          the network are the Remote access page's -->
-    <Subscribers {admin} scope="internal" feed={health?.feed} />
+    <WarnEdge ids={['rpc-stalled']}><Subscribers {admin} scope="internal" feed={health?.feed} /></WarnEdge>
     <!-- task 79's RPC trace is the Remote access page's since openccu-lite task 224; no link to it
          here since task 242 (the old #rpc-trace anchor still leads there) -->
     <!-- D-66: rfd's device descriptions, writable through a layer on the userfs so that no addon

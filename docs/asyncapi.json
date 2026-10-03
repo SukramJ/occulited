@@ -1,6 +1,20 @@
 {
   "asyncapi": "3.0.0",
   "channels": {
+    "addons": {
+      "address": "/api/system/v1/addons/stream",
+      "messages": {
+        "addons": {
+          "$ref": "#/components/messages/addonsAddons"
+        }
+      },
+      "servers": [
+        {
+          "$ref": "#/servers/http"
+        }
+      ],
+      "title": "The addons' revision, at once and again whenever the installed addons or the menu may have changed"
+    },
     "liteEvents": {
       "address": "/api/rpc/v1/events",
       "description": "Query parameters: interface, address, key (datapoint), type filter the messages (comma-separated or repeated); devices=true adds each interface's device list at the start; the last event id (Last-Event-ID, or ?last_event_id=) resumes. Each message but resync and the devices list carries an id `<boot>:<seq>`.",
@@ -148,6 +162,22 @@
   },
   "components": {
     "messages": {
+      "addonsAddons": {
+        "contentType": "application/json",
+        "name": "addons",
+        "payload": {
+          "properties": {
+            "revision": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "revision"
+          ],
+          "type": "object"
+        },
+        "summary": "{revision}: read GET /addons and GET /nav again when it differs from the one seen before"
+      },
       "liteEventsDeleteDevices": {
         "contentType": "application/json",
         "name": "deleteDevices",
@@ -1550,6 +1580,30 @@
     "version": "dev"
   },
   "operations": {
+    "receiveAddons": {
+      "action": "receive",
+      "channel": {
+        "$ref": "#/channels/addons"
+      },
+      "description": "The addons' revision, at once and again whenever the installed addons or the menu may have changed.",
+      "messages": [
+        {
+          "$ref": "#/channels/addons/messages/addons"
+        }
+      ],
+      "security": [
+        {
+          "$ref": "#/components/securitySchemes/bearer"
+        },
+        {
+          "$ref": "#/components/securitySchemes/cookie"
+        }
+      ],
+      "summary": "The addons' revision, at once and again whenever the installed addons or the menu may have changed",
+      "x-occulite-scopes": [
+        "system:read"
+      ]
+    },
     "receiveLiteEvents": {
       "action": "receive",
       "channel": {

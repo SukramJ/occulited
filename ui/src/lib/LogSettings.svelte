@@ -27,6 +27,7 @@
     // the journal's folder on the userfs, which the boot script fixes
     const USERFS_JOURNAL = 'var/log/journal';
     import type {LogSettingsTab} from './logpage';
+    import {warnEdge, warnFor} from './systemmenu.svelte';
 
     let {open = $bindable(false), tab = $bindable<LogSettingsTab>('levels')}: {open?: boolean; tab?: LogSettingsTab} = $props();
 
@@ -434,7 +435,8 @@
             {/if}
         </div>
     {:else if tab === 'history'}
-        <div class="ls-panel" role="tabpanel" id="ls-panel-history" aria-labelledby="ls-tab-history">
+        <!-- occulited task 12: the Status page's warnings about the database's and the journal's copies -->
+        <div class="ls-panel ol-warn-edge {warnEdge(['store-target'])}" role="tabpanel" id="ls-panel-history" aria-labelledby="ls-tab-history" {...warnFor(['store-target'])}>
             {#if storeErr}<div class="ol-warn">{storeErr}</div>{/if}
             {#if store}
                 <div class="ds-panel">
@@ -547,7 +549,7 @@
             {/if}
         </div>
     {:else}
-        <div class="ls-panel" role="tabpanel" id="ls-panel-journal" aria-labelledby="ls-tab-journal">
+        <div class="ls-panel ol-warn-edge {warnEdge(['journal-target', 'journal-sync'])}" role="tabpanel" id="ls-panel-journal" aria-labelledby="ls-tab-journal" {...warnFor(['journal-target', 'journal-sync'])}>
             {#if journalErr}<div class="ol-warn">{journalErr}</div>{/if}
             {#if journal}
                 <div class="jr-panel">

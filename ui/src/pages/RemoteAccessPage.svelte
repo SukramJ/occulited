@@ -31,6 +31,7 @@
     import RPCTrace from '../lib/RPCTrace.svelte';
     import SectionHead from '../lib/SectionHead.svelte';
     import FirewallVerdicts, {type PortVerdict} from '../lib/FirewallVerdicts.svelte';
+    import WarnEdge from '../lib/WarnEdge.svelte';
 
     interface Classic { plain: boolean; tls: boolean; auth: 'none' | 'password'; user?: string; password_set: boolean }
     interface Port { port: number; tls: boolean; interface: string; process: string; backend: number; open: boolean; running: boolean }
@@ -131,6 +132,8 @@
 {#if !view}
     <Loading {error} />
 {:else}
+    <!-- occulited task 12: classic RPC open to the network is a warning of the Status page -->
+    <WarnEdge ids={['classic-rpc-open']}>
     <SectionHead id="classic" title={t('Classic RPC (as on a CCU)')} help={t('The XML-RPC ports a client configured for a CCU3 or OpenCCU talks to - Homematic Manager, node-red-contrib-ccu, ioBroker, Home Assistant, FHEM, openHAB - on the same ports and with the same login. lighttpd serves them and forwards to the interface processes, which stay on the loopback. The interface processes call a client back at the address it registers, so the client must be reachable from this system. No per-method rights, no trace, no lockout - as on a CCU.')} />
     {#if error}<div class="ol-notice error" data-notice="ra-error">{error}</div>{/if}
     {#if notice}<div class="ol-notice" data-notice="ra-notice">{notice}</div>{/if}
@@ -228,6 +231,7 @@
     {#if view.classic.plain || view.classic.tls}
         <Subscribers {admin} scope="external" level={3} />
     {/if}
+    </WarnEdge>
 
     <!-- the maintainer, 2026-09-22: lite-rpc after classic RPC; task 223: its panel over the page's
          width, then its streams and the API tokens a program uses with it (occulited B-9) -->

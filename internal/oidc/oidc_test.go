@@ -152,16 +152,16 @@ func TestCheckAndRoots(t *testing.T) {
 	}))
 	defer srv.Close()
 	ctx := context.Background()
-	if r := Check(ctx, srv.URL, nil); r.OK || !strings.Contains(r.Error, "certificate") {
+	if r := CheckWith(ctx, srv.URL, nil); r.OK || !strings.Contains(r.Error, "certificate") {
 		t.Fatalf("the system's pool: %+v", r)
 	}
 	pool := x509.NewCertPool()
 	pool.AddCert(srv.Certificate())
-	r := Check(ctx, srv.URL+"/", pool)
+	r := CheckWith(ctx, srv.URL+"/", pool)
 	if !r.OK || r.IssuerMismatch || r.TokenEndpoint != srv.URL+"/t" || len(r.Verified) == 0 || !r.Verified[len(r.Verified)-1].Equal(srv.Certificate()) {
 		t.Fatalf("with the certificate: %+v", r)
 	}
-	if r := Check(ctx, srv.URL+"/other", pool); r.OK || !strings.Contains(r.Error, "HTTP 404") {
+	if r := CheckWith(ctx, srv.URL+"/other", pool); r.OK || !strings.Contains(r.Error, "HTTP 404") {
 		t.Errorf("a wrong path: %+v", r)
 	}
 	c := New(Config{Issuer: srv.URL, ClientID: "x"})
@@ -176,11 +176,13 @@ func TestCheckAndRoots(t *testing.T) {
 	if _, err := c.discover(ctx); err == nil {
 		t.Fatal("the discovery was kept across a change of roots")
 	}
-	chain, err := PeerChain(ctx, srv.URL)
-	if err != nil || len(chain) == 0 || !chain[0].Equal(srv.Certificate()) {
-		t.Fatalf("peer chain: %v %v", chain, err)
+	// a client of the caller's: the discovery through it, the presented chain in the result
+	own := httpFor(pool)
+	if r := Check(ctx, srv.URL, own); !r.OK || len(r.Peer) == 0 || !r.Peer[0].Equal(srv.Certificate()) {
+		t.Fatalf("with a client: %+v", r)
 	}
-	if _, err := PeerChain(ctx, "http://example.org"); err == nil {
-		t.Error("a plain http issuer has no chain")
+	c.SetHTTP(own)
+	if _, err := c.discover(ctx); err != nil {
+		t.Fatalf("after SetHTTP: %v", err)
 	}
 }

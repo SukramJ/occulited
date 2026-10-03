@@ -52,7 +52,8 @@ a write's own answer. Writes need an administrator session; a user sees the stor
 `GET /api/meta/v1/version`
 
 ```json
-{ "api": "meta", "version": 1, "format": 1, "revision": 412, "implementation": "occulited 0.1.0",
+{ "api": "meta", "version": 1, "format": 1, "revision": 412, "implementation": "occulited 1.0.0-dev.38",
+  "commit": "fa42dfde1e31fb074df53220dd573ceb92642ff0",
   "hmip": { "keyserver_mode": "LOCAL", "device_keys": 12, "offline_pairing": false },
   "capabilities": { "pairing": true, "state": true, "history": true, "apis": { "meta": 1, "rpc": 1, "system": 1, "auth": 1 },
     "transports": ["sse", "websocket"], "limits": { "streams_per_token": 2, "streams_total": 16, "buffer_seconds": 300,
@@ -61,6 +62,12 @@ a write's own answer. Writes need an administrator session; a user sees the stor
 
 A consumer that gets this answers "openccu-lite"; one that gets a 404 or a non-JSON body keeps
 using whatever it used before (ReGa, typically). No authentication.
+
+`implementation` is the server's name and version: for occulited the version of the image it was
+built for (`1.0.0-dev.38`), `git describe`'s `1.0.0-dev.38-5-gfa42dfd` between build rounds, and
+**`commit`** the full hash it was built from, absent when the build carries none (occulited's
+`docs/system-api.md`, *occulited's version*, has the format and how to compare). Before
+`1.0.0-dev.38` the version was the commit's hash and there was no `commit`.
 
 The interfaces the system runs are not in this open answer — they say which radio hardware the
 system has. A client asks `GET /api/rpc/v1/interfaces` with a credential that holds `rpc:read`

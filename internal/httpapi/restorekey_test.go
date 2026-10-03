@@ -229,14 +229,14 @@ func TestRestoreApplyKey(t *testing.T) {
 			t.Errorf("%s: %d %v", name, st, out)
 		}
 	}
-	st, _, out := apply(`{"file":"restore-key.sbk","key":"` + backupPass + `"}`)
+	st, _, out := apply(`{"confirm":true,"file":"restore-key.sbk","key":"` + backupPass + `"}`)
 	check("match", st, out, "match")
 	if rig.stdin != backupPass+"\n" || strings.Join(rig.args, " ") != filepath.Join(string(rig.root), system.BackupDir, "restore-key.sbk") {
 		t.Errorf("match: the script got %q %v", rig.stdin, rig.args)
 	}
 	placeholders := map[string]bool{}
 	for _, c := range []struct{ name, key, want string }{{"mismatch", wrongPass, "mismatch"}, {"skipped", "", "skipped"}} {
-		st, _, out := apply(`{"file":"restore-key.sbk","key":"` + c.key + `","force":true}`)
+		st, _, out := apply(`{"confirm":true,"file":"restore-key.sbk","key":"` + c.key + `","force":true}`)
 		check(c.name, st, out, c.want)
 		got := strings.TrimSuffix(rig.stdin, "\n")
 		if len(got) != 24 || strings.Trim(got, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789") != "" || got == c.key {
@@ -252,7 +252,7 @@ func TestRestoreApplyKey(t *testing.T) {
 	}
 	// a wrong passphrase without force: the script refuses, as before; the answer names no key
 	rig.scriptErr = errors.New("exit status 1")
-	st, e, out := apply(`{"file":"restore-key.sbk","key":"` + wrongPass + `"}`)
+	st, e, out := apply(`{"confirm":true,"file":"restore-key.sbk","key":"` + wrongPass + `"}`)
 	if st != 422 || e.Error != "restore-failed" || rig.stdin != wrongPass+"\n" {
 		t.Errorf("without force: %d %+v %q", st, e, rig.stdin)
 	}
@@ -291,7 +291,7 @@ func TestRestoreDevicesKeyCheck(t *testing.T) {
 			rig.api.RadioInterfaces = func() []interfaces.Interface {
 				return interfaces.FromList([]struct{ Name, URL string }{{"HmIP-RF", "xmlrpc://" + strings.TrimPrefix(hmipFree.URL, "http://")}})
 			}
-			st, e, out := rig.do(t, "POST", "/restore/import-devices", `{"file":"restore-key.sbk","key":"`+c.key+`"}`)
+			st, e, out := rig.do(t, "POST", "/restore/import-devices", `{"confirm":true,"file":"restore-key.sbk","key":"`+c.key+`"}`)
 			if st != 200 || out["key_check"] != c.want || out["rebooting"] != true {
 				t.Fatalf("import: %d %+v %v", st, e, out)
 			}

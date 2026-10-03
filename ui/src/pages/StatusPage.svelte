@@ -2,7 +2,7 @@
     import {onMount} from 'svelte';
     import {pageLife} from '../lib/pagelife.svelte';
     import {api, type Status, type CertStatus, type CertInfo, type HTTPSView, type StorageDevice, type StorageReason, type StorageReport} from '../lib/api';
-    import {shortVersion} from '../lib/version';
+    import {occulitedVersion} from '../lib/version';
     import {formatBytes} from '../lib/netpanels';
     import {barWidth, emmcRange, hostMonitored, identity, madeMonth, rowsFor, verdictClass, wearLevel} from '../lib/storage';
     import {ask} from '../lib/dialog.svelte';
@@ -24,6 +24,7 @@
 
     import {link} from '../lib/router.svelte';
     import {auth} from '../lib/auth.svelte';
+    import {warnEdge, warnFor} from '../lib/systemmenu.svelte';
 
     interface RadioIf { interface: string; address: string; connected: boolean; duty_cycle: number; carrier_sense?: number; carrier_sense_source?: 'interface' | 'device'; radio?: string; radio_name?: string }
     // task 94: `units` are the radio stack's units, so a starting interface says so instead of "not answering"
@@ -33,7 +34,7 @@
     let health = $state<Health | null>(null);
     // task 129 phase 3: an interface process off by choice, or a chosen module that is missing - the
     // interface list leaves such an interface out, so the health cards alone would not show it
-    interface ConnView { available: boolean; choices: {hmip: string; bidcos: string}; plan?: {rfd: {run: boolean}; missing_hmip?: string; missing_bidcos?: string} }
+    interface ConnView { available: boolean; choices: {hmip: string; bidcos: string}; plan?: {rfd: {run: boolean}; missing_hmip?: string; missing_bidcos?: string; hmip_pin?: string} }
     let conn = $state<ConnView | null>(null);
     // task 94: when the last /radio/health arrived (the browser's clock), and a clock that ticks every
     // second while an interface process is starting, so its seconds count on between two polls
@@ -430,7 +431,7 @@
             <div>
                 <div class="host">{status.hostname}</div>
                 <div class="ol-muted ver">
-                    {#if status.version.lite}openccu-lite {status.version.lite}{' · '}{/if}{#if status.occulited_version}<span title={status.occulited_version}>occulited {shortVersion(status.occulited_version)}</span>{' · '}{/if}{status.version.lite ? `OpenCCU ${status.version.version}` : status.version.version || '–'} · {status.version.product}
+                    {#if status.version.lite}openccu-lite {status.version.lite}{' · '}{/if}{#if status.occulited_version}<span title={status.occulited_commit || status.occulited_version}>occulited {occulitedVersion(status.occulited_version, status.occulited_commit)}</span>{' · '}{/if}{status.version.lite ? `OpenCCU ${status.version.version}` : status.version.version || '–'} · {status.version.product}
                 </div>
             </div>
         </div>
@@ -655,7 +656,8 @@
                         <span class="ol-card-icon"><Icon name="radio" size={14} /></span>
                         <div class="ol-card-titles"><div class="ol-card-title">BidCos-RF</div><div class="ol-card-sub">rfd</div></div>
                     </div>
-                    <div class="ol-card-body"><span class="ol-dot"></span>{t('off by choice')}</div>
+                    <!-- openccu-lite task 322: information, not a warning - HmIP only is a mode, not a fault -->
+                    <div class="ol-card-body"><span class="ol-dot"></span>{t('off (HmIP only)')}</div>
                 </a>
             {/if}
             {#each [['HmIP-RF', cp.missing_hmip], ['BidCos-RF', cp.missing_bidcos]] as [name, id] (name)}
@@ -665,7 +667,8 @@
                             <span class="ol-card-icon"><Icon name="alert" size={14} /></span>
                             <div class="ol-card-titles"><div class="ol-card-title">{name}</div></div>
                         </div>
-                        <div class="ol-card-body"><span class="ol-dot err"></span>{t('chosen module missing')}</div>
+                        <!-- openccu-lite task 318: on Automatic, the module holding the HmIP network -->
+                        <div class="ol-card-body"><span class="ol-dot err"></span>{name === 'HmIP-RF' && cp.hmip_pin && cp.hmip_pin === id ? t('module missing') : t('chosen module missing')}</div>
                         <div class="ol-card-detail hmm-mono">{id}</div>
                     </a>
                 {/if}
@@ -713,7 +716,7 @@
         <Loading />
     {:else if storage}
         <h2 id="storage" class="ol-storage-anchor">{t('Storage health')}</h2>
-        <div class="ol-card ol-storage" class:warn={storage.verdict === 'watch'} class:err={storage.verdict === 'replace'} data-panel="storage">
+        <div class="ol-card ol-storage" class:warn={storage.verdict === 'watch' || (storage.verdict !== 'replace' && warnEdge(['storage']) === 'warn')} class:err={storage.verdict === 'replace' || warnEdge(['storage']) === 'err'} data-panel="storage" {...warnFor(['storage'])}>
             <div class="ol-card-head">
                 <span class="ol-card-icon"><Icon name="disk" size={14} /></span>
                 <div class="ol-card-titles"><div class="ol-card-title">{storageSummary}</div></div>

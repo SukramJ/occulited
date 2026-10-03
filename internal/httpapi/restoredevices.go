@@ -48,6 +48,8 @@ type restoreModule struct {
 	Hardware string `json:"hardware"`
 	Serial   string `json:"serial"`
 	SGTIN    string `json:"sgtin,omitempty"`
+	// Version is the module's application firmware (openccu-lite B-289), when the detection read it.
+	Version string `json:"version,omitempty"`
 }
 
 // restoreTarget is this system's side: the devices paired per interface (unknown when the
@@ -73,7 +75,7 @@ func moduleOf(r *radio.Role) *restoreModule {
 	if r == nil {
 		return nil
 	}
-	return &restoreModule{Hardware: r.Hardware, Serial: r.Serial, SGTIN: strings.ToUpper(r.SGTIN)}
+	return &restoreModule{Hardware: r.Hardware, Serial: r.Serial, SGTIN: strings.ToUpper(r.SGTIN), Version: r.Version}
 }
 
 // plan is the radio plan in use: the import record's seam in the tests, else the file.
@@ -150,7 +152,36 @@ func (a *SystemAPI) restoreDevicesView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	target := a.restoreTargetState(r.Context())
-	writeJSON(w, 200, map[string]any{"backup": b, "target": target, "module_changed": moduleChanged(b, target), "non_default_key": b.NonDefaultKey()})
+	view := map[string]any{"backup": b, "target": target, "module_changed": moduleChanged(b, target), "non_default_key": b.NonDefaultKey()}
+	if refused := hmipImportRefusal(b, target); refused != nil {
+		view["hmip_firmware"] = refused
+	}
+	writeJSON(w, 200, view)
+}
+
+// hmipImportRefusal (openccu-lite B-289): the backup's HmIP identity would move onto this system's
+// module, local key mode is off in the backup, and the module's application firmware cannot take
+// the network key - the import and the restore are refused (the module's firmware update first).
+func hmipImportRefusal(b system.RadioBackup, t restoreTarget) *system.HmIPFirmwareRefused {
+	if !moduleChanged(b, t) {
+		return nil
+	}
+	return system.HmIPFirmwareRefusal(t.HmIPModule.SGTIN, t.HmIPModule.Version, b.HmIP.LocalKey)
+}
+
+// restoreHmIPRefusal is hmipImportRefusal for the restore of a whole backup: the backup's radio
+// side read from the file, this system's HmIP module from the plan. A file that is no radio
+// backup, or a system without a plan, is not refused here.
+func (a *SystemAPI) restoreHmIPRefusal(path string) *system.HmIPFirmwareRefused {
+	b, err := system.InspectRadioBackup(path)
+	if err != nil {
+		return nil
+	}
+	var t restoreTarget
+	if p, ok := a.importPlan(); ok {
+		t.HmIPModule = moduleOf(p.HmIP)
+	}
+	return hmipImportRefusal(b, t)
 }
 
 // moduleChanged (task 275): the backup's HmIP identity is bound to another module than the one
@@ -159,7 +190,8 @@ func moduleChanged(b system.RadioBackup, t restoreTarget) bool {
 	return b.HmIP.IdentitySGTIN != "" && t.HmIPModule != nil && t.HmIPModule.SGTIN != "" && !strings.EqualFold(b.HmIP.IdentitySGTIN, t.HmIPModule.SGTIN)
 }
 
-// restoreImportDevices takes {file, replace_key?}: the target must have nothing paired (409
+// restoreImportDevices takes {file, replace_key?, key?, confirm}: confirm is required (400 confirm,
+// D-120: the backup's HmIP identity files are written); the target must have nothing paired (409
 // paired / unknown); a system with a security key store of its own needs replace_key (422
 // key_replace) - the backup's store replaces it, and there is nothing paired here that it could
 // orphan; then the radio files are put in place, the import is recorded for the boots after it
@@ -176,9 +208,15 @@ func (a *SystemAPI) restoreImportDevices(w http.ResponseWriter, r *http.Request)
 		File       string `json:"file"`
 		ReplaceKey bool   `json:"replace_key"`
 		Key        string `json:"key"`
+		Confirm    bool   `json:"confirm"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		badBody(w, err)
+		return
+	}
+	// openccu-lite task 317 (D-120): the import writes the backup's HmIP identity files - on the
+	// user's word after the warning
+	if !a.identityConfirmed(w, body.Confirm, "", false) {
 		return
 	}
 	path, ok := a.restoreUploadPath(w, body.File)
@@ -195,6 +233,10 @@ func (a *SystemAPI) restoreImportDevices(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	target := a.restoreTargetState(r.Context())
+	if refused := hmipImportRefusal(b, target); refused != nil {
+		hmipFirmwareError(w, refused)
+		return
+	}
 	if len(target.Unknown) > 0 {
 		writeJSON(w, http.StatusConflict, apiError{Error: "unknown", Message: "an interface did not answer: " + strings.Join(target.Unknown, ", ") + " - try again in a moment", Detail: map[string]any{"target": target}})
 		return

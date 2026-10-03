@@ -28,6 +28,7 @@
     import {moved} from '../lib/sortable';
     import {Sortable} from '../lib/sortable.svelte';
     import SortHandle from '../lib/SortHandle.svelte';
+    import WarnEdge from '../lib/WarnEdge.svelte';
 
     type Family = 'ipv4' | 'ipv6' | 'both';
     type Target = 'ACCEPT' | 'DROP' | 'REJECT';
@@ -524,6 +525,8 @@
         </div>
     {/if}
 
+    <!-- occulited task 12: the rules not loaded (the Status page's firewall warning) -->
+    <WarnEdge ids={['firewall']}>
     <h2>{t('Rules')}<Help>{t('The rules of the INPUT chain, in order: the first rule whose port, protocol, family and source match decides. What no rule matches gets the policy at the end. Rules an enabled feature needs are added by the system and show their owner; switching the feature off removes them.')}</Help></h2>
     <!-- the policy first and prominent (maintainer): what every packet no rule matches gets -->
     <div class="ol-card fw-policybox" class:fw-policybox-open={acceptFams.length > 0} data-policy>
@@ -655,6 +658,10 @@
         {/if}
     {/if}
 
+    </WarnEdge>
+
+    <!-- occulited task 12: hmipserver's port listening beyond the loopback -->
+    <WarnEdge ids={['hmip-port-open']}>
     <h2>{t('Listening')}<Help>{t('Every socket on the system that waits for connections, the process holding it, and per family the rule that decides its packets - or the policy, when no rule names its port. A socket bound to loopback is not reachable from the network.')}</Help></h2>
     {#if !listenersLoaded}
         <Loading />
@@ -692,6 +699,7 @@
         </table>
     </div>
     {/if}
+    </WarnEdge>
 {/if}
 
 <style>

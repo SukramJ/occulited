@@ -4,6 +4,10 @@
     // and its notice while a board's module is not detected yet
     export interface ConnModule { serial: string; hardware: string; node?: string; device_type?: string; sgtin?: string; version?: string; probe: string; detail?: string; roles: string[] }
     export interface ConnBoard { address: string; connected: boolean; detected: boolean; serial?: string }
+    // openccu-lite B-300: the GPIO header's UART that answered nothing is no module and has no card;
+    // the status says it only while a chosen module is missing - the one case a module was expected
+    export interface ConnHeaderSilent { node: string; probe: string; detail?: string; missing: string[] }
+    export interface ConnView { modules?: ConnModule[]; hb_rf_eth?: ConnBoard; header_silent?: ConnHeaderSilent }
 </script>
 
 <script lang="ts">
@@ -14,11 +18,12 @@
     // paired devices first. The box writes the choice into rfd.conf and hmip_user.conf, runs the
     // detection and the plan again and restarts the radio daemons; the page polls while it runs.
     import {onMount} from 'svelte';
-    import {api, type Service} from './api';
+    import {api, ApiError, type Service} from './api';
     import {pageLife} from './pagelife.svelte';
     import {statusDot, statusKind} from './units';
     import {ask, askText} from './dialog.svelte';
     import {sameHostname} from './factoryreset';
+    import {firmwareRefusalLines, refusalOf, type FirmwareRefusal} from './hmipfirmware';
     import {t} from './i18n.svelte';
     import {link} from './router.svelte';
     import Help from './Help.svelte';
@@ -36,21 +41,23 @@
     interface Plan {
         multimacd: Daemon; rfd: Daemon; hmipserver: Daemon; hmrf?: Role; hmip?: Role;
         rfd_local: boolean; rfd_usb_adapter: boolean; rfd_lan_gateway: boolean; hmip_advanced: boolean;
-        missing_hmip?: string; missing_bidcos?: string; interfaces: string[]; notes: string[];
+        missing_hmip?: string; missing_bidcos?: string; hmip_pin?: string; interfaces: string[]; notes: string[];
     }
     interface Change { choices: Choices; previous: Choices; started: string; finished?: string; ok: boolean; error?: string; lines: string[] }
     interface Choices { hmip: string; bidcos: string; hmip_path?: string }
     // openccu-lite B-285: a snapshot from before a move of HmIP-RF to another module is kept
-    interface MoveBack { previous: string; at: string; choices: Choices; devices: number }
-    interface Status { available: boolean; choices: Choices; options: {hmip: Option[]; bidcos: Option[]}; plan?: Plan; mode?: string; hmip_fatal?: {code: string; line: string; adapter?: string; cause?: string}; modules?: ConnModule[]; hb_rf_eth?: ConnBoard; running: Change | null; last: Change | null; hmip_move_back?: MoveBack; hostname?: string }
-    interface Preview { plan: Plan; changed: boolean; restarts: string[]; bidcos_lost: boolean; devices: {address: string; type: string}[]; devices_error?: string; hmip_move?: {from: string; to: string; local_key: boolean; snapshot: boolean} }
+    // openccu-lite B-302: the HmIP security counter gap of a way back
+    interface CounterGap { from: string; to: string; highest: number; back: number; behind: number; until: string; at?: string }
+    interface MoveBack { previous: string; at: string; choices: Choices; devices: number; counter_gap?: CounterGap }
+    interface Status { available: boolean; choices: Choices; options: {hmip: Option[]; bidcos: Option[]}; plan?: Plan; mode?: string; hmip_fatal?: {code: string; line: string; adapter?: string; cause?: string}; modules?: ConnModule[]; hb_rf_eth?: ConnBoard; header_silent?: ConnHeaderSilent; running: Change | null; last: Change | null; hmip_move_back?: MoveBack; hmip_counter_gap?: CounterGap; hostname?: string }
+    interface Preview { plan: Plan; changed: boolean; restarts: string[]; bidcos_lost: boolean; devices: {address: string; type: string}[]; devices_error?: string; hmip_move?: {from: string; to: string; local_key: boolean; snapshot: boolean; snapshot_blocked?: boolean; to_version?: string; refused?: FirmwareRefusal} }
 
     // onready: called once, after the first load (answered or not) - the page scrolls to an anchor
     // only then, since this section appearing above it would push the anchor out of view
     // order: the protocols of the module cards above, in their order - the two panels follow it, so
     // the BidCos-RF panel stands under the BidCos-RF module; BidCos-RF first when it is not known
     // onstatus (B-272): every status read, for the page's module cards and its HB-RF-ETH notice
-    let {admin = false, order = [], onchanged, onready, onstatus}: {admin?: boolean; order?: string[]; onchanged?: () => void; onready?: () => void; onstatus?: (s: {modules?: ConnModule[]; hb_rf_eth?: ConnBoard}) => void} = $props();
+    let {admin = false, order = [], onchanged, onready, onstatus}: {admin?: boolean; order?: string[]; onchanged?: () => void; onready?: () => void; onstatus?: (s: ConnView) => void} = $props();
     const hmipFirst = $derived(order.includes('HmIP-RF') && (!order.includes('BidCos-RF') || order.indexOf('HmIP-RF') < order.indexOf('BidCos-RF')));
     let readied = false;
 
@@ -187,18 +194,27 @@
     function roleText(r: Role): string {
         return `${r.hardware} ${r.serial}`.trim();
     }
-    function hmipText(p: Plan): string {
+    /** openccu-lite task 322: BidCos-RF off by choice with no LAN gateway - the system runs HmIP only */
+    function hmipOnly(p: Plan, c?: Choices): boolean {
+        return !!c && c.bidcos === 'none' && !p.rfd.run && !p.rfd_lan_gateway;
+    }
+    function hmipText(p: Plan, c?: Choices): string {
+        // openccu-lite task 318: on Automatic, the module that holds the HmIP network is kept
+        if (!p.hmip && p.missing_hmip && p.hmip_pin === p.missing_hmip) return t('the module {id}, which holds the HmIP network, is missing: virtual devices only', {id: p.missing_hmip});
         if (!p.hmip) return p.missing_hmip ? t('the chosen module {id} is missing: virtual devices only', {id: p.missing_hmip}) : t('no HmIP module: virtual devices only');
         if (p.hmipserver.node === '/dev/mmd_hmip') {
+            if (hmipOnly(p, c)) return t('HmIP only: {module}, through multimacd on {node}', {module: roleText(p.hmip), node: p.multimacd.node ?? ''});
             if (p.rfd.node === '/dev/mmd_bidcos') return t('{module}, shared with BidCos-RF through multimacd', {module: roleText(p.hmip)});
             return t('{module}, through multimacd on {node}', {module: roleText(p.hmip), node: p.multimacd.node ?? ''});
         }
+        // task 322: HmIP only says so; the HM-MOD-RPI-PCB keeps multimacd for HmIP (D-101), so not "directly" there
+        if (hmipOnly(p, c)) return t('HmIP only: {module}, directly on {node}', {module: roleText(p.hmip), node: p.hmipserver.node ?? ''});
         return t('{module}, directly on {node}', {module: roleText(p.hmip), node: p.hmipserver.node ?? ''});
     }
     function bidcosText(p: Plan, c: Choices): string {
         if (!p.rfd.run) {
             if (p.missing_bidcos) return t('off: the chosen module {id} is missing', {id: p.missing_bidcos});
-            if (c.bidcos === 'none') return t('off by choice: no local radio and no LAN gateway');
+            if (c.bidcos === 'none') return t('off (HmIP only)');
             return t('off: no BidCos-RF hardware');
         }
         const parts: string[] = [];
@@ -218,9 +234,13 @@
         return r ? roleText(r) : '';
     }
 
-    function choiceLabel(v: string, list: Option[]): string {
+    /** BidCos-RF's "none" by context (task 322): HmIP only without a LAN gateway, the gateway alone with one */
+    function noneLabel(lgw: boolean): string {
+        return lgw ? t('No local radio (LAN gateway only)') : t('Off (HmIP only)');
+    }
+    function choiceLabel(v: string, list: Option[], lgw = false): string {
         if (v === '') return t('Automatic');
-        if (v === 'none') return t('No local radio (LAN gateways only)');
+        if (v === 'none') return noneLabel(lgw);
         const o = list.find((x) => x.id === v || x.sgtin === v);
         return o ? optionLabel(o) : v;
     }
@@ -242,11 +262,38 @@
             err = (e as Error).message;
             return;
         }
+        // openccu-lite B-289: not onto a module whose firmware cannot take the network key - the
+        // refusal, the firmware and the update, and nothing to confirm
+        if (pv.hmip_move?.refused) {
+            await ask({title: t('HmIP-RF cannot move to this module'), message: firmwareRefusalLines(pv.hmip_move.refused, 'change', t).join('\n\n'), confirm: t('Close'), cancel: ''});
+            return;
+        }
+        // openccu-lite B-301 (maintainer: the refusal stays): a snapshot of the module from before
+        // local key mode was switched off is in the way of the move's own snapshot - said, and its
+        // discard offered in red; after it the change is previewed and asked again
+        if (pv.hmip_move?.snapshot_blocked) {
+            const module = pv.hmip_move.from;
+            const discarded = await ask({
+                title: t('A kept snapshot blocks the move'),
+                message: [
+                    t('A snapshot of module {module} from before local key mode was switched off is still kept. Before HmIP-RF moves to another module, the system keeps a new snapshot of this module - the way back without eQ-3\'s key server - and the old one is in its way.', {module}),
+                    t('Discarding it removes this module\'s identity as it was before the switch to local key mode, key material included. The identity in use is not touched. After the discard the change is asked again.'),
+                ].join('\n\n'),
+                confirm: t('Discard the snapshot'),
+                danger: true,
+                focusCancel: true,
+                run: async () => {
+                    await api.del(`/api/system/v1/radio/hmip/local-key/snapshots/${encodeURIComponent(module)}`);
+                },
+            });
+            if (discarded) await apply();
+            return;
+        }
         const c = choice;
         const paras = [
-            t('HmIP-RF: {choice}', {choice: hmipChoiceLabel(pickHmIP, st.options.hmip)}) + '\n' + t('BidCos-RF: {choice}', {choice: choiceLabel(c.bidcos, st.options.bidcos)}),
+            t('HmIP-RF: {choice}', {choice: hmipChoiceLabel(pickHmIP, st.options.hmip)}) + '\n' + t('BidCos-RF: {choice}', {choice: choiceLabel(c.bidcos, st.options.bidcos, pv.plan.rfd_lan_gateway)}),
             t('Afterwards:') + '\n' + [
-                t('hmipserver: {what}', {what: hmipText(pv.plan)}),
+                t('hmipserver: {what}', {what: hmipText(pv.plan, c)}),
                 t('rfd: {what}', {what: bidcosText(pv.plan, c)}),
                 t('multimacd: {what}', {what: multimacdText(pv.plan)}),
             ].join('\n'),
@@ -261,14 +308,16 @@
                 ? t('The system keeps a snapshot of the current module\'s identity and device files first. "Back to the previous module" on this page works from that snapshot without the key server.')
                 : t('No snapshot can be kept here: the way back to the current module is another exchange, which the key server may refuse.'));
         } else if (pv.hmip_move) {
-            paras.push(t('HmIP-RF moves from module {from} to module {to}. Local key mode is on: no key server is involved.', {from: pv.hmip_move.from, to: pv.hmip_move.to}));
+            paras.push(t('HmIP-RF moves from module {from} to module {to}. Local key mode is on: no key server is involved, and HmIP-RF writes its identity files for the new module.', {from: pv.hmip_move.from, to: pv.hmip_move.to}));
         }
         if (pv.bidcos_lost) {
             paras.push(t('BidCos-RF loses its local radio. Paired devices stop working until it is back, unless a LAN gateway reaches them. Pairings, keys and the rfd configuration stay untouched.'));
             if (pv.devices.length) paras.push(t('Paired BidCos-RF devices ({n}):', {n: pv.devices.length}) + '\n' + pv.devices.map((d) => `${d.address} · ${d.type}`).join('\n'));
             if (pv.devices_error) paras.push(t('rfd did not answer, so the list may be incomplete: {error}', {error: pv.devices_error}));
         }
-        const move = !!pv.hmip_move && !pv.hmip_move.local_key;
+        // openccu-lite task 317 (D-120): every move of HmIP-RF rewrites its identity files - the
+        // danger dialog, and the daemon refuses the move without confirm
+        const move = !!pv.hmip_move;
         await ask({
             title: t('Change the radio connections?'),
             message: paras.join('\n\n'),
@@ -276,7 +325,12 @@
             danger: pv.bidcos_lost || move,
             focusCancel: pv.bidcos_lost || move,
             run: async () => {
-                await api.put('/api/system/v1/radio/connections', {...choice, confirm: pv.bidcos_lost});
+                try {
+                    await api.put('/api/system/v1/radio/connections', {...choice, confirm: pv.bidcos_lost || move});
+                } catch (e) {
+                    const r = e instanceof ApiError && e.code === 'hmip-firmware' ? refusalOf(e.detail) : null;
+                    throw r ? new Error(firmwareRefusalLines(r, 'change', t).join(' ')) : e;
+                }
                 touched = false;
                 wasRunning = true;
                 await load();
@@ -284,13 +338,27 @@
         });
     }
 
+    // openccu-lite B-302: how long until the previous module's counter has caught up, in words
+    function waitText(until: string): string {
+        const ms = new Date(until).getTime() - Date.now();
+        if (ms <= 60_000) return t('a moment');
+        if (ms < 3_600_000) return t('{n} minutes', {n: Math.ceil(ms / 60_000)});
+        if (ms < 48 * 3_600_000) return t('{n} hours', {n: Math.ceil(ms / 3_600_000)});
+        return t('{n} days', {n: Math.ceil(ms / 86_400_000)});
+    }
+    function gapLines(g: CounterGap): string {
+        return t('The HmIP security counter of module {to} is {n} behind what module {from} has sent. HmIP devices drop commands with a lower counter than the highest they accepted: devices that heard module {from} may ignore this system\'s commands (switching, configuration) until about {until} - about {wait}; their own reports still arrive. The counter catches up at the first start of HmIP-RF after that time. Nothing is written to the identity files for this. To avoid the wait, stay on the module in use.', {to: g.to, from: g.from, n: g.behind.toLocaleString(), until: new Date(g.until).toLocaleString(), wait: waitText(g.until)});
+    }
+
     // openccu-lite B-285: the way back after a module move, from the snapshot the change kept;
-    // confirmed by typing the system's host name, as the fresh start is
+    // confirmed by typing the system's host name, as the fresh start is - B-302: with the expected
+    // wait of the security counter before the user confirms
     async function moveBack(mb: MoveBack) {
         const host = st?.hostname ?? '';
         const message = [
             t('HmIP-RF goes back to module {module}. Its identity and its device files from before the move ({n} devices) return, the HmIP network is known on it again without eQ-3\'s key server, and the connections are set as they were before the move.', {module: mb.previous, n: mb.devices}),
             t('The identity the exchange made for the module in use now is moved aside into a kept identity of its own. Devices paired since the move have to be paired again.'),
+            ...(mb.counter_gap ? [gapLines(mb.counter_gap)] : []),
             t('The radio is unavailable for about a minute. The snapshot is consumed.'),
             t('Type the host name {host} to confirm.', {host}),
         ].join('\n\n');
@@ -360,6 +428,11 @@
             {/if}
         </div>
     {/if}
+    {#if st.hmip_counter_gap && !st.running}
+        {@const g = st.hmip_counter_gap}
+        <!-- openccu-lite B-302: after the way back, until the counter has caught up -->
+        <div class="ol-notice warn" data-notice="hmip-counter-gap" data-until={g.until}>{t('HmIP-RF is back on module {to}, whose HmIP security counter is {n} behind what module {from} sent. Devices that heard module {from} may ignore this system\'s commands until about {until}; the counter catches up at the first start of HmIP-RF after that time, and this notice goes then.', {to: g.to, from: g.from, n: g.behind.toLocaleString(), until: new Date(g.until).toLocaleString()})}</div>
+    {/if}
     {#if st.hmip_move_back && !st.running}
         <!-- openccu-lite B-285: the snapshot the move kept is the way back to the previous module -->
         <div class="ol-notice" data-notice="hmip-move-back">
@@ -370,7 +443,11 @@
     <!-- openccu-lite task 275: after a device import from another module's backup, how hmipserver's
          move of the identity onto this module went, with the retry and the battery hint -->
     <DevicesImportNotice {admin} fatal={!!st.hmip_fatal} onretry={() => { exchangeDone = 'retry'; void load(); }} />
-    {#if p.missing_hmip}<div class="ol-notice error" data-notice="missing-hmip">{t('The module chosen for HmIP-RF ({id}) is missing. hmipserver runs its virtual devices only until it is back.', {id: p.missing_hmip})}</div>{/if}
+    {#if p.missing_hmip && p.hmip_pin === p.missing_hmip}
+        <!-- openccu-lite task 318 (D-120): the module holding the HmIP network is not replaced
+             unasked; the move is the choice below, confirmed -->
+        <div class="ol-notice error" data-notice="missing-hmip" data-pinned>{t('The module that holds the HmIP network ({id}) is missing. hmipserver runs its virtual devices only until it is back; no other module is taken without asking, since the network would have to move. To move HmIP-RF to another module, choose it for HmIP-RF below and confirm the change.', {id: p.missing_hmip})}</div>
+    {:else if p.missing_hmip}<div class="ol-notice error" data-notice="missing-hmip">{t('The module chosen for HmIP-RF ({id}) is missing. hmipserver runs its virtual devices only until it is back.', {id: p.missing_hmip})}</div>{/if}
     {#if p.missing_bidcos}<div class="ol-notice error" data-notice="missing-bidcos">{t('The module chosen for BidCos-RF ({id}) is missing. rfd runs without a local radio until it is back.', {id: p.missing_bidcos})}</div>{/if}
     {#if st.mode === 'HM-LGW'}
         <div class="ol-notice">{t('The system runs in LAN-gateway mode: the connections are not chosen here.')}</div>
@@ -386,7 +463,7 @@
                         <span class="ol-card-icon"><Icon name="radio" size={14} /></span>
                         <div class="ol-card-titles"><div class="ol-card-title">HmIP-RF</div><div class="ol-card-sub">{#if units.hmipserver}<span class={`ol-dot ${statusDot(units.hmipserver)}`} title={unitWord(units.hmipserver)} data-unit="hmipserver" data-state={statusKind(units.hmipserver)}></span>{/if}hmipserver</div></div>
                     </div>
-                    <p class="conn-now"><strong>{st.choices.hmip ? t('Chosen') : t('Automatic')}:</strong> {hmipText(p)}</p>
+                    <p class="conn-now"><strong>{st.choices.hmip ? t('Chosen') : t('Automatic')}:</strong> {hmipText(p, st.choices)}</p>
                     {#if p.hmip}
                         <!-- the maintainer, 2026-09-22: the sentence says what the module can or
                              cannot do, and the mark before it says which of the two at a glance -->
@@ -429,7 +506,7 @@
                             <option value="">{t('Automatic')}</option>
                             {#each st.options.bidcos as o (o.id)}<option value={o.id}>{bidcosLabel(o)}</option>{/each}
                             {#if st.choices.bidcos && st.choices.bidcos !== 'none' && !st.options.bidcos.some((o) => o.id === st?.choices.bidcos)}<option value={st.choices.bidcos}>{st.choices.bidcos} · {t('missing')}</option>{/if}
-                            <option value="none">{t('No local radio (LAN gateways only)')}</option>
+                            <option value="none">{noneLabel(p.rfd_lan_gateway)}</option>
                         </select>
                     </label>
                 </div>

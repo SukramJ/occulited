@@ -16,6 +16,7 @@
     import RunLog from '../lib/RunLog.svelte';
     import Disclosure from '../lib/Disclosure.svelte';
     import HTTPSSettings from '../lib/HTTPSSettings.svelte';
+    import WarnEdge from '../lib/WarnEdge.svelte';
 
     /*
      * Task 35 (D-48): the box's TLS certificate - S50lighttpd's self-signed one, or one from an
@@ -419,6 +420,8 @@
     {#if notice}<div class="ol-notice" class:error={noticeError}>{notice}</div>{/if}
     {#if hstsOff?.hsts_clearing}<div class="ol-notice ol-hsts-off"><HSTSClearing view={hstsOff} lead={t('HSTS is off.')} /> {t('Then switch to self-signed.')}</div>{/if}
 
+    <!-- occulited task 12: the Status page's certificate warning (expiring, expired, renewal failed) -->
+    <WarnEdge ids={['certificate']}>
     <h2>{t('Current certificate')}</h2>
     {#if status.current}
         {@const c = status.current}
@@ -436,6 +439,7 @@
     {#if status.next_check && status.settings.mode === 'acme'}
         <p class="ol-muted">{t('Next renewal check: {when}. Renewal below {n} days.', {when: when(status.next_check), n: status.renew_below_days})}</p>
     {/if}
+    </WarnEdge>
     {#if auth.role === 'admin'}
         <!-- the section's ? explains what Save and the buttons do in the mode that is chosen -->
         <h2>{t('Settings')}{#if mode === 'acme'}<Help><p>{t('The whole flow against the staging directory (or the custom CA); nothing is installed.')}</p><p>{t('Test runs against the staging directory without switching the system; Save with mode ACME, then Issue now, installs for real.')}</p></Help>{:else if mode === 'manual'}<Help><p>{t('Certificate, chain and key as files (PEM or DER) or pasted as PEM; the chain may be appended to the certificate instead. The key can be left out when the system generated it below and the certificate was signed for that request. Install writes it to the system.')}</p><p>{t('The chosen files are sent as they are; a pasted text beside a file is sent for the fields without a file.')}</p></Help>{:else if status.settings.mode !== 'self-signed'}<Help>{t('Saving removes the CA certificate and lets the system generate a self-signed one; the ACME settings are kept for the next switch.')}</Help>{/if}</h2>

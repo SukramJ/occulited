@@ -81,6 +81,9 @@ type Catalog interface {
 	// receives the result. catalog.ErrInstallRunning while an install runs (B-25).
 	Start(ctx context.Context, id string) (done <-chan error, err error)
 	Progress() *catalog.Progress
+	// Image is a catalogue entry's image of a kind (openccu-lite task 100), the copy the check
+	// fetched with the manifest; fs.ErrNotExist for none.
+	Image(id, kind string) ([]byte, error)
 }
 
 // Firmware is the device-firmware service (task 11).
@@ -103,8 +106,11 @@ type AddonManager interface {
 // SystemAPI serves /api/system/v1: status, radio, services, addons, log.
 type SystemAPI struct {
 	Root system.Root
-	// Version is occulited's own main.version, answered on /status (task 133)
-	Version  string
+	// Version is occulited's own main.version, answered on /status (task 133): the image version
+	// its commit is tagged with, or `git describe` between build rounds (task 9)
+	Version string
+	// Commit is the commit occulited was built from (main.commit), answered beside it (task 9)
+	Commit   string
 	Services system.ServiceManager
 	Log      system.LogReader
 	Addons   AddonLister
@@ -184,6 +190,8 @@ type SystemAPI struct {
 	Updates *addonupdates.Service
 	// installs are the upload installs, run detached from their request (B-4)
 	installs installJobs
+	// addonFeed is the addons' revision and its open streams (openccu-lite B-297)
+	addonFeed addonChanges
 	// installGate makes the upload's and the catalogue's "none runs - start" one step each, so
 	// the two never both start (B-25)
 	installGate sync.Mutex
@@ -226,6 +234,9 @@ type SystemAPI struct {
 	Cert *acme.Service
 	// Trust is the four trust stores (openccu-lite task 231); nil = the trust routes answer 501.
 	Trust *trust.Store
+	// PinTarget names the server a purpose's connections go to (openccu-lite task 232: the OIDC
+	// issuer, the ACME directory), for Pin the current certificate; nil or "" = none configured.
+	PinTarget func(purpose string) string
 	// RadioFirmware is the coprocessor firmware service (task 41); nil = the routes answer 501.
 	RadioFirmware *system.RadioFirmware
 	// RadioConnections: the connection per interface process (task 129 phase 3).
@@ -373,6 +384,7 @@ func (a *SystemAPI) Register(mux *http.ServeMux) {
 	route(mux, auth.ScopeSystemRead, "GET "+p+"/services/{id}/unit", a.unitOverride)
 	route(mux, auth.ScopeSystemWrite, "PUT "+p+"/services/{id}/unit", a.unitOverridePut)
 	route(mux, auth.ScopeSystemRead, "GET "+p+"/addons", a.addons)
+	route(mux, auth.ScopeSystemRead, "GET "+p+"/addons/stream", a.addonsStream)                       // openccu-lite B-297
 	route(mux, auth.ScopeAddonsWrite, "POST "+p+"/addons/{id}/reinstall-dismiss", a.reinstallDismiss) // openccu-lite task 146
 	route(mux, auth.ScopeAddonsWrite, "POST "+p+"/addons/{id}/enable", a.addonEnable)
 	route(mux, auth.ScopeAddonsWrite, "POST "+p+"/addons/{id}/disable", a.addonDisable)
@@ -383,6 +395,7 @@ func (a *SystemAPI) Register(mux *http.ServeMux) {
 	route(mux, auth.ScopeSystemRead, "GET "+p+"/addons/install", a.installJob) // B-4: the job
 	route(mux, auth.ScopeAddonsWrite, "POST "+p+"/addons/{id}/uninstall", a.uninstall)
 	route(mux, auth.ScopeSystemRead, "GET "+p+"/addons/{id}/update", a.update)
+	a.registerAddonImages(mux, p) // openccu-lite task 100: the addons' icons and logos
 	route(mux, auth.ScopeSystemRead, "GET "+p+"/addons/updates", a.updates)
 	route(mux, auth.ScopeAddonsWrite, "POST "+p+"/addons/updates/check", a.updatesCheck)
 	route(mux, auth.ScopePower, "POST "+p+"/reboot", a.reboot)
@@ -490,6 +503,7 @@ func (a *SystemAPI) Register(mux *http.ServeMux) {
 	route(mux, auth.ScopeSystemRead, "GET "+p+"/certificate", a.certificate)
 	route(mux, auth.ScopeSystemWrite, "PUT "+p+"/certificate/settings", a.certificateSettingsPut)
 	a.registerTrust(mux, p)          // openccu-lite task 231
+	a.registerPins(mux, p)           // openccu-lite task 232
 	a.registerRestoreDevices(mux, p) // openccu-lite task 251
 	a.registerRestoreKey(mux, p)     // openccu-lite task 296
 	route(mux, auth.ScopeSystemWrite, "POST "+p+"/certificate/test", a.certificateStart(acme.KindTest))
@@ -553,6 +567,7 @@ func (a *SystemAPI) status(w http.ResponseWriter, r *http.Request) {
 	s := a.Root.ReadStatus()
 	s.Recovered = a.MetaRecovered
 	s.Occulited = a.Version
+	s.OcculitedCommit = a.Commit
 	// task 94: the boot's clock gate - and after its timeout, whether chrony has synchronised since
 	if a.Clock != nil {
 		s.Clock = a.Clock.Status(r.Context())
@@ -817,6 +832,12 @@ func (a *SystemAPI) services(w http.ResponseWriter, _ *http.Request) {
 		list = sa.OverlayServicePolicy(list)
 	}
 	list = a.RadioConnections.OverlayServiceNotes(list)
+	// openccu-lite task 100: an addon unit's row shows the addon's icon
+	for i := range list {
+		if id, ok := strings.CutPrefix(list[i].ID, "addon-"); ok && list[i].Kind == "addon" {
+			list[i].Images = addonImageURLs(a.Root, id, "")
+		}
+	}
 	writeJSON(w, 200, map[string]any{"services": list, "systemd": a.Timers != nil, "poll_seconds": pollSeconds})
 }
 
@@ -891,6 +912,7 @@ func (a *SystemAPI) addons(w http.ResponseWriter, r *http.Request) {
 		path := addonSettingsURL(list[i])
 		list[i].SessionHeader = SessionHeader(a.Root, list[i].ID, list[i].Version, path) // task 88, D-67
 		list[i].LegacySession = a.LegacySession(list[i].ID, list[i].Version, path)       // task 125
+		list[i].Images = addonImageURLs(a.Root, list[i].ID, list[i].Version)             // openccu-lite task 100
 	}
 	a.MarkPayloadMissing(list) // openccu-lite task 146
 	writeJSON(w, 200, map[string]any{"addons": list})
@@ -1050,6 +1072,9 @@ func (a *SystemAPI) uninstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := a.Manager.Uninstall(r.Context(), r.PathValue("id"))
+	// openccu-lite B-297: the open shells read their menus again - a failed uninstall may have
+	// removed part of the addon too
+	a.addonsChanged()
 	if err != nil {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": "uninstall-failed", "message": err.Error(), "output": out.Output, "system_removed": out.SystemRemoved})
 		return
@@ -1875,6 +1900,9 @@ func (a *SystemAPI) catalogIndex(w http.ResponseWriter, r *http.Request) {
 		if it.Manifest != nil && it.Latest != nil {
 			it.UpdateAvailable = catalog.UpdateAvailable(installed[it.ID], it.Latest.Version)
 		}
+		if it.Manifest != nil {
+			it.Images = catalogImageURLs(it.ID, it.ImageHashes) // openccu-lite task 100
+		}
 	}
 	writeJSON(w, 200, map[string]any{"catalog": view, "installed": installed, "arch": ArchName(), "daily": a.CatalogDaily == nil || a.CatalogDaily()})
 }
@@ -1972,7 +2000,9 @@ func (a *SystemAPI) catalogInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	go func() {
-		if err := <-done; err != nil || a.Updates == nil {
+		err := <-done
+		a.addonsChanged() // openccu-lite B-297: installed, updated, or a failed run that changed something
+		if err != nil || a.Updates == nil {
 			return
 		}
 		// the addon's own update check ran before this install, and the Status page counts what
@@ -2124,15 +2154,21 @@ func (a *SystemAPI) restoreCheck(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, out)
 }
 
-// restoreApply applies a checked upload and reboots.
+// restoreApply applies a checked upload and reboots: {file, key?, force?, confirm} - confirm is
+// required (400 confirm; D-120).
 func (a *SystemAPI) restoreApply(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		File  string `json:"file"`
-		Key   string `json:"key"`
-		Force bool   `json:"force"`
+		File    string `json:"file"`
+		Key     string `json:"key"`
+		Force   bool   `json:"force"`
+		Confirm bool   `json:"confirm"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		badBody(w, err)
+		return
+	}
+	// openccu-lite task 317 (D-120): the restore replaces /usr/local, the HmIP identity files with it
+	if !a.identityConfirmed(w, body.Confirm, "", false) {
 		return
 	}
 	if filepath.Base(body.File) != body.File || !strings.HasPrefix(body.File, "restore-") || !strings.HasSuffix(body.File, ".sbk") {
@@ -2142,6 +2178,11 @@ func (a *SystemAPI) restoreApply(w http.ResponseWriter, r *http.Request) {
 	path := filepath.Join(string(a.Root), system.BackupDir, body.File)
 	if _, err := os.Stat(path); err != nil {
 		writeJSON(w, http.StatusNotFound, apiError{Error: "not_found", Message: "upload not found - check it again"})
+		return
+	}
+	// openccu-lite B-289: not onto an HmIP module that cannot take the backup's network key
+	if refused := a.restoreHmIPRefusal(path); refused != nil {
+		hmipFirmwareError(w, refused)
 		return
 	}
 	// openccu-lite task 296: the passphrase's verdict for the answer and the journal (never the
@@ -2822,6 +2863,7 @@ func (a *SystemAPI) setAddonEnabled(w http.ResponseWriter, r *http.Request, enab
 	if o, err := a.Services.Control(r.Context(), serviceIDFor(a, id), action); err != nil {
 		out["control_error"] = err.Error() + ": " + o
 	}
+	a.addonsChanged() // openccu-lite B-297
 	writeJSON(w, 200, out)
 }
 

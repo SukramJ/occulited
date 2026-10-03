@@ -28,8 +28,13 @@ import (
 	"github.com/hobbyquaker/occulited/internal/meta"
 )
 
-// Implementation names the server in /version, e.g. "occulited 0.1.0".
+// Implementation names the server in /version, e.g. "occulited 1.0.0-dev.38" (task 9: the image
+// version occulited's commit is tagged with, `git describe` between build rounds).
 var Implementation = "occulited dev"
+
+// Commit is the commit the server was built from, answered beside Implementation; empty for a
+// build that carries none.
+var Commit = ""
 
 const maxBody = 1 << 20 // 1 MiB; an import of a large house is well under 200 KB
 
@@ -180,6 +185,9 @@ func mutated(w http.ResponseWriter, rev uint64, changed bool, err error, status 
 
 func (a *MetaAPI) version(w http.ResponseWriter, _ *http.Request) {
 	out := map[string]any{"api": "meta", "version": 1, "format": meta.Format, "revision": a.Store.Revision(), "implementation": Implementation}
+	if Commit != "" {
+		out["commit"] = Commit
+	}
 	if a.HmIPPairing != nil {
 		out["hmip"] = a.HmIPPairing()
 	}

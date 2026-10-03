@@ -14,6 +14,7 @@
     import {link} from '../lib/router.svelte';
     import SystemTitle from '../lib/SystemTitle.svelte';
     import WiFiPanel from '../lib/WiFiPanel.svelte';
+    import {warnEdge, warnFor} from '../lib/systemmenu.svelte';
 
     // task 57: the firewall is its own page, pages/FirewallPage.svelte (/system/firewall)
     interface Network { hostname: string; domain?: string; mode: string; address?: string; netmask?: string; gateway?: string; dns: string[]; ipv6?: string; interfaces: NetIface[]; ipv6_state?: IPv6State }
@@ -704,7 +705,8 @@
             </div>
         </section>
 
-        <section class="ol-card" data-panel="time">
+        <!-- occulited task 12: HmIP-RF held back for a trusted clock is this card's matter -->
+        <section class="ol-card {warnEdge(['hmip-clock-hold'])}" data-panel="time" {...warnFor(['hmip-clock-hold'])}>
             <div class="ol-card-head">
                 <span class="ol-card-icon"><Icon name="clock" size={14} /></span>
                 <div class="ol-card-titles"><h3 class="ol-card-title">{t('Time')}<Help>{t('The clock and where it comes from. A system without a real-time clock starts in the past until NTP answers, which is why the browser\'s time is offered here.')}</Help></h3></div>

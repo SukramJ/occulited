@@ -3,16 +3,17 @@ package acme
 import (
 	"context"
 	"crypto/ecdsa"
-	"crypto/x509"
 	"encoding/json"
+	"net/http"
 )
 
 // Request is one run of the ACME flow, everything the issuer needs and nothing of the box.
 type Request struct {
 	DirectoryURL string
-	// Roots is the pool the directory connection trusts (openccu-lite task 231: occulited's
-	// store plus the ACME anchors); nil = Go's own roots.
-	Roots       *x509.CertPool
+	// HTTP is the client the directory connection goes through (openccu-lite task 231: the trust
+	// store's, verifying with occulited's store plus the ACME anchors - and, task 232, the ACME
+	// pins); nil = lego's default client on Go's own roots.
+	HTTP        *http.Client
 	Email       string
 	EABKID      string
 	EABHMAC     string

@@ -2,11 +2,11 @@ package acme
 
 import (
 	"context"
-	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -140,9 +140,10 @@ type Service struct {
 	// followed them: what else keeps to the box's name (the HTTPS redirect's target) follows
 	// there too. nil = nothing.
 	Follow func(hostname, domain string)
-	// Roots is the pool every directory connection trusts (openccu-lite task 231: occulited's
-	// trust store plus the ACME anchors); nil = Go's own roots.
-	Roots func() *x509.CertPool
+	// HTTP returns the client every directory connection goes through (openccu-lite task 231:
+	// the trust store's, on occulited's store plus the ACME anchors; task 232: with the ACME
+	// pins); nil = lego's default client on Go's own roots.
+	HTTP func() *http.Client
 
 	st       store
 	mu       sync.Mutex
@@ -459,8 +460,8 @@ func (s *Service) attempt(ctx context.Context, set Settings, a *Attempt) error {
 	req := Request{DirectoryURL: a.Directory, Email: set.Email, EABKID: set.EABKID, EABHMAC: set.EABHMAC, Names: a.Names, Challenge: set.Challenge,
 		DNSProvider: set.DNSProvider, DNSFields: set.DNSCredentials, AccountKey: key, Registration: regs[a.Directory], HTTP01: s.HTTP01, Log: logLine,
 		LibLog: func(l string) { a.run.Output("lego", l, legoPriority) }}
-	if s.Roots != nil {
-		req.Roots = s.Roots()
+	if s.HTTP != nil {
+		req.HTTP = s.HTTP()
 	}
 	logLine(fmt.Sprintf("%s: %s via %s", a.Kind, strings.Join(a.Names, ", "), set.Challenge))
 	res, err := s.Issuer.Issue(ctx, req)

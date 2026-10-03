@@ -48,9 +48,20 @@ func (b radioConnBody) choices() radio.Choices {
 
 func radioConnError(w http.ResponseWriter, err error) {
 	var confirm *system.ConfirmRequired
+	var firmware *system.HmIPFirmwareRefused
+	var blocked *system.SnapshotBlocked
 	switch {
+	case errors.As(err, &blocked):
+		// openccu-lite B-301: a kept local-key snapshot of the module; the page offers its discard
+		writeJSON(w, http.StatusConflict, apiError{Error: "snapshot-blocked", Message: err.Error(), Detail: map[string]any{"sgtin": blocked.SGTIN}})
+	case errors.As(err, &firmware):
+		hmipFirmwareError(w, firmware)
 	case errors.As(err, &confirm):
-		writeJSON(w, http.StatusConflict, map[string]any{"error": "confirm-required", "message": err.Error(), "devices": confirm.Devices})
+		out := map[string]any{"error": "confirm-required", "message": err.Error(), "devices": confirm.Devices}
+		if confirm.HmIPMove != nil {
+			out["hmip_move"] = confirm.HmIPMove
+		}
+		writeJSON(w, http.StatusConflict, out)
 	case errors.Is(err, system.ErrConnApplyRunning):
 		writeJSON(w, http.StatusConflict, apiError{Error: "busy", Message: err.Error()})
 	case errors.Is(err, system.ErrConnUnavailable):
@@ -58,6 +69,13 @@ func radioConnError(w http.ResponseWriter, err error) {
 	default:
 		writeJSON(w, http.StatusUnprocessableEntity, apiError{Error: "invalid", Message: err.Error()})
 	}
+}
+
+// hmipFirmwareError answers the refusal of an HmIP move onto a module whose firmware cannot take
+// the network key (openccu-lite B-289): 422 hmip-firmware, the module, its version and the minimum
+// in the detail for the page's own words.
+func hmipFirmwareError(w http.ResponseWriter, e *system.HmIPFirmwareRefused) {
+	writeJSON(w, http.StatusUnprocessableEntity, apiError{Error: "hmip-firmware", Message: e.Error(), Detail: map[string]any{"module": e.Module, "version": e.Version, "minimum": e.Minimum}})
 }
 
 // radioConnectionsPreview answers what the choices would give, without changing anything.

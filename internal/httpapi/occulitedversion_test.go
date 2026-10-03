@@ -6,21 +6,27 @@ import (
 	"testing"
 )
 
-// task 133: /status carries occulited's own version beside /VERSION's, for the Status page
+// task 133: /status carries occulited's own version beside /VERSION's, for the Status page; task 9:
+// the version is the image version the commit is tagged with, and the commit goes beside it
 func TestStatusCarriesOcculitedVersion(t *testing.T) {
 	r := fakeRoot(t)
-	for _, c := range []struct{ version, want string }{
-		{"1df08bb0101038ac6eb7c08c3f3144a8a91840a1-hot", "1df08bb0101038ac6eb7c08c3f3144a8a91840a1-hot"},
-		{"", ""}, // a build without -X main.version leaves the field out
+	const sha = "fa42dfde1e31fb074df53220dd573ceb92642ff0"
+	for _, c := range []struct{ version, commit string }{
+		{"1.0.0-dev.38", sha},
+		{"1.0.0-dev.38-5-gfa42dfd-dirty", sha},
+		{"dev", ""},
+		{"", ""}, // a build without -X main.version leaves both fields out
 	} {
 		mux := http.NewServeMux()
-		(&SystemAPI{Root: r, Version: c.version}).Register(mux)
+		(&SystemAPI{Root: r, Version: c.version, Commit: c.commit}).Register(mux)
 		srv := httptest.NewServer(mux)
 		st, out, _ := do(t, srv, "GET", "/api/system/v1/status", "", nil)
 		srv.Close()
-		got, present := out["occulited_version"]
-		if st != 200 || (c.want == "" && present) || (c.want != "" && got != c.want) {
-			t.Fatalf("version %q: status %d, occulited_version %v (present %v)", c.version, st, got, present)
+		for field, want := range map[string]string{"occulited_version": c.version, "occulited_commit": c.commit} {
+			got, present := out[field]
+			if st != 200 || (want == "" && present) || (want != "" && got != want) {
+				t.Fatalf("version %q: status %d, %s %v (present %v)", c.version, st, field, got, present)
+			}
 		}
 	}
 }

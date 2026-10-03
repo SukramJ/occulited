@@ -122,9 +122,9 @@ func TestBootMarkers(t *testing.T) {
 		{"into the recovery system, failing", func(_ *testing.T, g *bootRig) { g.m.setErr(errors.New("no reboot")) }, "/reboot/recovery", `{"confirm":true}`, 500, ""},
 		{"the system update's install", func(t *testing.T, g *bootRig) { g.stage(t, false) }, "/system-update/install", `{}`, 200, bootexpect.KindUpdate},
 		{"the install whose reboot fails", func(t *testing.T, g *bootRig) { g.stage(t, false); g.m.setErr(errors.New("no reboot")) }, "/system-update/install", `{}`, 200, ""},
-		{"a restore", restoreFile, "/restore/apply", `{"file":"restore-1.sbk"}`, 200, bootexpect.KindRestore},
-		{"a restore that fails", func(t *testing.T, g *bootRig) { restoreFile(t, g); g.restoreErr = errors.New("exit status 1") }, "/restore/apply", `{"file":"restore-1.sbk"}`, 422, ""},
-		{"a restore whose reboot fails", func(t *testing.T, g *bootRig) { restoreFile(t, g); g.m.setErr(errors.New("no reboot")) }, "/restore/apply", `{"file":"restore-1.sbk"}`, 200, ""},
+		{"a restore", restoreFile, "/restore/apply", `{"confirm":true,"file":"restore-1.sbk"}`, 200, bootexpect.KindRestore},
+		{"a restore that fails", func(t *testing.T, g *bootRig) { restoreFile(t, g); g.restoreErr = errors.New("exit status 1") }, "/restore/apply", `{"confirm":true,"file":"restore-1.sbk"}`, 422, ""},
+		{"a restore whose reboot fails", func(t *testing.T, g *bootRig) { restoreFile(t, g); g.m.setErr(errors.New("no reboot")) }, "/restore/apply", `{"confirm":true,"file":"restore-1.sbk"}`, 200, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -272,10 +272,10 @@ func TestRestoreApplyPassesKeyOnStdin(t *testing.T) {
 		calls = append(calls, name+" "+strings.Join(args, " "))
 		return []byte("restored"), nil
 	}
-	if st, out := g.do(t, "POST", "/restore/apply", `{"file":"restore-1.sbk","key":"s3cret","force":true}`); st != 200 || out["rebooting"] != true {
+	if st, out := g.do(t, "POST", "/restore/apply", `{"confirm":true,"file":"restore-1.sbk","key":"s3cret","force":true}`); st != 200 || out["rebooting"] != true {
 		t.Fatalf("%d %v", st, out)
 	}
-	if st, out := g.do(t, "POST", "/restore/apply", `{"file":"restore-1.sbk"}`); st != 200 || out["rebooting"] != true {
+	if st, out := g.do(t, "POST", "/restore/apply", `{"confirm":true,"file":"restore-1.sbk"}`); st != 200 || out["rebooting"] != true {
 		t.Fatalf("%d %v", st, out)
 	}
 	if len(stdin) != 2 || stdin[0] != "s3cret\n" || stdin[1] != "\n" {
@@ -309,7 +309,7 @@ func TestRestoreApplyAnswersBeforeReboot(t *testing.T) {
 		scriptCtxErr <- ctx.Err()
 		return []byte("4) Scheduling backup restore for next boot cycle, OK"), nil
 	}
-	req, _ := http.NewRequestWithContext(clientCtx, "POST", g.srv.URL+"/api/system/v1/restore/apply", strings.NewReader(`{"file":"restore-1.sbk"}`))
+	req, _ := http.NewRequestWithContext(clientCtx, "POST", g.srv.URL+"/api/system/v1/restore/apply", strings.NewReader(`{"confirm":true,"file":"restore-1.sbk"}`))
 	req.Header.Set("Content-Type", "application/json")
 	if _, err := http.DefaultClient.Do(req); err == nil {
 		t.Fatal("the client's request was not cut")
@@ -332,7 +332,7 @@ func TestRestoreApplyAnswersBeforeReboot(t *testing.T) {
 	// a live request whose reboot the manager refuses
 	g.api.RunStdin = func(context.Context, []byte, string, ...string) ([]byte, error) { return []byte("staged"), nil }
 	g.m.setErr(errors.New("no reboot"))
-	st, out := g.do(t, "POST", "/restore/apply", `{"file":"restore-1.sbk"}`)
+	st, out := g.do(t, "POST", "/restore/apply", `{"confirm":true,"file":"restore-1.sbk"}`)
 	if st != 200 || out["ok"] != true || out["rebooting"] != false || !strings.Contains(out["message"].(string), "no reboot") {
 		t.Fatalf("%d %v", st, out)
 	}
@@ -341,7 +341,7 @@ func TestRestoreApplyAnswersBeforeReboot(t *testing.T) {
 	}
 	// no manager at all (a dry run): staged, not rebooting
 	g.api.Manager = nil
-	if st, out := g.do(t, "POST", "/restore/apply", `{"file":"restore-1.sbk"}`); st != 200 || out["rebooting"] != false {
+	if st, out := g.do(t, "POST", "/restore/apply", `{"confirm":true,"file":"restore-1.sbk"}`); st != 200 || out["rebooting"] != false {
 		t.Fatalf("%d %v", st, out)
 	}
 }

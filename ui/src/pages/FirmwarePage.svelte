@@ -16,6 +16,7 @@
     import Icon from '../lib/Icon.svelte';
     import type {Status} from '../lib/api';
     import {newerFirmware, shownVersion} from '../lib/fwversion';
+    import WarnEdge from '../lib/WarnEdge.svelte';
 
     // version_from_name and date_from_name: what the update file's name carries, sent only when the
     // bundle's info states no version
@@ -145,7 +146,7 @@
     <SystemUpdate container={!!status?.container} platform={status?.version?.platform} />
 </section>
 
-<RadioFirmware />
+<WarnEdge ids={['radio-firmware', 'radio-module-unusable']}><RadioFirmware /></WarnEdge>
 
 <section class="ol-panel" data-panel="device-firmware">
 <!-- task 51: how the page works is help, not the system's state - behind the heading's ? -->

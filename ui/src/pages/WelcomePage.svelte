@@ -1,6 +1,7 @@
 <script lang="ts">
     import {onMount} from 'svelte';
     import {api} from '../lib/api';
+    import {ask} from '../lib/dialog.svelte';
     import {t} from '../lib/i18n.svelte';
     import {link, navigate} from '../lib/router.svelte';
 
@@ -32,6 +33,26 @@
     let lkChoice = $state<'' | 'local' | 'eq3'>('');
     const lkStep = $derived(!!lk && lk.available && !lk.enabled && lk.devices === 0);
     const lkBlocked = $derived(lkStep && lkChoice === '');
+    // openccu-lite task 322: HmIP only - BidCos-RF's connection "none" (rfd and, but on the PCB,
+    // multimacd off; hmipserver directly on the module). Asked only where rfd runs on a local module
+    // or USB adapter with no LAN gateway and the choice is still automatic; never preselected, Done
+    // waits for it. With BidCos devices paired there is nothing to choose: one line says BidCos-RF
+    // stays on. An HmIP-only module (TK stick) runs HmIP only already: nothing is said.
+    interface ConnPlanView { rfd: {run: boolean}; rfd_local: boolean; rfd_usb_adapter: boolean; rfd_lan_gateway: boolean; multimacd: {run: boolean}; hmipserver: {node?: string} }
+    interface ConnView { available: boolean; choices: {hmip: string; bidcos: string}; plan?: ConnPlanView; running?: unknown; last?: {ok: boolean; error?: string} | null }
+    let conn = $state<ConnView | null>(null);
+    let bidcosDevices = $state<{devices: number; known: boolean} | null>(null);
+    let hoChoice = $state<'' | 'hmip-only' | 'keep'>('');
+    const hoOffer = $derived(!!conn?.available && !!conn.plan && conn.plan.rfd.run && (conn.plan.rfd_local || conn.plan.rfd_usb_adapter)
+        && !conn.plan.rfd_lan_gateway && conn.choices.bidcos === '' && !conn.running);
+    const hoPaired = $derived(hoOffer && !!bidcosDevices?.known && bidcosDevices.devices > 0);
+    const hoStep = $derived(hoOffer && !hoPaired);
+    const hoBlocked = $derived(hoStep && hoChoice === '');
+    // the HM-MOD-RPI-PCB keeps multimacd for HmIP (D-101): the text promises no multiplexer-free path there
+    let isPCB = $state(false);
+    const hoMultimacdStays = $derived(isPCB);
+    const steps = $derived(3 + (hoOffer ? 1 : 0) + (lkStep ? 1 : 0));
+    const blocked = $derived(lkBlocked || hoBlocked);
 
     onMount(async () => {
         try { lk = await api.get<LocalKeyView>('/api/system/v1/radio/hmip/local-key?devices=1'); } catch { /* no HmIP, or not an administrator */ }
@@ -39,7 +60,15 @@
         try { relEnabled = (await api.get<FeedState>('/api/system/v1/system-update')).feed?.enabled ?? false; } catch { /* no feed */ }
         try { catDaily = (await api.get<CatalogState>('/api/system/v1/catalog')).daily ?? false; } catch { /* no catalogue */ }
         try { firstBoot = (await api.get<{first_boot_import?: FirstBoot}>('/api/system/v1/status')).first_boot_import ?? null; } catch { /* none */ }
-        try { paired = Object.values((await api.get<PairedView>('/api/system/v1/factory-reset')).interfaces ?? {}).reduce((n, i) => n + (i.known ? i.devices : 0), 0); } catch { /* not known: the offer stays */ }
+        try {
+            const ifs = (await api.get<PairedView>('/api/system/v1/factory-reset')).interfaces ?? {};
+            paired = Object.values(ifs).reduce((n, i) => n + (i.known ? i.devices : 0), 0);
+            bidcosDevices = ifs['BidCos-RF'] ?? null;
+        } catch { /* not known: the offer stays */ }
+        try {
+            conn = await api.get<ConnView & {modules?: {hardware: string; roles?: string[]}[]}>('/api/system/v1/radio/connections');
+            isPCB = ((conn as {modules?: {hardware: string; roles?: string[]}[]}).modules ?? []).some((m) => m.hardware === 'HM-MOD-RPI-PCB' && (m.roles ?? []).length > 0);
+        } catch { /* not an administrator, or no occulited radio stack: no step */ }
     });
 
     async function setFw(on: boolean) {
@@ -59,11 +88,72 @@
         }
     }
 
-    async function done(to = '/') {
-        if (lkStep && lkChoice === 'local') {
-            busy = 'lk';
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+    /** task 322: BidCos-RF off, and wait until the connection change has finished - before the local key */
+    async function applyHmIPOnly(): Promise<boolean> {
+        busy = 'ho';
+        try {
+            await api.put('/api/system/v1/radio/connections', {hmip: conn?.choices.hmip ?? '', bidcos: 'none'});
+            for (let i = 0; i < 180; i++) {
+                await sleep(i === 0 ? 500 : 1000);
+                const st = await api.get<ConnView>('/api/system/v1/radio/connections');
+                if (!st.running) {
+                    conn = st;
+                    if (st.last && !st.last.ok) { msg = t('BidCos-RF could not be switched off: {e}', {e: st.last.error ?? ''}); return false; }
+                    return true;
+                }
+            }
+            msg = t('The radio connection change did not finish in time; the Interfaces page shows how it stands.');
+            return false;
+        } catch (e) {
+            msg = (e as Error).message;
+            return false;
+        } finally {
+            busy = '';
+        }
+    }
+
+    /** after a connection change HmIP-RF starts again: the local key waits until it lists its (no) devices */
+    async function hmipReady(): Promise<boolean> {
+        for (let i = 0; i < 180; i++) {
             try {
-                await api.put('/api/system/v1/radio/hmip/local-key', {mode: 'generate'});
+                const v = await api.get<LocalKeyView>('/api/system/v1/radio/hmip/local-key?devices=1');
+                if (v.available && v.devices === 0) return true;
+            } catch { /* starting */ }
+            await sleep(1000);
+        }
+        return false;
+    }
+
+    async function done(to = '/') {
+        // the connection change first, the local key after it - never both at once (task 322)
+        let changed = false;
+        if (hoStep && hoChoice === 'hmip-only') {
+            if (!(await applyHmIPOnly())) return;
+            changed = true;
+        }
+        if (lkStep && lkChoice === 'local') {
+            // openccu-lite task 317 (D-120): the module's identity files are written under the new
+            // key - said and confirmed; no device is paired, so nothing has to be taught in again
+            const ok = await ask({
+                title: t('Generate a local key now?'),
+                message: [
+                    t('A new random key is written into the radio module and kept on this system; HmIP-RF writes its identity files under it and restarts at once.'),
+                    t('The key then lies in a file on this system and in every backup - whoever has it can join the network, so protecting the backups becomes crucial.'),
+                ].join('\n\n'),
+                confirm: t('Generate'),
+                danger: true,
+            });
+            if (!ok) return;
+            busy = 'lk';
+            if (changed && !(await hmipReady())) {
+                msg = t('HmIP-RF did not come back after the connection change; generate the key later on the Keys page.');
+                busy = '';
+                return;
+            }
+            try {
+                await api.put('/api/system/v1/radio/hmip/local-key', {mode: 'generate', confirm: true});
             } catch (e) {
                 msg = (e as Error).message;
                 busy = '';
@@ -77,7 +167,16 @@
 </script>
 
 <h1>{t('Welcome')}</h1>
-<p>{lkStep ? t('The administrator exists. Four things worth deciding now; each can be changed later on its page.') : t('The administrator exists. Three things worth deciding now; each can be changed later on its page.')}</p>
+<p>{steps === 5 ? t('The administrator exists. Five things worth deciding now; each can be changed later on its page.') : steps === 4 ? t('The administrator exists. Four things worth deciding now; each can be changed later on its page.') : t('The administrator exists. Three things worth deciding now; each can be changed later on its page.')}</p>
+
+<!-- openccu-lite task 319: the three statements of the update packages' EULA preamble, without the licence text -->
+<section class="about" data-welcome-about aria-labelledby="welcome-about">
+    <h2 id="welcome-about">{t('About openccu-lite')}</h2>
+    <p>{t('openccu-lite is a separate project based on OpenCCU, but it is not OpenCCU: no ReGaHSS, no WebUI programs or Homematic scripts, its own web interface and the system service occulited.')}</p>
+    <p>{t('Support: please report questions and problems with openccu-lite only in its issue tracker - not in the OpenCCU forum and not in OpenCCU\'s issue tracker. The OpenCCU team cannot help with openccu-lite.')} <a href="https://github.com/hobbyquaker/openccu-lite/issues" target="_blank" rel="noopener noreferrer" data-about="issues">{t('openccu-lite\'s issue tracker')}</a></p>
+    <p>{t('Donations: openccu-lite\'s maintainer does not accept donations. If you want to support the project, give it a star on GitHub.')} <a href="https://github.com/hobbyquaker/openccu-lite" target="_blank" rel="noopener noreferrer" data-about="star">{t('openccu-lite on GitHub')}</a></p>
+    <p class="ol-muted">{t('The system is licensed under the Apache License 2.0; its parts carry their own licences.')} <a href="https://github.com/hobbyquaker/openccu-lite/blob/main/LICENSE" target="_blank" rel="noopener noreferrer" data-about="license">{t('The licence')}</a> · <a href="/licenses" use:link data-about="licenses">{t('Licenses')}</a></p>
+</section>
 
 <h2>1 · {t('Automatic checks')}</h2>
 <p>{t('This system connects to the internet only when you ask it to. Two checks can run daily instead; each is named here with where it connects, each is off, and each can be changed later on its page.')}</p>
@@ -102,8 +201,26 @@
 </div>
 {#if msg}<div class="ol-notice">{msg}</div>{/if}
 
+{#if hoOffer}
+    <section data-welcome-hmip-only>
+    <h2>3 · {t('HmIP only?')}</h2>
+    {#if hoPaired}
+        <p data-welcome-ho-paired>{t('BidCos-RF has {n} paired devices and stays on. It can be turned off later on the Interfaces page.', {n: bidcosDevices?.devices ?? 0})} <a href="/system/interfaces#connections" use:link>{t('Interfaces')}</a></p>
+    {:else}
+        <p>{hoMultimacdStays
+            ? t('BidCos-RF is the older Homematic radio standard; new devices are HmIP. This system has no BidCos device paired. With BidCos-RF off, the radio module serves HmIP only.')
+            : t('BidCos-RF is the older Homematic radio standard; new devices are HmIP. This system has no BidCos device paired. With BidCos-RF off, HmIP has the radio module to itself, without the multiplexer in between.')}</p>
+        <div class="ol-actions ho-choice" role="radiogroup" aria-label={t('HmIP only?')}>
+            <label><input type="radio" name="ho" value="hmip-only" bind:group={hoChoice} disabled={busy !== ''} /> {t('HmIP only')}</label>
+            <label><input type="radio" name="ho" value="keep" bind:group={hoChoice} disabled={busy !== ''} /> {t('Keep BidCos-RF')}</label>
+        </div>
+        <p class="ol-muted" data-welcome-ho-later>{t('BidCos-RF can be switched on again at any time on the Interfaces page (BidCos-RF, Automatic); nothing is lost. The change restarts the radio for about a minute.')} <a href="/system/interfaces#connections" use:link>{t('Interfaces')}</a></p>
+    {/if}
+    </section>
+{/if}
+
 {#if lkStep}
-    <h2>3 · {t('The HmIP network key')}</h2>
+    <h2>{hoOffer ? 4 : 3} · {t('The HmIP network key')}</h2>
     <p>{t("HmIP devices share one network key. Normally it is locked in the radio module, and eQ-3's key server is needed to move it to another radio module and to pair a device without its key. It can be kept on this system instead: it is then offline-capable, and a later radio swap never needs the internet. No HmIP device is paired yet, so nothing has to be taught in again for this.")}</p>
     <div class="ol-actions lk-choice" role="radiogroup" aria-label={t('The HmIP network key')}>
         <label><input type="radio" name="lk" value="local" bind:group={lkChoice} disabled={busy !== ''} /> {t('Generate a local key now')}</label>
@@ -116,18 +233,21 @@
     <p class="ol-muted" data-welcome-lk-later>{t('Either way this can be changed later on the Keys page, under Local key mode. Generating the key restarts HmIP-RF.')} <a href="/system/keys#local-key" use:link>{t('Keys')}</a></p>
 {/if}
 
-<h2>{lkStep ? 4 : 3} · {t('A frontend')}</h2>
+<h2>{steps} · {t('A frontend')}</h2>
 <p>{t('This system ships no device management of its own. Homematic Manager (pairing, parameters, direct links, names) and the other addons are one click away in the catalogue.')}</p>
 
 <div class="ol-actions" style="margin-top:16px">
-    <button class="hmm-button" disabled={lkBlocked || busy !== ''} onclick={() => done('/catalog')}>{t('Open the catalogue')}</button>
-    <button class="hmm-button" disabled={lkBlocked || busy !== ''} onclick={() => done()}>{t('Done')}</button>
-    {#if lkBlocked}<span class="ol-muted">{t('Choose where the HmIP network key is kept first.')}</span>{/if}
+    <button class="hmm-button" disabled={blocked || busy !== ''} onclick={() => done('/catalog')}>{t('Open the catalogue')}</button>
+    <button class="hmm-button" disabled={blocked || busy !== ''} onclick={() => done()}>{t('Done')}</button>
+    {#if hoBlocked}<span class="ol-muted" data-welcome-ho-blocked>{t('Choose whether BidCos-RF stays on first.')}</span>
+    {:else if lkBlocked}<span class="ol-muted">{t('Choose where the HmIP network key is kept first.')}</span>{/if}
+    {#if busy === 'ho'}<span class="ol-muted" data-welcome-ho-busy>{t('Switching BidCos-RF off - the radio restarts, about a minute …')}</span>{/if}
 </div>
 
 <style>
     label { margin-right: 16px; }
-    .outbound { flex-direction: column; align-items: flex-start; gap: 8px; }
+    .about { border: 1px solid var(--hmm-border); border-radius: 6px; padding: 4px 16px; margin: 12px 0 16px; }
+    .outbound, .ho-choice { flex-direction: column; align-items: flex-start; gap: 8px; }
     .outbound label { margin-right: 0; display: flex; gap: 8px; align-items: baseline; }
     .outbound input { flex: none; }
 </style>

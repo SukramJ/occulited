@@ -52,9 +52,15 @@ const INFO = {
     mh: '<div>Homematic-Manager &mdash; <a target="_blank" href="https://github.com/hobbyquaker/homematic-manager">github.com/hobbyquaker/homematic-manager</a></div>',
 };
 
+const IOB_IMAGES = {icon: '/api/system/v1/addons/iobroker/images/icon?v=1.2.0', 'icon-dark': '/api/system/v1/addons/iobroker/images/icon-dark?v=1.2.0', logo: '/api/system/v1/addons/iobroker/images/logo?v=1.2.0', 'logo-dark': '/api/system/v1/addons/iobroker/images/logo-dark?v=1.2.0'};
 const ADDONS = [
     {id: 'redmatic', name: 'RedMatic', version: '9.4.0', info: INFO.redmatic, config_url: '/addons/redmatic/settings.cgi', update: '/addons/redmatic/update_check.cgi', operations: ['restart', 'uninstall'], running: true, pid: 1841, enabled: true, policy_mode: 'root', policy_source: 'migrated', undeclared: true, remount_refused: true},
-    {id: 'mosquitto', name: 'Mosquitto', version: '2.1.2+3', info: INFO.mosquitto, config_url: '/addons/mosquitto/settings.cgi', update: '/addons/mosquitto/update_check.cgi', operations: ['restart', 'uninstall'], running: true, pid: 1902, enabled: true, policy_mode: 'confined', policy_source: 'catalog'},
+    // openccu-lite task 100: the images a manifest declares, kind → URL on this origin (imageRoute
+    // below serves them). Mosquitto declares a logo alone (the icon falls back to it); ioBroker
+    // (ADDON_MORE) all four; the others none, so the favicon and the letter stay tested. A declared
+    // image that is not in the tree (404 → the letter) is a spec's own route: a 404 is a console
+    // error, and pages.spec.ts wants none on a page load.
+    {id: 'mosquitto', name: 'Mosquitto', version: '2.1.2+3', info: INFO.mosquitto, config_url: '/addons/mosquitto/settings.cgi', update: '/addons/mosquitto/update_check.cgi', operations: ['restart', 'uninstall'], running: true, pid: 1902, enabled: true, policy_mode: 'confined', policy_source: 'catalog', images: {logo: '/api/system/v1/addons/mosquitto/images/logo?v=2.1.2%2B3'}},
     {id: 'hm2mqtt', name: 'hm2mqtt', version: '3.6.0-beta', info: INFO.hm2mqtt, config_url: '/addons/hm2mqtt/settings.cgi', update: '/addons/hm2mqtt/update_check.cgi', operations: ['restart', 'uninstall'], running: true, pid: 1955, enabled: true, policy_mode: 'confined', policy_source: 'default'},
     {id: 'jp-hb-devices-addon', oneshot: true, result: 'success', name: 'JP HB Devices', version: '6.1', info: INFO['jp-hb-devices-addon'], config_url: '/addons/jp-hb-devices-addon/settings.cgi', update: '/addons/jp-hb-devices-addon/update-check.cgi', operations: ['uninstall'], running: false, enabled: true, policy_mode: 'confined', policy_source: 'migrated'},
     // B-134: its settings page is settings.cgi?cmd=config - the plain settings.cgi is the CCU's
@@ -68,7 +74,7 @@ const ADDONS = [
 const ADDON_OFF = {id: '97NeoServer', name: 'NEO Server', version: '', operations: ['uninstall'], running: false, enabled: false, rega_dependent: true, rega_reason: 'needs ReGaHSS, which this system does not have'};
 // task 59: a third addon with a frontend of its own, only with the cookie `stub-addon-more=1` - for
 // three pinned tabs, and for the pin of an addon that is gone (the cookie dropped, the shell reloaded)
-const ADDON_MORE = {id: 'iobroker', name: 'ioBroker', version: '1.2.0', config_url: '/addons/iobroker/settings.cgi', operations: ['restart', 'uninstall'], running: true, pid: 2100, enabled: true, policy_mode: 'confined', policy_source: 'catalog'};
+const ADDON_MORE = {id: 'iobroker', name: 'ioBroker', version: '1.2.0', config_url: '/addons/iobroker/settings.cgi', operations: ['restart', 'uninstall'], running: true, pid: 2100, enabled: true, policy_mode: 'confined', policy_source: 'catalog', images: IOB_IMAGES};
 // the maintainer's follow-up to task 131: a nav.d page that is no addon and opens in the shell's frame
 // (stub-nav-page=1), beside the CCU WebUI link that opens a new tab
 const NAV_PAGE = {id: 'manual', label: {de: 'Handbuch', en: 'Manual'}, href: '/stub-manual/', target: 'iframe', order: 800, source: 'nav.d'};
@@ -152,7 +158,8 @@ const routes = {
     'GET /api/system/v1/status': {
         hostname: 'openccu',
         version: {version: '3.89.8.20260719', product: 'ova', platform: 'ova', variant: 'lite', lite: '0-beta.2'},
-        occulited_version: '1df08bb0101038ac6eb7c08c3f3144a8a91840a1-hot',
+        occulited_version: '1.0.0-dev.38',
+        occulited_commit: 'fa42dfde1e31fb074df53220dd573ceb92642ff0',
         uptime_s: 268431,
         load: [0.14, 0.21, 0.18],
         mem_total_kb: 2033120,
@@ -303,7 +310,7 @@ const routes = {
                 {pid: 1863, cmd: '/usr/bin/logger -t node-red -p user.err'},
                 {pid: 1870, cmd: '/usr/local/addons/redmatic/bin/node /usr/local/addons/redmatic/lib/watchdog.js'},
             ], enabled: true, unit_file_state: 'generated', managed: true, category: 'addon', policy_mode: 'root', policy_source: 'migrated', undeclared: true, memory_bytes: 138412032, since: '2026-09-04T18:03:00Z'},
-            {id: 'addon-mosquitto', kind: 'addon', running: true, pid: 1902, procs: [{pid: 1902, cmd: '/usr/local/addons/mosquitto/bin/mosquitto -c /usr/local/addons/mosquitto/etc/mosquitto.conf'}], enabled: true, unit_file_state: 'generated', port: 1883, managed: true, category: 'addon', policy_mode: 'confined', policy_source: 'catalog', memory_bytes: 6291456},
+            {id: 'addon-mosquitto', kind: 'addon', running: true, pid: 1902, procs: [{pid: 1902, cmd: '/usr/local/addons/mosquitto/bin/mosquitto -c /usr/local/addons/mosquitto/etc/mosquitto.conf'}], enabled: true, unit_file_state: 'generated', port: 1883, managed: true, category: 'addon', policy_mode: 'confined', policy_source: 'catalog', memory_bytes: 6291456, images: {logo: '/api/system/v1/addons/mosquitto/images/logo?v='}},
             {id: 'addon-hm2mqtt', kind: 'addon', running: true, pid: 1955, procs: [{pid: 1955, cmd: 'node /usr/local/addons/hm2mqtt/index.js'}], enabled: true, unit_file_state: 'generated', managed: true, category: 'addon', policy_mode: 'confined', policy_source: 'default', memory_bytes: 51380224},
             {id: 'addon-mh', kind: 'addon', running: true, pid: 2011, procs: [{pid: 2011, cmd: 'node /usr/local/addons/mh/app/dist/cli.js'}], enabled: true, unit_file_state: 'generated', port: 8098, managed: true, category: 'addon', policy_mode: 'confined', policy_source: 'catalog', memory_bytes: 41943040},
         ],
@@ -410,9 +417,9 @@ const routes = {
     'GET /api/system/v1/catalog': {
         catalog: {format: 1, checked: now, addons: [
             {git: 'https://github.com/homematic-community/ccu-addon-mosquitto', manifest_path: 'addon_files/openccu-lite.json', format: 1, id: 'mosquitto', name: {de: 'Mosquitto', en: 'Mosquitto'}, description: {de: 'MQTT-Broker', en: 'MQTT broker'}, stars: 88, release: {github: 'homematic-community/ccu-addon-mosquitto', asset: 'mosquitto-{version}.tar.gz'}, licence: 'EPL-2.0', tag: '2.1.2+3', latest: {version: '2.1.2+3', asset: 'mosquitto-2.1.2+3.tar.gz'}},
-            {git: 'https://github.com/TomMajor/SmartHome', manifest_path: 'catalog/manifests/tm-devices.json', untested: true, adapter: true, format: 1, id: 'tm-devices', name: {de: 'TM Devices', en: 'TM Devices'}, description: {de: 'Geräteunterstützung für Eigenbauten', en: 'Device support for home-built sensors'}, release: {github: 'TomMajor/SmartHome', asset: 'tm-devices-{version}.tgz', prerelease: true}, runtime: {note: {de: 'Noch nicht auf openccu-lite ausprobiert.', en: 'Not yet tried on openccu-lite.'}}, latest: {version: '0.9.0-rc.1', asset: 'tm-devices-0.9.0-rc.1.tgz'}},
+            {git: 'https://github.com/TomMajor/SmartHome', manifest_path: 'catalog/manifests/tm-devices.json', untested: true, adapter: true, format: 1, id: 'tm-devices', name: {de: 'TM Devices', en: 'TM Devices'}, description: {de: 'Geräteunterstützung für Eigenbauten', en: 'Device support for home-built sensors'}, release: {github: 'TomMajor/SmartHome', asset: 'tm-devices-{version}.tgz', prerelease: true}, runtime: {note: {de: 'Noch nicht auf openccu-lite ausprobiert.', en: 'Not yet tried on openccu-lite.'}}, latest: {version: '0.9.0-rc.1', asset: 'tm-devices-0.9.0-rc.1.tgz'}, images: {icon: '/api/system/v1/catalog/tm-devices/images/icon?v=0a1b2c3d4e5f'}},
             {git: 'https://github.com/rdmtc/RedMatic', manifest_path: 'addon_files/openccu-lite.json', format: 1, id: 'redmatic', name: {de: 'RedMatic', en: 'RedMatic'}, description: {de: 'Node-RED auf der Zentrale', en: 'Node-RED on the CCU'}, stars: 1234, release: {github: 'rdmtc/RedMatic', asset: 'redmatic-{arch}-{version}.tar.gz'}, requires: {architectures: ['aarch64', 'x86_64']}, licence: 'Apache-2.0', homepage: 'https://github.com/rdmtc/RedMatic/wiki', tag: 'v9.4.1', latest: {version: '9.4.1', asset: 'redmatic-9.4.1.tar.gz'}},
-            {git: 'https://github.com/homematic-community/XML-API', manifest_path: 'openccu-lite.json', format: 1, id: 'xml-api', name: {de: 'XML-API', en: 'XML-API'}, description: {de: 'Die XML-Schnittstelle der ReGa', en: 'The ReGa XML interface'}, stars: 70, release: {github: 'homematic-community/XML-API', asset: 'xml-api-{version}.tar.gz'}, licence: 'MIT', ui: {own_updater: true}, latest: {version: '2.3', asset: 'xml-api-2.3.tar.gz'}},
+            {git: 'https://github.com/homematic-community/XML-API', manifest_path: 'openccu-lite.json', format: 1, id: 'xml-api', name: {de: 'XML-API', en: 'XML-API'}, description: {de: 'Die XML-Schnittstelle der ReGa', en: 'The ReGa XML interface'}, stars: 70, release: {github: 'homematic-community/XML-API', asset: 'xml-api-{version}.tar.gz'}, licence: 'MIT', ui: {own_updater: true}, latest: {version: '2.3', asset: 'xml-api-2.3.tar.gz'}, images: {logo: '/api/system/v1/catalog/xml-api/images/logo?v=1a2b3c4d5e6f', 'logo-dark': '/api/system/v1/catalog/xml-api/images/logo-dark?v=6f5e4d3c2b1a'}},
             {git: 'https://github.com/hobbyquaker/homematic-manager', manifest_path: 'apps/ccu-addon/files/openccu-lite.json', format: 1, id: 'mh', name: {de: 'Homematic-Manager', en: 'Homematic-Manager'}, description: {de: 'Geräte anlernen und konfigurieren', en: 'Pair and configure devices'}, stars: 88, release: {github: 'hobbyquaker/homematic-manager', asset: 'mh-{version}.tar.gz'}, licence: 'MIT', latest: {version: '3.0.0', asset: 'mh-3.0.0.tar.gz'}},
             {git: 'https://github.com/SukramJ/openccu-loom', manifest_path: 'openccu-lite.json', untested: true},
         ]},
@@ -797,26 +804,45 @@ function connModule(o, roles) {
 function connStatus(jar) {
     const s = connState.get(jar['stub-conn']) ?? {choices: {hmip: '', bidcos: '', hmip_path: ''}, last: null};
     // stub-conn-missing=<id>: the stick HmIP-RF is pinned to is unplugged
-    const missing = jar['stub-conn-missing'];
-    const choices = missing ? {...s.choices, hmip: missing} : s.choices;
+    // openccu-lite task 318: stub-conn-held=<sgtin> - on Automatic, the module that holds the HmIP
+    // network is missing; the stick is there, offered, and not taken
+    const held = !jar['stub-conn-missing'] && jar['stub-conn-held'] && s.choices.hmip === '' ? jar['stub-conn-held'] : '';
+    const missing = jar['stub-conn-missing'] || held;
+    const choices = missing && !held ? {...s.choices, hmip: missing} : s.choices;
     const fatal = connFatal(jar);
     const board = connBoard(jar);
     const withBoard = !!board?.detected;
     const trx = jar['stub-conn-trx'] === '1';
-    const options = {hmip: missing ? [] : [trx ? CONN_TRX : CONN_HMIP, ...(withBoard ? [{...BOARD_MODULE, paths: ['multimacd']}] : [])], bidcos: missing || trx ? [] : [CONN_MODULE, ...(withBoard ? [BOARD_MODULE] : [])]};
+    const options = {hmip: missing && !held ? [] : [trx ? CONN_TRX : CONN_HMIP, ...(withBoard ? [{...BOARD_MODULE, paths: ['multimacd']}] : [])], bidcos: (missing && !held) || trx ? [] : [CONN_MODULE, ...(withBoard ? [BOARD_MODULE] : [])]};
     const plan = connPlan(choices, missing, jar['stub-conn-basic'] === '1', trx);
+    if (held) plan.hmip_pin = held;
     const rolesOf = (id) => [...(plan.hmrf?.serial === id ? ['BidCos-RF'] : []), ...(plan.hmip?.serial === id ? ['HmIP-RF'] : [])];
-    const modules = [...(missing ? [] : [connModule(CONN_MODULE, rolesOf(CONN_MODULE.id))]), ...(withBoard ? [connModule(BOARD_MODULE, rolesOf(BOARD_MODULE.id))] : [])];
-    return {available: true, choices, options, plan, mode: 'NORMAL', ...(fatal ? {hmip_fatal: fatal} : {}), modules, ...(board ? {hb_rf_eth: board} : {}), running: null, last: s.last};
+    const modules = [...(missing && !held ? [] : [connModule(CONN_MODULE, rolesOf(CONN_MODULE.id))]), ...(withBoard ? [connModule(BOARD_MODULE, rolesOf(BOARD_MODULE.id))] : [])];
+    // openccu-lite B-300: stub-conn-header=empty|wrong - a Pi's GPIO header beside the stick. The
+    // daemon leaves an empty header (the probe cut at 6 s) out of the modules, and names it as
+    // header_silent only while a chosen module is missing (with stub-conn-missing); a module on
+    // the header that answered wrongly is a module and keeps its card
+    const header = jar['stub-conn-header'];
+    if (header === 'wrong') modules.push({serial: '', hardware: '', node: '/dev/raw-uart2', device_type: 'GPIO@fe201000.serial', probe: 'error', detail: 'unexpected answer: 0x00', roles: []});
+    const silent = header === 'empty' && missing ? {header_silent: {node: '/dev/raw-uart2', probe: 'timeout', detail: 'no answer within 6s', missing: [missing]}} : {};
+    // openccu-lite B-285/B-302: stub-conn-moveback=gap|plain - a module-move snapshot is kept (the
+    // way back offered), with or without a security counter gap; stub-conn-gap=1 - after the way
+    // back, the gap is still open (the notice)
+    const gap = {from: CONN_MODULE.sgtin, to: '3014F5AC9400040000000A09', highest: 8529664, back: 8284417, behind: 245247, until: new Date(Date.now() + 20 * 3600_000 - 60_000).toISOString()};
+    const mb = jar['stub-conn-moveback'] ? {hmip_move_back: {previous: gap.to, at: '2026-10-03T10:11:30Z', choices: {hmip: '', bidcos: '', hmip_path: ''}, devices: 2, ...(jar['stub-conn-moveback'] === 'gap' ? {counter_gap: gap} : {})}, hostname: 'openccu'} : {};
+    const open = jar['stub-conn-gap'] === '1' ? {hmip_counter_gap: {...gap, at: '2026-10-03T10:12:30Z'}} : {};
+    return {available: true, choices, options, plan, mode: 'NORMAL', ...(fatal ? {hmip_fatal: fatal} : {}), modules, ...silent, ...(board ? {hb_rf_eth: board} : {}), ...mb, ...open, running: null, last: s.last};
 }
 // openccu-lite task 301: the local record of adapter exchanges (stub-conn-exchanges=swap adds the
-// local swap onto the previous module that the refused diagnosis names as the cause, B-289)
+// local swap onto the previous module that the refused diagnosis names as the cause, B-289, as an
+// older record wrote it - accepted; swap-failed as B-289 writes it - rejected, adapter-version)
 function exExchanges(jar) {
     const list = [
         {at: '2026-09-27T19:39:12Z', from: '3014F711A0001F5F000000AF', to: EX_PREVIOUS, address: '0xA0B1C2', mode: 'key-server', outcome: 'accepted', line: 'Adapter exchange successful.'},
         {at: '2026-09-30T16:47:30Z', from: EX_PREVIOUS, to: CONN_MODULE.sgtin, address: '0xA0B1C2', mode: 'key-server', outcome: 'rejected', cause: 'refused', line: 'Adapter exchange was rejected by key server.'},
     ];
     if (jar['stub-conn-exchanges'] === 'swap') list[0] = {...list[0], mode: 'local-swap', line: 'Adapter exchange successful.'};
+    if (jar['stub-conn-exchanges'] === 'swap-failed') list[0] = {...list[0], to_version: '1.8.3', mode: 'local-swap', outcome: 'rejected', cause: 'adapter-version', line: 'Could not exchange network key, adapter version not supported'};
     return list.reverse();
 }
 function exView(jar) {
@@ -1535,7 +1561,16 @@ function lkRoute(req, u, res) {
             st.keyserver_mode = b.on ? 'KEYSERVER_LOCAL' : 'LOCAL';
             return sendJSON(res, lkView(jar, st), 202);
         }
+        // openccu-lite task 317 (D-120): confirm, and the host name typed for a generated key and
+        // for the way back
+        const host = 'openccu';
+        const unconfirmed = (typed) => {
+            if (!b.confirm) return sendJSON(res, {error: 'confirm', message: 'confirm: true is required'}, 400), true;
+            if (typed && (b.hostname ?? '').trim().toLowerCase() !== host) return sendJSON(res, {error: 'hostname', message: 'the host name typed does not match this system\'s'}, 400), true;
+            return false;
+        };
         if (req.method === 'PUT') {
+            if (unconfirmed(b.mode === 'generate' && jar['stub-lk-empty'] !== '1')) return;
             if (st.enabled) return fail('local key mode is on already');
             if (b.mode === 'known' && !/^[0-9A-Fa-f]{32}$/.test((b.network_key ?? '').replace(/[\s:-]/g, ''))) return fail('network key: a key is 32 hexadecimal digits (16 bytes), and not the example key 0102…0F10');
             const now = new Date().toISOString();
@@ -1548,6 +1583,7 @@ function lkRoute(req, u, res) {
             return sendJSON(res, lkView(jar, next), 202);
         }
         if (req.method === 'DELETE') {
+            if (unconfirmed(true)) return;
             if (!st.enabled || !st.snapshots.some((x) => x.sgtin === LK_SGTIN)) return fail('there is no snapshot of this module from before the switch (the key was set by hand)');
             Object.assign(st, {enabled: false, source: undefined, keyserver_mode: 'KEYSERVER_LOCAL', override_active: false, check: undefined});
             return sendJSON(res, lkView(jar, st), 202);
@@ -1556,6 +1592,7 @@ function lkRoute(req, u, res) {
     });
 }
 
+const connLkDiscarded = new Set();
 function connRoute(req, u, res) {
     const jar = cookieJar(req);
     if (req.method === 'GET') return sendJSON(res, connStatus(jar));
@@ -1569,11 +1606,22 @@ function connRoute(req, u, res) {
         const cur = connStatus(jar).choices;
         const lost = ch.bidcos === 'none' && cur.bidcos !== 'none';
         const devices = [{address: 'JEQ9000001', type: 'HM-CC-TC'}, {address: 'KEQ9000003', type: 'HM-LC-Sw1-FM'}];
+        // openccu-lite B-285: HmIP-RF moves when the new plan puts it on another module; task 317
+        // (D-120): the daemon refuses such a change without confirm, as it does BidCos-RF's loss
+        // task 318: from the held module when it is missing (connStatus's plan names it)
+        const curPlan = connStatus(jar).plan;
+        const from = curPlan.hmip ?? (curPlan.hmip_pin ? {sgtin: curPlan.hmip_pin} : null), to = connPlan(ch).hmip;
+        // openccu-lite B-301: stub-conn-lksnap=1 - a local-key snapshot of the module left is kept
+        // until the page discards it (DELETE …/local-key/snapshots/…, per stub-conn cookie)
+        const blocked = jar['stub-conn-lksnap'] === '1' && !connLkDiscarded.has(jar['stub-conn']);
+        const move = from && to && from.sgtin !== to.sgtin ? {from: from.sgtin, to: to.sgtin, local_key: false, snapshot: true, ...(blocked ? {snapshot_blocked: true} : {}), to_version: to.version} : null;
         if (u.pathname.endsWith('/preview')) {
             const changed = ch.hmip !== cur.hmip || ch.bidcos !== cur.bidcos || ch.hmip_path !== (cur.hmip_path ?? '');
-            return sendJSON(res, {choices: ch, plan: connPlan(ch), changed, restarts: changed ? ['multimacd', 'rfd', 'hmipserver'] : [], bidcos_lost: lost, devices: lost ? devices : []});
+            return sendJSON(res, {choices: ch, plan: connPlan(ch), changed, restarts: changed ? ['multimacd', 'rfd', 'hmipserver'] : [], bidcos_lost: lost, devices: lost ? devices : [], ...(move ? {hmip_move: move} : {})});
         }
         if (lost && !b.confirm) return sendJSON(res, {error: 'confirm-required', message: `${devices.length} paired BidCos-RF devices lose the local radio; confirm the change`, devices}, 409);
+        if (move?.snapshot_blocked) return sendJSON(res, {error: 'snapshot-blocked', message: `a snapshot of ${move.from} from before local key mode was switched off is kept; discard it, then move HmIP-RF`, detail: {sgtin: move.from}}, 409);
+        if (move && !b.confirm) return sendJSON(res, {error: 'confirm-required', message: `HmIP-RF moves from module ${move.from} to module ${move.to} and its identity files are rewritten; confirm the change`, devices: [], hmip_move: move}, 409);
         const t0 = new Date().toISOString();
         const last = {choices: ch, previous: cur, started: t0, finished: t0, ok: true, lines: ['12:00:00 choices written', '12:00:01 hmipserver stopped', '12:00:02 re-running the radio detection and the plan', '12:00:20 now: ' + (ch.bidcos === 'none' ? 'multimacd off, rfd on, hmipserver on /dev/raw-uart' : 'multimacd on /dev/raw-uart, rfd on /dev/mmd_bidcos, hmipserver on /dev/mmd_hmip')]};
         if (jar['stub-conn']) connState.set(jar['stub-conn'], {choices: ch, last});
@@ -1708,6 +1756,10 @@ function activeWarnings(jar, warn, st) {
     if (trustStateOf(jar).pending) {
         list.push({id: 'trust-ca', variant: 'api.github.com', severity: 'error', href: '/system/trust#occulited', params: {store: 'occulited', hosts: ['api.github.com'], issuer: 'CN=DigiCert Global Root G2,O=DigiCert Inc', candidate: true}});
     }
+    // openccu-lite task 232: a connection's certificate matched none of its purpose's pins (stub-trust-pin-failure=1)
+    for (const f of trustStateOf(jar).pinFailures) {
+        list.push({id: 'trust-pin', variant: `${f.purpose}:${f.host}`, severity: 'error', href: `/system/trust#${f.purpose}`, params: {purpose: f.purpose, host: f.host, subject: f.chain[0].subject, fingerprint: f.chain[0].fingerprint, spki: f.chain[0].spki}});
+    }
     const rep = STORAGE[jar['stub-storage'] || (warn ? 'watch' : 'good')] ?? STORAGE.good;
     if (rep.verdict !== 'good') {
         list.push({id: 'storage', variant: rep.verdict, severity: rep.verdict === 'replace' ? 'error' : 'warning', href: '#storage', params: {verdict: rep.verdict, reasons: rep.reasons, devices: rep.devices.map((d) => ({name: d.name, kind: d.kind, model: d.model}))}});
@@ -1715,6 +1767,8 @@ function activeWarnings(jar, warn, st) {
     if ((jar['stub-ownership'] === '1' || jar['stub-ownership'] === 'failed') && !st.fixed.has('hm2mqtt')) {
         list.push({id: 'addon-ownership', variant: 'hm2mqtt', severity: 'warning', href: '/services', params: {addons: [{id: 'hm2mqtt', enabled: true, path: '/usr/local/addons/hm2mqtt/var/hm2mqtt.pid'}]}});
     }
+    // openccu-lite task 318: the module holding the HmIP network is missing (stub-conn-held)
+    if (jar['stub-conn-held']) list.push({id: 'hmip-module-missing', variant: jar['stub-conn-held'], severity: 'error', href: '/system/interfaces#connections', params: {module: jar['stub-conn-held']}});
     if (jar['stub-key'] === 'default') list.push({id: 'security-key', variant: 'default', severity: 'warning', href: '/system/keys#security-key'});
     // openccu-lite task 299: the HmIP security counter (stub-counter=near|wrapped|backwards|held)
     if (jar['stub-counter'] === 'held') {
@@ -2045,9 +2099,18 @@ function ipv6Route(req, u, res, jar) {
 // PEM block is one anchor, named by its position; the peer chain is a fixed leaf and its CA.
 const OIDC_TRUST = new Map();
 const FAKE_PEM = (n) => `-----BEGIN CERTIFICATE-----\nMIIB${n}fake\n-----END CERTIFICATE-----\n`;
+// openccu-lite task 232: each with the SHA-256 of its public key (spki), what a pin matches
+const SPKI_LEAF = 'LeafKeyHash0000000000000000000000000000000=';
+const SPKI_CA = 'LabCAKeyHash000000000000000000000000000000=';
 const PEER_CHAIN = [
-    {id: 'aaaa000000000001', purposes: [], subject: 'CN=auth.example.org', issuer: 'CN=Lab CA', not_before: '2026-09-01T00:00:00Z', not_after: '2026-12-01T00:00:00Z', fingerprint: 'AA:11:' + '00:'.repeat(29) + '01', ca: false, self_signed: false, names: ['auth.example.org'], pem: FAKE_PEM('leaf')},
-    {id: 'bbbb000000000002', purposes: [], subject: 'CN=Lab CA', issuer: 'CN=Lab CA', not_before: '2026-01-01T00:00:00Z', not_after: '2036-01-01T00:00:00Z', fingerprint: 'BB:22:' + '00:'.repeat(29) + '02', ca: true, self_signed: true, pem: FAKE_PEM('ca')},
+    {id: 'aaaa000000000001', purposes: [], subject: 'CN=auth.example.org', issuer: 'CN=Lab CA', not_before: '2026-09-01T00:00:00Z', not_after: '2026-12-01T00:00:00Z', fingerprint: 'AA:11:' + '00:'.repeat(29) + '01', spki: SPKI_LEAF, ca: false, self_signed: false, names: ['auth.example.org'], pem: FAKE_PEM('leaf')},
+    {id: 'bbbb000000000002', purposes: [], subject: 'CN=Lab CA', issuer: 'CN=Lab CA', not_before: '2026-01-01T00:00:00Z', not_after: '2036-01-01T00:00:00Z', fingerprint: 'BB:22:' + '00:'.repeat(29) + '02', spki: SPKI_CA, ca: true, self_signed: true, pem: FAKE_PEM('ca')},
+];
+// the ACME directory's chain: a step-ca leaf under its root
+const SPKI_ACME = 'StepCALeafKeyHash0000000000000000000000000=';
+const ACME_CHAIN = [
+    {id: 'cccc000000000003', purposes: [], subject: 'CN=ca.lan', issuer: 'CN=Lab Step CA', not_before: '2026-09-01T00:00:00Z', not_after: '2026-10-20T00:00:00Z', fingerprint: 'CC:33:' + '00:'.repeat(29) + '03', spki: SPKI_ACME, ca: false, self_signed: false, names: ['ca.lan'], pem: FAKE_PEM('acme')},
+    {id: 'dddd000000000004', purposes: [], subject: 'CN=Lab Step CA', issuer: 'CN=Lab Step CA', not_before: '2026-01-01T00:00:00Z', not_after: '2036-01-01T00:00:00Z', fingerprint: 'DD:44:' + '00:'.repeat(29) + '04', spki: 'StepCARootKeyHash0000000000000000000000000=', ca: true, self_signed: true, pem: FAKE_PEM('acmeca')},
 ];
 function oidcTrustRoute(req, u, res, jar) {
     const id = jar['stub-trust'] ?? '';
@@ -2066,9 +2129,15 @@ function oidcTrustRoute(req, u, res, jar) {
             return sendJSON(res, {anchors: view()});
         }
         if (u.pathname.endsWith('/test')) {
+            // openccu-lite task 232: a pin only vouches alone; with-ca needs the anchors as well
+            const pins = trustStateOf(jar).pins.oidc;
+            const match = pins.find((p) => p.spki === PEER_CHAIN[0].spki);
+            const {pem: _pem, ...leaf} = PEER_CHAIN[0];
+            if (pins.length && !match) return sendJSON(res, {ok: false, tls: true, error: `Get "https://auth.example.org/.well-known/openid-configuration": auth.example.org presents a certificate none of the ${pins.length} pin(s) for oidc match: CN=auth.example.org, public key SHA-256 ${PEER_CHAIN[0].spki}, certificate SHA-256 ${PEER_CHAIN[0].fingerprint}`});
+            if (match && match.mode === 'only') return sendJSON(res, {ok: true, tls: true, issuer: 'https://auth.example.org/application/o/openccu-lite/', token_endpoint: 'https://auth.example.org/application/o/token/', leaf, pinned: match, pin_only: true});
             if (!list.length) return sendJSON(res, {ok: false, tls: true, error: 'Get "https://auth.example.org/.well-known/openid-configuration": tls: failed to verify certificate: x509: certificate signed by unknown authority'});
             const root = list[list.length - 1];
-            return sendJSON(res, {ok: true, tls: true, issuer: 'https://auth.example.org/application/o/openccu-lite/', token_endpoint: 'https://auth.example.org/application/o/token/', verified_by: {...root, pem: undefined, trusted_here: true}});
+            return sendJSON(res, {ok: true, tls: true, issuer: 'https://auth.example.org/application/o/openccu-lite/', token_endpoint: 'https://auth.example.org/application/o/token/', verified_by: {...root, pem: undefined, trusted_here: true}, leaf, pinned: match});
         }
         if (u.pathname.endsWith('/peer-chain')) {
             const chain = PEER_CHAIN.map((c) => ({...c, trusted: list.some((a) => a.fingerprint === c.fingerprint)}));
@@ -2125,6 +2194,10 @@ function trustStateOf(jar) {
             acme: [],
             pending: jar['stub-trust-pending'] === '1',
             n: 0,
+            // openccu-lite task 232: the pins per purpose; stub-trust-pin-failure=1 plants a mismatch
+            // for OIDC: a stale pin and the chain the provider presents now
+            pins: {oidc: jar['stub-trust-pin-failure'] === '1' ? [{id: 'stale0000000001', purpose: 'oidc', spki: 'OldKeyHash00000000000000000000000000000000=', mode: 'with-ca', subject: 'CN=auth.example.org', not_after: '2026-09-30T00:00:00Z', fingerprint: 'EE:55:' + '00:'.repeat(29) + '05', added: '2026-06-01T00:00:00Z', added_by: 'admin'}] : [], acme: []},
+            pinFailures: jar['stub-trust-pin-failure'] === '1' ? [{purpose: 'oidc', host: 'auth.example.org', at: '2026-10-03T08:00:00Z', error: `auth.example.org presents a certificate none of the 1 pin(s) for oidc match: CN=auth.example.org, public key SHA-256 ${SPKI_LEAF}, certificate SHA-256 AA:11:${'00:'.repeat(29)}01`, chain: PEER_CHAIN.map(({pem, ...c}) => c)}] : [],
         };
         TRUST_STORES.set(id, st);
     }
@@ -2141,11 +2214,59 @@ function trustView(jar) {
     const stores = [
         {id: 'system', editable: true, certificates: st.system},
         {id: 'occulited', editable: true, certificates: st.occulited},
-        {id: 'oidc', editable: true, certificates: oidc},
-        {id: 'acme', editable: true, certificates: st.acme},
+        {id: 'oidc', editable: true, certificates: oidc, pins: st.pins.oidc},
+        {id: 'acme', editable: true, certificates: st.acme, pins: st.pins.acme},
     ];
     const pending = st.pending ? [{host: 'api.github.com', store: 'occulited', at: '2026-09-25T20:00:00Z', error: 'tls: failed to verify certificate: x509: certificate signed by unknown authority', issuer: 'CN=DigiCert Global Root G2,O=DigiCert Inc', chain: [], candidate: st.system.find((c) => c.id === 's000000000000004')}] : [];
-    return {stores, pending};
+    return {stores, pending, pin_failures: st.pinFailures};
+}
+// openccu-lite task 232: the pin routes of the oidc and acme stores - the peer's chain, pin by
+// certificate or bare hash in either mode (replace drops the others), remove. A pin whose key the
+// pending mismatch's chain carries clears it; the last pin removed clears the purpose's failures.
+function pinRoute(req, u, res, jar, store, parts, body) {
+    const st = trustStateOf(jar);
+    if (!['oidc', 'acme'].includes(store)) return sendJSON(res, {error: 'not_found', message: 'this store takes no pins: only the OAuth / OIDC and the ACME store do'}, 404);
+    const pins = st.pins[store];
+    const chainOf = store === 'oidc' ? PEER_CHAIN : ACME_CHAIN;
+    const host = store === 'oidc' ? 'auth.example.org' : 'ca.lan';
+    const b = body ? JSON.parse(body) : {};
+    if (req.method === 'POST' && parts[3] === 'peer') {
+        if (b.url && !String(b.url).startsWith('https://')) return sendJSON(res, {error: 'invalid', message: 'the server is an https URL; a plain http one has no certificate to pin'}, 422);
+        const chain = chainOf.map((c) => ({...c, pinned: pins.some((p) => p.spki === c.spki)}));
+        const match = pins.find((p) => chain.some((c) => c.spki === p.spki));
+        const caOK = store === 'oidc' ? trustOIDCList(jar).length > 0 : st.acme.length > 0;
+        const verified = pins.length ? !!match && (match.mode === 'only' || caOK) : caOK;
+        return sendJSON(res, {url: b.url || `https://${host}/`, host, chain, verified, error: verified ? undefined : pins.length && !match ? `${host} presents a certificate none of the ${pins.length} pin(s) for ${store} match` : 'tls: failed to verify certificate: x509: certificate signed by unknown authority', pin_only: verified && match?.mode === 'only' ? true : undefined});
+    }
+    if (req.method === 'POST' && !parts[3]) {
+        const mode = b.mode || 'with-ca';
+        if (!['with-ca', 'only'].includes(mode)) return sendJSON(res, {error: 'invalid', message: 'the mode is with-ca (the CA check as well, the default) or only (the pin alone)'}, 422);
+        let pin;
+        if (b.pem) {
+            const c = chainOf.find((x) => x.pem.trim() === String(b.pem).trim());
+            if (!c) return sendJSON(res, {error: 'bad_certificate', message: 'a certificate does not parse'}, 422);
+            pin = {id: c.id.replace(/^[a-z]+/, 'k'), purpose: store, spki: c.spki, mode, subject: c.subject, not_after: c.not_after, fingerprint: c.fingerprint, added: '2026-10-03T10:00:00Z', added_by: 'admin'};
+        } else {
+            const v = String(b.spki ?? '').trim().replace(/^sha256\/\//, '');
+            const hex = v.replace(/[:\s-]/g, '');
+            if (!/^[A-Za-z0-9+/]{43}=$/.test(v) && !/^[0-9A-Fa-f]{64}$/.test(hex)) return sendJSON(res, {error: 'invalid', message: 'the public key hash is the SHA-256 of a certificate\'s SubjectPublicKeyInfo: 44 base64 characters or 64 hex digits'}, 422);
+            const spki = /^[0-9A-Fa-f]{64}$/.test(hex) ? Buffer.from(hex, 'hex').toString('base64') : v;
+            pin = {id: 'h' + spki.slice(0, 15).replace(/[^A-Za-z0-9]/g, '0'), purpose: store, spki, mode, added: '2026-10-03T10:00:00Z', added_by: 'admin'};
+        }
+        if (b.replace) pins.splice(0, pins.length);
+        else if (pins.some((p) => p.spki === pin.spki)) return sendJSON(res, {error: 'present', message: 'this public key is pinned already'}, 409);
+        pins.push(pin);
+        st.pinFailures = st.pinFailures.filter((f) => !(f.purpose === store && (f.chain ?? []).some((c) => c.spki === pin.spki)));
+        return sendJSON(res, {pin, pins});
+    }
+    if (req.method === 'DELETE' && parts[3]) {
+        const k = pins.findIndex((p) => p.id === decodeURIComponent(parts[3]));
+        if (k < 0) return sendJSON(res, {error: 'not_found', message: 'no such anchor'}, 404);
+        pins.splice(k, 1);
+        if (!pins.length) st.pinFailures = st.pinFailures.filter((f) => f.purpose !== store);
+        return sendJSON(res, {pins});
+    }
+    return sendJSON(res, {error: 'not_found', message: 'no such route'}, 404);
 }
 function trustRoute(req, u, res, jar) {
     const st = trustStateOf(jar);
@@ -2160,6 +2281,7 @@ function trustRoute(req, u, res, jar) {
         const b = body ? JSON.parse(body) : {};
         if (req.method === 'GET' && !store) return sendJSON(res, trustView(jar));
         if (!TRUST_IDS.includes(store)) return sendJSON(res, {error: 'not_found', message: 'no such trust store'}, 404);
+        if (parts[2] === 'pins') return pinRoute(req, u, res, jar, store, parts, body); // openccu-lite task 232
         const storeView = (id) => trustView(jar).stores.find((s) => s.id === id);
         const list = listOf(store);
         if (req.method === 'POST' && !cid) {
@@ -2251,7 +2373,9 @@ function variant(req, u, res) {
                 hmip: {from_sgtin: '3014F711A0001F5F000000AF', to_sgtin: '3014F711A0001F0000000A03', to_module: 'RPI-RF-MOD 0000000A03', module_changed: true, local_key: false, devices: 2},
                 // task 296: stub-import-key=<verdict> is the passphrase's verdict at the import
                 bidcos_rf: {address: '0xFF5678', serial: '1709ADFA00', devices: 1, non_default_key: true, key_index: 1, target_key_replaced: false, module: 'RPI-RF-MOD 0000000A03', ...(jar['stub-import-key'] ? {key_check: jar['stub-import-key']} : {})}};
-            const outcome = {hmip: {state, module_now: state === 'no-module' ? '' : '3014F711A0001F0000000A03', ...(state === 'rejected' ? {cause: 'unreachable'} : {}), ...(state === 'done' ? {line: 'Adapter exchange successful.'} : {})},
+            // openccu-lite B-289: stub-import=local-swap - moved without the network key, a failed move
+            const swap = state === 'local-swap';
+            const outcome = {hmip: {state: swap ? 'rejected' : state, module_now: state === 'no-module' ? '' : '3014F711A0001F0000000A03', ...(state === 'rejected' ? {cause: 'unreachable'} : {}), ...(swap ? {cause: 'adapter-version', line: 'Could not exchange network key, adapter version not supported'} : {}), ...(state === 'done' ? {line: 'Adapter exchange successful.'} : {})},
                 bidcos_rf: {took: true, interface: 'CCU2 1709ADFA00', connected: true}};
             return {imported: true, record, outcome, switching: importRetried.has(cookie) ? 'retry' : ''};
         };
@@ -2260,8 +2384,11 @@ function variant(req, u, res) {
         if (req.method === 'POST') { req.resume(); req.on('end', () => { importRetried.add(cookie); sendJSON(res, view(), 202); }); return true; }
     }
     if (key === 'POST /api/system/v1/restore/import-devices') {
-        req.resume();
-        req.on('end', () => sendJSON(res, {error: 'nothing_to_import', message: 'the backup holds no paired device and no radio identity'}, 422));
+        readBody(req).then((raw) => {
+            // task 317 (D-120): not without confirm
+            if (!JSON.parse(raw || '{}').confirm) return sendJSON(res, {error: 'confirm', message: 'confirm: true is required'}, 400);
+            sendJSON(res, {error: 'nothing_to_import', message: 'the backup holds no paired device and no radio identity'}, 422);
+        });
         return true;
     }
     // openccu-lite task 231: the Trust stores page, per browser (stub-trust)
@@ -2812,9 +2939,34 @@ const sseClients = new Set();
 // the projects and tests share this stub, so a spec reads back only its own writes and can
 // assert that one drop was exactly one request
 const metaWrites = [];
+// openccu-lite task 100: the addon images, as the box serves them - the type by content, nosniff,
+// the policy that keeps an SVG a picture, an hour of private caching. One SVG per addon and
+// variant, told apart by colour (the dark one is light, so it reads on a dark background).
+const IMAGE_ADDONS = {iobroker: {letter: 'I', light: '#2a6fd6', dark: '#9cc2ff'}, mosquitto: {letter: 'M', light: '#3c5280', dark: '#b8c8ea'}, 'tm-devices': {letter: 'T', light: '#7a3e9d', dark: '#d7b3ec'}, 'xml-api': {letter: 'X', light: '#2e7d32', dark: '#a5d6a7'}};
+function imageRoute(req, u, res) {
+    const m = /^\/api\/system\/v1\/(addons|catalog)\/([^/]+)\/images\/(icon|icon-dark|logo|logo-dark)$/.exec(u.pathname);
+    if (!m || req.method !== 'GET') return false;
+    const a = IMAGE_ADDONS[decodeURIComponent(m[2])];
+    if (!a || (m[2] === 'mosquitto' && !m[3].startsWith('logo')) || (m[2] === 'xml-api' && !m[3].startsWith('logo')) || (m[2] === 'tm-devices' && m[3] !== 'icon')) {
+        sendJSON(res, {error: 'not-found', message: 'the addon declares no such image'}, 404);
+        return true;
+    }
+    const dark = m[3].endsWith('-dark');
+    const wide = m[3].startsWith('logo');
+    const fill = dark ? a.dark : a.light;
+    const text = dark ? '#1b1b1f' : '#ffffff';
+    const svg = wide
+        ? `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 48"><rect width="120" height="48" rx="8" fill="${fill}"/><text x="60" y="32" font-family="sans-serif" font-size="24" font-weight="700" text-anchor="middle" fill="${text}">${a.letter}${a.letter}${a.letter}</text></svg>`
+        : `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect width="48" height="48" rx="10" fill="${fill}"/><text x="24" y="33" font-family="sans-serif" font-size="26" font-weight="700" text-anchor="middle" fill="${text}">${a.letter}</text></svg>`;
+    res.writeHead(200, {'Content-Type': 'image/svg+xml', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'", 'Cross-Origin-Resource-Policy': 'same-origin', 'Cache-Control': 'private, max-age=3600'});
+    res.end(svg);
+    return true;
+}
+
 const srv = http.createServer((req, res) => {
     const u = new URL(req.url, 'http://x');
     const key = `${req.method} ${u.pathname}`;
+    if (imageRoute(req, u, res)) return;
     if (refusedWithoutHeader(req, u.pathname)) {
         console.error(`stub: ${key} without X-Occulite-Request (task 259)`);
         res.writeHead(403, {'Content-Type': 'application/json'});
@@ -3620,7 +3772,17 @@ const srv = http.createServer((req, res) => {
         return sendJSON(res, accessPointsView(cookieJar(req)));
     }
     if (u.pathname.startsWith('/api/system/v1/radio/hmip/local-key')) {
+        const jar = cookieJar(req);
+        if (req.method === 'DELETE' && /\/snapshots\//.test(u.pathname) && jar['stub-conn-lksnap'] === '1') connLkDiscarded.add(jar['stub-conn']);
         return lkRoute(req, u, res);
+    }
+    if (req.method === 'POST' && u.pathname === '/api/system/v1/radio/hmip/module-move/back') {
+        return readBody(req).then((raw) => {
+            const b = JSON.parse(raw || '{}');
+            if (!b.confirm) return sendJSON(res, {error: 'confirm', message: 'confirm: true is required'}, 400);
+            if ((b.hostname ?? '').trim().toLowerCase() !== 'openccu') return sendJSON(res, {error: 'hostname', message: 'the host name typed does not match this system\'s'}, 400);
+            return sendJSON(res, connStatus(cookieJar(req)), 202);
+        });
     }
     if (u.pathname.startsWith('/api/system/v1/radio/hmip/exchange')) {
         return exRoute(req, u, res);
@@ -3651,6 +3813,15 @@ const srv = http.createServer((req, res) => {
             res.writeHead(200, {'Content-Type': 'application/json'});
             res.end(JSON.stringify({name: 'dualcopro_update_blhmip-4.4.23.eq3', path: '/usr/local/etc/config/radio-firmware/HmIP-RFUSB/dualcopro_update_blhmip-4.4.23.eq3', source: 'uploaded', version: '4.4.23', size: 12, sha256: '0000000000000000000000000000000000000000000000000000000000000000', direction: 'upgrade'}));
         });
+        return;
+    }
+    if (u.pathname === '/api/system/v1/addons/stream') {
+        // openccu-lite B-297: the addons' revision once, then a heartbeat - nothing changes on the
+        // stub; a spec that wants a change answers the route itself (addon-menu-follows.spec.ts)
+        res.writeHead(200, {'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache'});
+        res.write(`event: addons\ndata: ${JSON.stringify({revision: 1})}\n\n`);
+        const hb = setInterval(() => res.write(': ping\n\n'), 30000);
+        req.on('close', () => clearInterval(hb));
         return;
     }
     if (u.pathname === '/api/system/v1/service-messages/stream') {

@@ -15,7 +15,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -97,7 +96,16 @@ func httpFor(roots *x509.CertPool) *http.Client {
 // system's pool plus the anchors an administrator added for OIDC); nil is the system's pool. The
 // discovery is fetched again with it.
 func (c *Client) SetRootCAs(roots *x509.CertPool) {
-	h := httpFor(roots)
+	c.SetHTTP(httpFor(roots))
+}
+
+// SetHTTP hands the client the HTTP client its provider calls go through (openccu-lite task 232:
+// the trust store's, which verifies with the OIDC pool and the pins and records a lost handshake
+// for the Status page). The discovery is fetched again with it.
+func (c *Client) SetHTTP(h *http.Client) {
+	if h == nil {
+		h = &http.Client{Timeout: 20 * time.Second}
+	}
 	c.mu.Lock()
 	c.HTTP, c.disc = h, nil
 	c.mu.Unlock()
@@ -326,8 +334,10 @@ type CheckResult struct {
 	OK    bool   `json:"ok"`
 	Error string `json:"error,omitempty"`
 	// TLS: the chain the connection was verified with, the leaf first and the trusted root last;
-	// empty for plain http or when the handshake failed
+	// empty for plain http or when the handshake failed - and when the client verified by itself
+	// (task 232's pins), which leaves Peer, the chain the server presented, for the caller to judge
 	Verified []*x509.Certificate `json:"-"`
+	Peer     []*x509.Certificate `json:"-"`
 	// the metadata's own values
 	Issuer                string `json:"issuer,omitempty"`
 	AuthorizationEndpoint string `json:"authorization_endpoint,omitempty"`
@@ -337,24 +347,31 @@ type CheckResult struct {
 	IssuerMismatch bool `json:"issuer_mismatch,omitempty"`
 }
 
-// Check reads issuer's discovery document trusting roots (nil: the system's pool), as the login
-// would, and says what it found - without caching anything or touching a running client.
-func Check(ctx context.Context, issuer string, roots *x509.CertPool) CheckResult {
+// Check reads issuer's discovery document through client (nil: a 20 s client on the system's
+// pool), as the login would, and says what it found - without caching anything or touching a
+// running client. CheckWith is Check with a pool.
+func Check(ctx context.Context, issuer string, client *http.Client) CheckResult {
 	var r CheckResult
+	if client == nil {
+		client = httpFor(nil)
+	}
 	u := strings.TrimSuffix(issuer, "/") + "/.well-known/openid-configuration"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		r.Error = err.Error()
 		return r
 	}
-	res, err := httpFor(roots).Do(req)
+	res, err := client.Do(req)
 	if err != nil {
 		r.Error = err.Error()
 		return r
 	}
 	defer res.Body.Close()
-	if res.TLS != nil && len(res.TLS.VerifiedChains) > 0 {
-		r.Verified = res.TLS.VerifiedChains[0]
+	if res.TLS != nil {
+		r.Peer = res.TLS.PeerCertificates
+		if len(res.TLS.VerifiedChains) > 0 {
+			r.Verified = res.TLS.VerifiedChains[0]
+		}
 	}
 	if res.StatusCode != 200 {
 		r.Error = fmt.Sprintf("the discovery document answered HTTP %d", res.StatusCode)
@@ -375,26 +392,7 @@ func Check(ctx context.Context, issuer string, roots *x509.CertPool) CheckResult
 	return r
 }
 
-// PeerChain is the certificate chain issuer's server presents, read without verifying it -
-// for the administrator to compare fingerprints before trusting one (task 230's trust on first
-// use, explicit). Nothing read here is trusted by itself.
-func PeerChain(ctx context.Context, issuer string) ([]*x509.Certificate, error) {
-	u, err := url.Parse(issuer)
-	if err != nil || u.Host == "" {
-		return nil, errors.New("the issuer is not a URL")
-	}
-	if u.Scheme != "https" {
-		return nil, errors.New("the issuer is not https: there is no certificate to fetch")
-	}
-	host := u.Host
-	if u.Port() == "" {
-		host = net.JoinHostPort(u.Hostname(), "443")
-	}
-	d := &tls.Dialer{NetDialer: &net.Dialer{Timeout: 10 * time.Second}, Config: &tls.Config{ServerName: u.Hostname(), InsecureSkipVerify: true}} //nolint:gosec // shown for comparison, never trusted from here
-	conn, err := d.DialContext(ctx, "tcp", host)
-	if err != nil {
-		return nil, err
-	}
-	defer conn.Close()
-	return conn.(*tls.Conn).ConnectionState().PeerCertificates, nil
+// CheckWith is Check trusting roots (nil: the system's pool).
+func CheckWith(ctx context.Context, issuer string, roots *x509.CertPool) CheckResult {
+	return Check(ctx, issuer, httpFor(roots))
 }

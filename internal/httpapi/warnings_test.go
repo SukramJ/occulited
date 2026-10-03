@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -912,5 +913,69 @@ func TestHmIPCounterWarnings(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatalf("%d counter warnings", n)
+	}
+}
+
+// openccu-lite task 316: the radio load's warning - a duty cycle above 50 % or a carrier sense
+// above 10 % in the sampler's last poll, with hysteresis, the interface of the highest value named.
+func TestRadioLoadWarning(t *testing.T) {
+	a := &SystemAPI{}
+	var polled time.Time
+	var list []interfaces.RadioInterface
+	a.warn.rfdPoll = func() (time.Time, []interfaces.RadioInterface) { return polled, list }
+	cs := func(n int) *int { return &n }
+	eval := func() (string, map[string]any, bool) {
+		ws, ok := a.radioLoadWarning(context.Background())
+		if len(ws) == 0 {
+			return "", nil, ok
+		}
+		return ws[0].Variant, ws[0].Params, ok
+	}
+	if _, _, ok := eval(); ok {
+		t.Error("before the first poll the source is not ready")
+	}
+	polled = time.Now()
+	list = []interfaces.RadioInterface{{Interface: "BidCos-RF", DutyCycle: 12}, {Interface: "HmIP-RF", DutyCycle: 48, CarrierSense: cs(9)}}
+	if v, _, ok := eval(); v != "" || !ok {
+		t.Errorf("under the thresholds: %q %v", v, ok)
+	}
+	list[1].DutyCycle = 51
+	v, p, _ := eval()
+	if v != "dc" || p["interface"] != "HmIP-RF" || p["duty_cycle"] != 51 || p["carrier_sense"] != 9 {
+		t.Errorf("duty cycle 51: %q %v", v, p)
+	}
+	// the hysteresis: 47 still warns, 45 clears
+	list[1].DutyCycle = 47
+	if v, _, _ := eval(); v != "dc" {
+		t.Errorf("47 %% after 51: %q", v)
+	}
+	list[1].DutyCycle = 45
+	if v, _, _ := eval(); v != "" {
+		t.Errorf("45 %%: %q", v)
+	}
+	// both kinds; the carrier sense alone on BidCos-RF
+	list = []interfaces.RadioInterface{{Interface: "BidCos-RF", DutyCycle: 60, CarrierSense: cs(2)}, {Interface: "HmIP-RF", DutyCycle: 10, CarrierSense: cs(11)}}
+	if v, p, _ := eval(); v != "dc,cs" || p["interface"] != "BidCos-RF" || p["carrier_sense"] != 11 {
+		t.Errorf("both: %q %v", v, p)
+	}
+	list[0].DutyCycle = 10
+	if v, p, _ := eval(); v != "cs" || p["interface"] != "HmIP-RF" {
+		t.Errorf("carrier sense alone: %q %v", v, p)
+	}
+	*list[1].CarrierSense = 6
+	if v, _, _ := eval(); v != "cs" {
+		t.Errorf("6 %% holds: %q", v)
+	}
+	*list[1].CarrierSense = 5
+	if v, _, _ := eval(); v != "" {
+		t.Errorf("5 %% clears: %q", v)
+	}
+	// the source is on the list
+	found := false
+	for _, s := range a.warningSources() {
+		found = found || slices.Contains(s.IDs, "radio-load")
+	}
+	if !found {
+		t.Error("radio-load is not a warning source")
 	}
 }

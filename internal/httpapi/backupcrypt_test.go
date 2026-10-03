@@ -281,7 +281,7 @@ func TestRestoreCheckAndDecrypt(t *testing.T) {
 		t.Fatalf("%d %v", st, out)
 	}
 	// apply refuses the .age
-	if st, out := g.do(t, "POST", "/restore/apply", `{"file":"restore-other-3.sbk.age"}`); st != 400 {
+	if st, out := g.do(t, "POST", "/restore/apply", `{"confirm":true,"file":"restore-other-3.sbk.age"}`); st != 400 {
 		t.Errorf("apply of .age: %d %v", st, out)
 	}
 	// a typo, the wrong key, then the right one
@@ -433,7 +433,7 @@ func TestRestoreApplyCarriesBoxIdentity(t *testing.T) {
 	dir := string(g.root) + system.BackupDir
 	_ = os.WriteFile(filepath.Join(dir, "restore-1.sbk"), []byte("sbk"), 0o644)
 	// without a setup there is no identity and nothing is carried
-	if st, _ := g.do(t, "POST", "/restore/apply", `{"file":"restore-1.sbk"}`); st != 200 {
+	if st, _ := g.do(t, "POST", "/restore/apply", `{"confirm":true,"file":"restore-1.sbk"}`); st != 200 {
 		t.Fatal(st)
 	}
 	if _, err := os.Stat(string(g.root) + system.CarryFile); err == nil {
@@ -447,7 +447,7 @@ func TestRestoreApplyCarriesBoxIdentity(t *testing.T) {
 	if err := os.Chtimes(filepath.Join(g.store.Dir, backupcrypt.KeyDir, backupcrypt.IdentityFile), made, made); err != nil {
 		t.Fatal(err)
 	}
-	if st, out := g.do(t, "POST", "/restore/apply", `{"file":"restore-1.sbk"}`); st != 200 {
+	if st, out := g.do(t, "POST", "/restore/apply", `{"confirm":true,"file":"restore-1.sbk"}`); st != 200 {
 		t.Fatal(st, out)
 	}
 	b, err := os.ReadFile(string(g.root) + system.CarryFile)

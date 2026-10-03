@@ -11,7 +11,8 @@
  */
 import {api} from './api';
 import {addonsDot, pageDots, type Severity} from './systemmenu';
-import type {WarningsView} from './warnings';
+import type {Warning, WarningsView} from './warnings';
+import {edgeOf, type Edge} from './warnedge';
 
 export const systemMenu = $state({
     open: false,
@@ -32,7 +33,18 @@ export const systemMenu = $state({
      * unsilenced warning that leads to /addons (addon-update, an addon that ended, ...)
      */
     addonDot: undefined as Severity | undefined,
+    /** occulited task 12: every active warning, silenced or not - the panels they lead to show their edge */
+    active: [] as Warning[],
 });
+
+/**
+ * occulited task 12: the edge the panel a warning leads to shows while it is active - `warn`, `err`
+ * or nothing, the class `.ol-panel`, `.ol-card` and `.ol-warn-edge` paint. key narrows it to the
+ * warnings that name the panel's addon, unit or target.
+ */
+export function warnEdge(ids: readonly string[], key?: string): Edge {
+    return edgeOf(systemMenu.active, ids, key);
+}
 
 export function openSystemMenu(anchor: HTMLElement | null, focusFilter: boolean): void {
     systemMenu.anchor = anchor;
@@ -55,7 +67,13 @@ export async function refreshDots(): Promise<void> {
         const r = await api.get<WarningsView>('/api/system/v1/warnings');
         systemMenu.dots = pageDots(r.warnings ?? []);
         systemMenu.addonDot = addonsDot(r.warnings ?? []);
+        systemMenu.active = r.warnings ?? [];
     } catch {
         /* the dots stay as they were; the next read may work */
     }
+}
+
+/** the attributes that name a panel's warnings and its edge, for the tests and the eye: spread them */
+export function warnFor(ids: readonly string[], key?: string): Record<string, string | undefined> {
+    return {'data-warn-for': ids.join(' '), 'data-warn-edge': warnEdge(ids, key) || undefined};
 }

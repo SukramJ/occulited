@@ -124,14 +124,18 @@ func TestRestoreDevices(t *testing.T) {
 	if st, _, _ := rig.do(t, "POST", "/radio/import/retry", `{}`); st != 404 {
 		t.Errorf("retry without a record: %d", st)
 	}
+	// openccu-lite task 317 (D-120): the import writes the backup's HmIP identity - not without confirm
+	if st, e, _ := rig.do(t, "POST", "/restore/import-devices", `{"file":"restore-ccu.sbk"}`); st != 400 || e.Error != "confirm" {
+		t.Errorf("no confirm: %d %+v", st, e)
+	}
 	// the refusals: a paired system, a bad name, a missing upload, nothing to import
-	if st, e, _ := rig.do(t, "POST", "/restore/import-devices", `{"file":"restore-ccu.sbk"}`); st != 409 || e.Error != "paired" {
+	if st, e, _ := rig.do(t, "POST", "/restore/import-devices", `{"confirm":true,"file":"restore-ccu.sbk"}`); st != 409 || e.Error != "paired" {
 		t.Errorf("paired: %d %+v", st, e)
 	}
-	if st, e, _ := rig.do(t, "POST", "/restore/import-devices", `{"file":"../etc/passwd"}`); st != 400 || e.Error != "invalid" {
+	if st, e, _ := rig.do(t, "POST", "/restore/import-devices", `{"confirm":true,"file":"../etc/passwd"}`); st != 400 || e.Error != "invalid" {
 		t.Errorf("bad name: %d %+v", st, e)
 	}
-	if st, _, _ := rig.do(t, "POST", "/restore/import-devices", `{"file":"restore-nope.sbk"}`); st != 404 {
+	if st, _, _ := rig.do(t, "POST", "/restore/import-devices", `{"confirm":true,"file":"restore-nope.sbk"}`); st != 404 {
 		t.Errorf("missing: %d", st)
 	}
 	if st, _ := rig.get(t, "/restore/devices?file=x.sbk"); st != 400 {
@@ -149,12 +153,12 @@ func TestRestoreDevices(t *testing.T) {
 	if st != 200 || tg["importable"] != false || tg["devices"] != 2.0 || tg["paired"].(map[string]any)["BidCos-RF"].(map[string]any)["devices"] != 1.0 || tg["paired"].(map[string]any)["HmIP-RF"].(map[string]any)["devices"] != 1.0 {
 		t.Errorf("paired from the files: %d %v", st, tg)
 	}
-	if st, e, _ := rig.do(t, "POST", "/restore/import-devices", `{"file":"restore-ccu.sbk"}`); st != 409 || e.Error != "paired" {
+	if st, e, _ := rig.do(t, "POST", "/restore/import-devices", `{"confirm":true,"file":"restore-ccu.sbk"}`); st != 409 || e.Error != "paired" {
 		t.Errorf("paired from the files: %d %+v", st, e)
 	}
 	_ = os.Remove(root + "/etc/config/rfd/KEQ0000001.dev")
 	_ = os.Remove(root + "/etc/config/crRFD/data/3014F711A000010000000A55.dev")
-	if st, e, _ := rig.do(t, "POST", "/restore/import-devices", `{"file":"restore-empty.sbk"}`); st != 422 || e.Error != "nothing_to_import" {
+	if st, e, _ := rig.do(t, "POST", "/restore/import-devices", `{"confirm":true,"file":"restore-empty.sbk"}`); st != 422 || e.Error != "nothing_to_import" {
 		t.Errorf("empty: %d %+v", st, e)
 	}
 	if len(namesCalls) != 0 {
@@ -167,7 +171,7 @@ func TestRestoreDevices(t *testing.T) {
 	}
 	rig.role = auth.RoleAdmin
 	// the import onto the free system: the files land, this system's own go aside, the reboot
-	st, e, out := rig.do(t, "POST", "/restore/import-devices", `{"file":"restore-ccu.sbk"}`)
+	st, e, out := rig.do(t, "POST", "/restore/import-devices", `{"confirm":true,"file":"restore-ccu.sbk"}`)
 	if st != 200 || out["ok"] != true || out["rebooting"] != true {
 		t.Fatalf("import: %d %+v %v", st, e, out)
 	}
@@ -275,13 +279,13 @@ func TestRestoreDevicesKeyReplace(t *testing.T) {
 		t.Fatalf("view: %d %v", st, out)
 	}
 	// no passphrase: the word to replace this system's key store is what is needed
-	if st, e, _ := rig.do(t, "POST", "/restore/import-devices", `{"file":"restore-key.sbk"}`); st != 422 || e.Error != "key_replace" {
+	if st, e, _ := rig.do(t, "POST", "/restore/import-devices", `{"confirm":true,"file":"restore-key.sbk"}`); st != 422 || e.Error != "key_replace" {
 		t.Fatalf("without replace_key: %d %+v", st, e)
 	}
 	if b, _ := os.ReadFile(root + "/etc/config/keys"); string(b) != "the target's own key store" {
 		t.Fatal("the key store moved on a refusal")
 	}
-	st, e, out := rig.do(t, "POST", "/restore/import-devices", `{"file":"restore-key.sbk","replace_key":true}`)
+	st, e, out := rig.do(t, "POST", "/restore/import-devices", `{"confirm":true,"file":"restore-key.sbk","replace_key":true}`)
 	if st != 200 {
 		t.Fatalf("import: %d %+v", st, e)
 	}
@@ -301,5 +305,67 @@ func TestRestoreDevicesKeyReplace(t *testing.T) {
 	rec := record.Read()
 	if rec == nil || !rec.BidCosRF.NonDefaultKey || !rec.BidCosRF.TargetKeyReplaced || rec.HmIP.ModuleChanged {
 		t.Errorf("record: %+v", rec)
+	}
+}
+
+// openccu-lite B-289: a backup whose HmIP identity would move onto this system's module, whose
+// application firmware is below 2.8.0, with local key mode off: the view names the refusal, the
+// device import and the restore are refused (422 hmip-firmware) before anything happens; a backup
+// in local key mode, or a module on 2.8.0 or later, goes ahead.
+func TestRestoreHmIPFirmwareRefused(t *testing.T) {
+	rig := newPowerRig(t, true)
+	root := string(rig.root)
+	writeSBK(t, rig.root, "restore-ccu.sbk", ccuBackup)
+	local := map[string]string{}
+	for k, v := range ccuBackup {
+		local[k] = v
+	}
+	local["usr/local/etc/config/crRFD/hmip_user.conf"] = "KeyServer.Mode=LOCAL\nNetwork.Key=00112233445566778899AABBCCDDEEFF\n"
+	writeSBK(t, rig.root, "restore-local.sbk", local)
+	plan := radio.Plan{HmIP: &radio.Role{Hardware: "HMIP-RFUSB", Serial: "0000000A01", SGTIN: "3014F711A000040000000A01", Version: "1.8.3"}}
+	record := &system.ImportRecord{Path: filepath.Join(root, "state/devices-import.json"), Root: rig.root, Plan: func() (radio.Plan, bool) { return plan, true }, Journal: func(context.Context, time.Time) []string { return nil }}
+	api := &SystemAPI{Root: rig.root, Manager: rig.m, Power: rig.power, ImportRecord: record}
+	mux := http.NewServeMux()
+	api.Register(mux)
+	rig.srv.Close()
+	rig.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		mux.ServeHTTP(w, req.WithContext(context.WithValue(req.Context(), ctxKey{}, &auth.Session{ID: "s", User: "u", Role: rig.role, Scopes: auth.RoleScopes(rig.role)})))
+	}))
+	t.Cleanup(rig.srv.Close)
+
+	st, out := rig.get(t, "/restore/devices?file=restore-ccu.sbk")
+	fw, _ := out["hmip_firmware"].(map[string]any)
+	if st != 200 || out["module_changed"] != true || fw == nil || fw["module"] != "3014F711A000040000000A01" || fw["version"] != "1.8.3" || fw["minimum"] != "2.8.0" {
+		t.Fatalf("view: %d %v", st, out)
+	}
+	if v := out["target"].(map[string]any)["hmip_module"].(map[string]any)["version"]; v != "1.8.3" {
+		t.Errorf("the module's version: %v", v)
+	}
+	st, e, _ := rig.do(t, "POST", "/restore/import-devices", `{"confirm":true,"file":"restore-ccu.sbk"}`)
+	if st != 422 || e.Error != "hmip-firmware" || e.Detail["version"] != "1.8.3" || e.Detail["minimum"] != "2.8.0" || !strings.Contains(e.Message, "update the module's firmware") {
+		t.Errorf("import: %d %+v", st, e)
+	}
+	if st, e, _ := rig.do(t, "POST", "/restore/apply", `{"confirm":true,"file":"restore-ccu.sbk"}`); st != 422 || e.Error != "hmip-firmware" || e.Detail["module"] != "3014F711A000040000000A01" {
+		t.Errorf("restore: %d %+v", st, e)
+	}
+	if record.Read() != nil || rig.m.Reboots() != 0 {
+		t.Errorf("a refused import or restore did something: %v %v", record.Read(), rig.m.Reboots())
+	}
+	// local key mode in the backup: offline, no refusal
+	if st, out := rig.get(t, "/restore/devices?file=restore-local.sbk"); st != 200 || out["hmip_firmware"] != nil || out["module_changed"] != true {
+		t.Errorf("local key mode: %d %v", st, out)
+	}
+	// a module that can take the key
+	plan.HmIP.Version = "4.4.18"
+	if st, out := rig.get(t, "/restore/devices?file=restore-ccu.sbk"); st != 200 || out["hmip_firmware"] != nil {
+		t.Errorf("4.4.18: %d %v", st, out)
+	}
+	if refused := api.restoreHmIPRefusal(filepath.Join(root, system.BackupDir, "restore-ccu.sbk")); refused != nil {
+		t.Errorf("restore at 4.4.18: %+v", refused)
+	}
+	// the identity of this module itself: no move, no refusal
+	plan.HmIP.Version, plan.HmIP.SGTIN = "1.8.3", "3014F711A0001F0000000A03"
+	if st, out := rig.get(t, "/restore/devices?file=restore-ccu.sbk"); st != 200 || out["hmip_firmware"] != nil || out["module_changed"] != false {
+		t.Errorf("same module: %d %v", st, out)
 	}
 }

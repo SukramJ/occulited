@@ -15,6 +15,7 @@
     import LocalKey from '../lib/LocalKey.svelte';
     import DeviceKeys from '../lib/DeviceKeys.svelte';
     import {pageLife} from '../lib/pagelife.svelte';
+    import {warnEdge, warnFor} from '../lib/systemmenu.svelte';
 
     interface Keys { security_key_set: boolean; security_key_known: boolean }
     const life = pageLife();
@@ -85,7 +86,7 @@
     {#if notice}<div class="ol-notice" data-notice="keys">{notice}</div>{/if}
     <!-- the maintainer, 2026-09-19: each of the three keys in a panel of its own -->
     {#if radio.security_key_known}
-        <section class="ol-panel" data-panel="security-key">
+        <section class="ol-panel {warnEdge(['security-key'])}" data-panel="security-key" {...warnFor(['security-key'])}>
         <!-- rfd's, and only rfd's: eq3configcmd sets it on the BidCos coprocessor -->
         <h2 id="security-key">{t('Security key')}<Help>{t('This is a BidCos-RF setting: rfd holds it and re-keys the AES-capable BidCos devices. BidCos-Wired and HmIP are not affected by it.')}</Help> <span class="ol-muted">· BidCos-RF</span></h2>
         <p>{radio.security_key_set ? t('A system security key is set. Backups are signed with it; a restore on another system asks for it.') + ' ' + t('It does not encrypt backups; see Backup → Encryption.') : t('No system security key is set — the default key is in use. The CCU WebUI calls this the "Zentralenschlüssel".')}</p>
@@ -107,8 +108,8 @@
     <!-- task 149 (D-103): the HmIP network key; task 154: the device keys need radio:keys, which of
          the accounts only an administrator has -->
     {#if admin}
-        <section class="ol-panel" data-panel="local-key"><LocalKey /></section>
-        <section class="ol-panel" data-panel="device-keys"><DeviceKeys /></section>
+        <section class="ol-panel {warnEdge(['hmip-local-key'])}" data-panel="local-key" {...warnFor(['hmip-local-key'])}><LocalKey /></section>
+        <section class="ol-panel {warnEdge(['hmip-key-declined'])}" data-panel="device-keys" {...warnFor(['hmip-key-declined'])}><DeviceKeys /></section>
     {:else}
         <p class="ol-muted" data-note="hmip-keys-admin">{t("The HmIP network key and the HmIP devices' keys are an administrator's.")}</p>
     {/if}

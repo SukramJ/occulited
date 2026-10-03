@@ -114,7 +114,7 @@ test('only a rega warning: no dot on the Addons tab, the warning stays on Status
 // openccu-lite B-267: after a restore, an addon without its program files is a Status warning per
 // addon - installed before the restore, not started, reinstall it - in German with "Sie", and the
 // link goes to the Addons page's reinstall section
-const PAYLOAD = {id: 'addon-payload', variant: 'mosquitto', severity: 'warning', href: '/addons#reinstall', since: new Date().toISOString(), params: {addons: [{id: 'mosquitto', name: 'Mosquitto', enabled: true}, {id: 'hmm', name: 'Homematic Manager', enabled: true}]}};
+const PAYLOAD = {id: 'addon-payload', variant: 'mosquitto', severity: 'error', href: '/addons#reinstall', since: new Date().toISOString(), params: {addons: [{id: 'mosquitto', name: 'Mosquitto', enabled: true}, {id: 'hmm', name: 'Homematic Manager', enabled: true}]}};
 
 test('after a restore: the Status warning names the addons to reinstall', async ({page}) => {
     await withWarning(page, PAYLOAD);

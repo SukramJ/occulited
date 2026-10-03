@@ -147,6 +147,26 @@ func TestVersionAndSnapshot(t *testing.T) {
 	}
 }
 
+// task 9: /version names the implementation with occulited's version and the commit beside it; a
+// build without a commit leaves the field out
+func TestVersionImplementationAndCommit(t *testing.T) {
+	impl, commit := Implementation, Commit
+	t.Cleanup(func() { Implementation, Commit = impl, commit })
+	for _, c := range []struct{ impl, commit string }{
+		{"occulited 1.0.0-dev.38", "fa42dfde1e31fb074df53220dd573ceb92642ff0"},
+		{"occulited 1.0.0-dev.38-5-gfa42dfd-dirty", "fa42dfde1e31fb074df53220dd573ceb92642ff0"},
+		{"occulited dev", ""},
+	} {
+		Implementation, Commit = c.impl, c.commit
+		srv, _ := newServer(t)
+		st, out, _ := do(t, srv, "GET", "/api/meta/v1/version", "", nil)
+		got, present := out["commit"]
+		if st != 200 || out["implementation"] != c.impl || (c.commit == "" && present) || (c.commit != "" && got != c.commit) {
+			t.Fatalf("%q/%q: status %d, %v", c.impl, c.commit, st, out)
+		}
+	}
+}
+
 // task 192: /version carries the pairing fact when the daemon has one, and nothing when it has
 // not - an older system's answer has no `hmip` at all, which is how a client tells them apart
 func TestVersionHmIPPairing(t *testing.T) {

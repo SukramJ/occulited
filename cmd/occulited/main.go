@@ -6,7 +6,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -68,8 +67,23 @@ import (
 	"github.com/hobbyquaker/occulited/internal/ui"
 )
 
-// version is set by scripts/build.sh via -ldflags.
-var version = "dev"
+// version and commit are set at build time with -ldflags -X (task 9): version is the image version
+// the commit is tagged with (v1.0.0-dev.38 gives 1.0.0-dev.38), `git describe` between build rounds
+// (1.0.0-dev.38-5-gfa42dfd, -dirty for an uncommitted tree), "dev" without a tag; commit is the
+// full hash. scripts/build.sh sets both, the image's package passes both from its pin.
+var (
+	version = "dev"
+	commit  = ""
+)
+
+// versionLine is what --version prints and the journal's start line says: the version, and the
+// commit beside it where the binary carries one.
+func versionLine() string {
+	if commit == "" {
+		return "occulited " + version
+	}
+	return "occulited " + version + " (" + commit + ")"
+}
 
 func main() {
 	// B-5: a first word that is no command is refused before anything else runs
@@ -180,7 +194,7 @@ func run(opts daemonOptions) error {
 	cfgPath, listen, stateDir, logTarget := &opts.config, &opts.listen, &opts.stateDir, &opts.log
 	rootDir, sessionDir, helperSocket := &opts.root, &opts.sessionDir, &opts.helperSocket
 	if opts.version {
-		fmt.Println("occulited", version)
+		fmt.Println(versionLine())
 		return nil
 	}
 	// B-5: before the config is read or anything written
@@ -373,6 +387,7 @@ func run(opts daemonOptions) error {
 	}
 
 	httpapi.Implementation = "occulited " + version
+	httpapi.Commit = commit
 	mux := http.NewServeMux()
 	authAPI.Register(mux)
 	metaAPI := &httpapi.MetaAPI{Store: store, Root: *rootDir, AfterImport: func() {
@@ -614,6 +629,7 @@ func run(opts daemonOptions) error {
 		c.HTTP = trustStore.HTTPClient(trust.StoreOcculited, 10*time.Minute) // task 231: GitHub and the catalogue
 		c.TimingsFile = filepath.Join(cfg.StateDir, "catalog-timings.json")  // 30.2: the bar's pace
 		c.CacheFile = filepath.Join(cfg.StateDir, "catalog-cache.json")      // D-119: the fetched manifests, stars, releases
+		c.ImagesDir = filepath.Join(cfg.StateDir, "catalog-images")          // openccu-lite task 100: the manifests' icons and logos
 		c.BundledManifests = config.BundledManifestsDir
 		c.Daily = catalogDaily.Load
 		cat, catSvc = c, c
@@ -686,15 +702,10 @@ func run(opts daemonOptions) error {
 		return fmt.Errorf("certificate service: %w", err)
 	}
 	certSvc.Issuer = acme.LegoIssuer{UserAgent: "occulited/" + version}
-	// task 231: the directory connection trusts occulited's store plus the ACME anchors; a CA root
-	// kept in the settings before moves into the ACME store once
-	certSvc.Roots = func() *x509.CertPool {
-		pool, err := trustStore.PoolFor(trust.PurposeACME)
-		if err != nil {
-			return nil
-		}
-		return pool
-	}
+	// task 231: the directory connection trusts occulited's store plus the ACME anchors - and,
+	// task 232, must match the ACME pins where there are any; a lost handshake is recorded for the
+	// Status page. A CA root kept in the settings before moves into the ACME store once
+	certSvc.HTTP = func() *http.Client { return trustStore.HTTPClient(trust.PurposeACME, 2*time.Minute) }
 	if pem := certSvc.TakeCARoot(); pem != "" {
 		if _, err := trustStore.AddTo(context.Background(), trust.PurposeACME, []byte(pem), "", trust.OriginACMESettings); err != nil {
 			log.Warn("acme: the settings' CA root could not move into the ACME trust store", "err", err)
@@ -778,7 +789,10 @@ func run(opts daemonOptions) error {
 	localKey := &system.HmIPLocalKey{Root: root, Services: services, StateDir: filepath.Join(cfg.StateDir, "hmip-local-key"), Plan: radioConn.BootPlan, Busy: radioBusy, Restarts: hmipRestarts, Log: area("hmip-local-key")}
 	// openccu-lite B-285: the snapshot before HmIP-RF moves to another module, and the way back
 	radioConn.BeforeHmIPMove = localKey.SnapshotBeforeMove
+	radioConn.HmIPIdentity = localKey.HasIdentity
+	radioConn.LocalKeySnapshot = localKey.LocalKeySnapshotKept
 	radioConn.MoveBackOffer = localKey.MoveBackOffer
+	radioConn.CounterGap = localKey.CounterGap
 	localKey.Conn = radioConn.ApplyRestore
 	// openccu-lite task 275: the record of the last device import, read by the Interfaces page
 	importRecord := &system.ImportRecord{Path: filepath.Join(cfg.StateDir, "devices-import.json"), Root: root, Plan: radioConn.BootPlan}
@@ -894,7 +908,20 @@ func run(opts daemonOptions) error {
 	}, OnSystemUpdateToggle: func(on bool) error {
 		cfg.SystemUpdate.Enabled = on
 		return config.Save(*cfgPath, cfg)
-	}, WebBase: "http://" + cfg.Listen, MetaRecovered: loaded.RecoveredFromBackup, NetTx: netTx, IPv6: ipv6Tx, Run: run, RunStdin: runStdin, Firewall: fwm, Health: sampler, Updates: updates, FirstBoot: firstBoot, ChangeKey: changeKey, SetLogLevel: setLogLevel, InitInterface: initInterface, AddonCtl: addonCtl, InstallToken: installToken, Feed: feed, Cert: certSvc, RadioFirmware: radioFW, RadioConnections: radioConn, HmIPLocalKey: localKey, HmIPDeviceKeys: deviceKeys, ImportRecord: importRecord, NamesImport: metaAPI.ImportNamesFromSBK, ConfirmTicket: users.RedeemConfirmed, FirewallRules: fwRules, HTTPS: httpsCfg, ClassicRPC: &system.ClassicRPCConfig{Root: root, Run: run, Systemd: root.HasSystemd()}, WiFi: wifiService(root, root.HasSystemd()), Power: &system.Power{Root: root, Systemd: root.HasSystemd(), Run: run}, RadioInterfaces: radioIfs, Storage: storage, Clock: &system.ClockCheck{Root: root}, BootTiming: bootTiming, Version: version}
+	}, WebBase: "http://" + cfg.Listen, MetaRecovered: loaded.RecoveredFromBackup, NetTx: netTx, IPv6: ipv6Tx, Run: run, RunStdin: runStdin, Firewall: fwm, Health: sampler, Updates: updates, FirstBoot: firstBoot, ChangeKey: changeKey, SetLogLevel: setLogLevel, InitInterface: initInterface, AddonCtl: addonCtl, InstallToken: installToken, Feed: feed, Cert: certSvc, RadioFirmware: radioFW, RadioConnections: radioConn, HmIPLocalKey: localKey, HmIPDeviceKeys: deviceKeys, ImportRecord: importRecord, NamesImport: metaAPI.ImportNamesFromSBK, ConfirmTicket: users.RedeemConfirmed, FirewallRules: fwRules, HTTPS: httpsCfg, ClassicRPC: &system.ClassicRPCConfig{Root: root, Run: run, Systemd: root.HasSystemd()}, WiFi: wifiService(root, root.HasSystemd()), Power: &system.Power{Root: root, Systemd: root.HasSystemd(), Run: run}, RadioInterfaces: radioIfs, Storage: storage, Clock: &system.ClockCheck{Root: root}, BootTiming: bootTiming, Version: version, Commit: commit}
+	// openccu-lite task 232: the server a purpose's pins are taken from - the OIDC issuer as the
+	// configuration file has it now, the ACME directory the settings point at
+	sysAPI.PinTarget = func(purpose string) string {
+		switch purpose {
+		case trust.PurposeOIDC:
+			if c, err := config.Load(*cfgPath); err == nil {
+				return c.Auth.OIDC.Issuer
+			}
+		case trust.PurposeACME:
+			return certSvc.Settings().DirectoryURLFor()
+		}
+		return ""
+	}
 	sysAPI.BackupCrypt = backupStore
 	sysAPI.DataStore = &dataStore{path: *cfgPath, stateDir: cfg.StateDir, m: dataStoreMgr, h: dpHistory, root: root}
 	// openccu-lite task 86: the backup targets - the USB directory, NFS, SMB, SFTP
@@ -936,7 +963,7 @@ func run(opts daemonOptions) error {
 	}
 	// task 95: the status LED - the controller owns the RGB LED once the box is up; led.json in the
 	// state directory, the frames through the helper
-	ledCtl := &led.Controller{Root: root, File: filepath.Join(cfg.StateDir, "led.json"), Log: area("led"), Src: ledSources(services, warnTracker, feed, updates, ledInternetTargets(cfg.Catalog, certSvc))}
+	ledCtl := &led.Controller{Root: root, File: filepath.Join(cfg.StateDir, "led.json"), Log: area("led"), Src: ledSources(services, warnTracker, feed, updates, ledInternetTargets(cfg.Catalog, certSvc), sampler)}
 	sysAPI.LED = ledCtl
 	sysAPI.RPC, sysAPI.ServiceMessages = rpcSub, serviceMsgs // task 75
 	// task 77: lite-rpc - the request paths and the stream on the bus, always on (D-117); streams
@@ -1009,8 +1036,8 @@ func run(opts daemonOptions) error {
 	mux.HandleFunc("GET /api/system/v1/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		rv := root.ReadVersion() // D-44: the release identity for the shell's top bar, before login
-		fmt.Fprintf(w, `{"ok":true,"version":%q,"release":%q,"base":%q,"uptime_s":%d,"meta":{"revision":%d,"recovered":%t}}`+"\n",
-			version, rv.Full(), rv.Version, int(time.Since(started).Seconds()), store.Revision(), loaded.RecoveredFromBackup)
+		fmt.Fprintf(w, `{"ok":true,"version":%q,"commit":%q,"release":%q,"base":%q,"uptime_s":%d,"meta":{"revision":%d,"recovered":%t}}`+"\n",
+			version, commit, rv.Full(), rv.Version, int(time.Since(started).Seconds()), store.Revision(), loaded.RecoveredFromBackup)
 	})
 
 	samplerCtx, stopSampler := context.WithCancel(context.Background())
@@ -1109,7 +1136,7 @@ func run(opts daemonOptions) error {
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
-	log.Info("occulited started", "version", version, "listen", cfg.Listen, "state", cfg.StateDir)
+	log.Info("occulited started", "version", version, "commit", commit, "listen", cfg.Listen, "state", cfg.StateDir)
 	bootTiming.MarkListening()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -1563,8 +1590,23 @@ func ledInternetTargets(cat config.CatalogConfig, certs *acme.Service) func() []
 // ledSources are the status LED's inputs besides the files: the units (systemd boxes only), the
 // Status page's warnings nobody silenced, the release feed, the addon update check and the hosts the
 // no-internet check connects to.
-func ledSources(services httpapi.ServiceManager, tracker *httpapi.WarningTracker, feed *sysupdate.Service, updates *addonupdates.Service, internet func() []string) led.Sources {
+func ledSources(services httpapi.ServiceManager, tracker *httpapi.WarningTracker, feed *sysupdate.Service, updates *addonupdates.Service, internet func() []string, sampler *health.Sampler) led.Sources {
 	src := led.Sources{Warnings: tracker.Unsilenced, WarningIDs: []string{}, InternetTargets: internet}
+	if sampler != nil {
+		// openccu-lite task 316: the radio load as the sampler last saw it - the Status page's and
+		// the sparklines' sampling, no poll of the LED's own
+		src.Radio = func() []led.RadioLoad {
+			var out []led.RadioLoad
+			for _, ri := range sampler.Status().Interfaces {
+				l := led.RadioLoad{Interface: ri.Interface, DutyCycle: ri.DutyCycle}
+				if ri.CarrierSense != nil {
+					l.CarrierSense, l.HasCS = *ri.CarrierSense, true
+				}
+				out = append(out, l)
+			}
+			return out
+		}
+	}
 	for _, s := range tracker.Sources {
 		src.WarningIDs = append(src.WarningIDs, s.IDs...)
 	}
@@ -1750,8 +1792,9 @@ func firstBootLeftovers(root system.Root, services httpapi.ServiceManager, manag
 		stop = func(unit string) { _, _ = services.Control(context.Background(), unit, "stop") }
 		reload = func() { sd.Reload(context.Background()) }
 	}
-	// B-257's hardening of the world-writable config directories, once, with a marker of its own
-	// (B-264): also on a system whose leftovers pass ran before the hardening existed
+	// B-257's hardening of the world-writable config directories, once per pass, with a marker of
+	// its own (B-264): also on a system whose leftovers pass ran before the hardening existed, and
+	// again where a newer pass (task 312: the files under addons/mh) has not run yet
 	if h, ran, err := root.HardenConfigDirsOnce(stateDir, time.Now()); err != nil && !errors.Is(err, system.ErrMigrationIncomplete) {
 		log.Warn("config directories: the hardening's marker could not be written; the next start runs it again", "err", err)
 	} else if ran {

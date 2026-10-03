@@ -24,6 +24,7 @@
     import Icon from '../lib/Icon.svelte';
     import SecretInput from '../lib/SecretInput.svelte';
     import {scrollToAnchor} from '../lib/anchor';
+    import WarnEdge from '../lib/WarnEdge.svelte';
 
     interface Gateway { index: number; type: string; name?: string; serial?: string; address?: string; has_key: boolean }
     interface Extra { lan_gateways: Gateway[]; wired_gateways: Gateway[]; pending_key_changes: string[] }
@@ -187,7 +188,7 @@
     <!-- task 218's network radio board, here since task 239 (the maintainer: "wouldnt it make sense
          to move the hb-rf-eth config to the lan-devices page?"): a LAN device like the gateways,
          after them - both carry a radio over the network - and before the access points -->
-    <HBRFETH {admin} />
+    <WarnEdge ids={['hb-rf-eth']}><HBRFETH {admin} /></WarnEdge>
     <!-- task 217: the HmIP access points (HAP, DRAP) paired to HmIP-RF; shown while HmIP-RF is in
          the interface list -->
     <AccessPoints />

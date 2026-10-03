@@ -630,6 +630,14 @@ a.ol-card .ol-card-body { color: var(--hmm-link); }
 .ol-card.warn, .ol-panel.warn { border-left: 4px solid var(--hmm-warn); }
 .ol-card.err, .ol-panel.err { border-left: 4px solid var(--hmm-error); }
 .ol-panel.warn, .ol-panel.err { padding-left: 13px; }
+/* occulited task 12: the same edge on a region that is no panel - a section of a page, a component
+   on it - while a warning of the Status page leads there (lib/WarnEdge.svelte); and on a table row,
+   whose first cell carries it, since a row has no border of its own outside a collapsed table */
+.ol-warn-edge.warn { border-left: 4px solid var(--hmm-warn); padding-left: 12px; }
+.ol-warn-edge.err { border-left: 4px solid var(--hmm-error); padding-left: 12px; }
+tr.ol-warn-edge.warn, tr.ol-warn-edge.err { border-left: 0; padding-left: 0; }
+tr.ol-warn-edge.warn > :first-child { box-shadow: inset 4px 0 0 var(--hmm-warn); }
+tr.ol-warn-edge.err > :first-child { box-shadow: inset 4px 0 0 var(--hmm-error); }
 
 /* task 203, the maintainer: the Status page's warnings are panels like the rest of the UI, not
    sunken boxes with a coloured line all round (lib/Notice.svelte). A notice is one sentence with
@@ -678,6 +686,8 @@ a.ol-card .ol-card-body { color: var(--hmm-link); }
 .ol-badge-accent { background: var(--hmm-accent-bg); color: var(--hmm-accent); border-color: var(--hmm-accent); text-decoration: none; }
 a.ol-badge-accent:hover { background: var(--hmm-accent); color: var(--hmm-bg); }
 .ol-badge.good { background: var(--hmm-accent-bg); color: var(--hmm-accent); border-color: transparent; }
+/* occulited task 10: a positive statement (an addon confined, started early) - the kit's ok colour */
+.ol-badge.ok { background: var(--hmm-ok); color: var(--hmm-bg); border-color: transparent; }
 .ol-badge.warn { background: var(--hmm-warn); color: var(--hmm-bg); border-color: transparent; }
 .ol-badge.bad { background: var(--hmm-error); color: var(--hmm-bg); border-color: transparent; }
 /* 30.2: the catalogue's one bar */

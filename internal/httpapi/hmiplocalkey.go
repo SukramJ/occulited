@@ -40,6 +40,25 @@ func (a *SystemAPI) localKeyStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, st)
 }
 
+// identityConfirmed answers the refusal of a request that changes the HmIP identity files without the
+// user's word (openccu-lite task 317, D-120): 400 confirm without "confirm": true, 400 hostname when
+// the name is asked for (typed) and does not match this system's. True when the request may go on.
+func (a *SystemAPI) identityConfirmed(w http.ResponseWriter, confirm bool, hostname string, typed bool) bool {
+	if !confirm {
+		writeJSON(w, http.StatusBadRequest, apiError{Error: "confirm", Message: "confirm: true is required"})
+		return false
+	}
+	if typed && !sameHostname(hostname, a.Root.Hostname()) {
+		writeJSON(w, http.StatusBadRequest, apiError{Error: "hostname", Message: "the host name typed does not match this system's"})
+		return false
+	}
+	return true
+}
+
+// localKeyEnable switches local key mode on: {mode, network_key?, backbone_key?, confirm,
+// hostname?}. The switch makes hmipserver write the module's identity files under the new key
+// (D-120): confirm is required, and for mode generate - every paired device has to be taught in
+// again - the host name typed as well, unless hmipserver lists no device.
 func (a *SystemAPI) localKeyEnable(w http.ResponseWriter, r *http.Request) {
 	if !a.localKeyReady(w) {
 		return
@@ -48,9 +67,20 @@ func (a *SystemAPI) localKeyEnable(w http.ResponseWriter, r *http.Request) {
 		Mode        string `json:"mode"`
 		NetworkKey  string `json:"network_key"`
 		BackboneKey string `json:"backbone_key"`
+		Confirm     bool   `json:"confirm"`
+		Hostname    string `json:"hostname"`
 	}
 	if err := readJSON(r, &b); err != nil {
 		badBody(w, err)
+		return
+	}
+	if !a.identityConfirmed(w, b.Confirm, "", false) {
+		return
+	}
+	// a generated key: every paired device has to be taught in again - the host name typed, unless
+	// hmipserver lists no device (the welcome page's step on an empty network)
+	if b.Mode == "generate" && !sameHostname(b.Hostname, a.Root.Hostname()) && a.HmIPLocalKey.DeviceCount(r.Context()) != 0 {
+		a.identityConfirmed(w, true, b.Hostname, true)
 		return
 	}
 	if err := a.HmIPLocalKey.Enable(b.Mode, b.NetworkKey, b.BackboneKey); err != nil {
@@ -60,8 +90,23 @@ func (a *SystemAPI) localKeyEnable(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, a.HmIPLocalKey.Status())
 }
 
-func (a *SystemAPI) localKeyDisable(w http.ResponseWriter, _ *http.Request) {
+// localKeyDisable goes back to eQ-3's key server: {confirm, hostname}. The snapshot's identity
+// files replace the ones in hmipserver's data directory (a copy of those is kept first), and the
+// devices taught in under the local key since have to be taught in again (D-120: the host name
+// typed).
+func (a *SystemAPI) localKeyDisable(w http.ResponseWriter, r *http.Request) {
 	if !a.localKeyReady(w) {
+		return
+	}
+	var b struct {
+		Confirm  bool   `json:"confirm"`
+		Hostname string `json:"hostname"`
+	}
+	if err := readJSON(r, &b); err != nil {
+		badBody(w, err)
+		return
+	}
+	if !a.identityConfirmed(w, b.Confirm, b.Hostname, true) {
 		return
 	}
 	if err := a.HmIPLocalKey.Disable(); err != nil {

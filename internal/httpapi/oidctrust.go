@@ -29,17 +29,18 @@ func (a *AuthAPI) registerOIDCTrust(mux *http.ServeMux, p string) {
 	route(mux, auth.ScopeAuthAdmin, "POST "+p+"/oidc/peer-chain", a.oidcPeerChain)
 }
 
-// ApplyOIDCTrust hands the running provider client the system's pool plus the OIDC anchors;
-// called at start and after every change of the anchors.
+// ApplyOIDCTrust hands the running provider client the trust store's HTTP client for OIDC: the
+// system's pool plus the OIDC anchors and, task 232, the OIDC pins, with a lost handshake recorded
+// for the Status page. The client follows every later change of the store by itself; this is
+// called at start and after a change of the anchors so the discovery is read afresh.
 func (a *AuthAPI) ApplyOIDCTrust() error {
 	if a.Trust == nil || a.OIDC == nil {
 		return nil
 	}
-	pool, err := a.Trust.Pool(trust.PurposeOIDC)
-	if err != nil {
+	if _, err := a.Trust.PoolFor(trust.PurposeOIDC); err != nil {
 		return err
 	}
-	a.OIDC.SetRootCAs(pool)
+	a.OIDC.SetHTTP(a.Trust.HTTPClient(trust.PurposeOIDC, 20*time.Second))
 	return nil
 }
 
@@ -187,6 +188,11 @@ type oidcTestAnswer struct {
 	oidc.CheckResult
 	TLS        bool        `json:"tls"`
 	VerifiedBy *verifiedBy `json:"verified_by,omitempty"`
+	// task 232: the certificate the server presented (for Pin the current certificate after a
+	// successful test) and the pin that matched, when the purpose has pins
+	Leaf    *trust.Info `json:"leaf,omitempty"`
+	Pinned  *trust.Pin  `json:"pinned,omitempty"`
+	PinOnly bool        `json:"pin_only,omitempty"`
 }
 
 func (a *AuthAPI) oidcTest(w http.ResponseWriter, r *http.Request) {
@@ -197,19 +203,34 @@ func (a *AuthAPI) oidcTest(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	pool, err := a.Trust.Pool(trust.PurposeOIDC)
+	ver, err := a.Trust.VerifierFor(trust.PurposeOIDC)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, apiError{Error: "trust", Message: err.Error()})
 		return
 	}
-	res := oidc.Check(r.Context(), issuer, pool)
+	// quiet: a test by hand, maybe against an issuer not saved yet, records no failure
+	res := oidc.Check(r.Context(), issuer, a.Trust.QuietClient(trust.PurposeOIDC, 20*time.Second))
 	out := oidcTestAnswer{CheckResult: res, TLS: strings.HasPrefix(issuer, "https://")}
+	now := time.Now()
+	if len(res.Peer) > 0 {
+		leaf := trust.Describe(res.Peer[0], now)
+		out.Leaf = &leaf
+		if len(res.Verified) == 0 && ver.Pinned() {
+			// the pinned path verifies by itself and leaves Go's VerifiedChains empty
+			if o, err := ver.Verify(hostOf(issuer), res.Peer); err == nil {
+				out.Pinned, out.PinOnly = o.Pin, o.PinOnly
+				if !o.PinOnly {
+					res.Verified = o.Chain
+				}
+			}
+		}
+	}
 	if n := len(res.Verified); n > 0 {
 		root := res.Verified[n-1]
 		ours, _ := a.Trust.Certificates(trust.PurposeOIDC)
 		// a pinned server certificate is its own one-element chain
 		added := slices.ContainsFunc(ours, func(c *x509.Certificate) bool { return c.Equal(root) })
-		out.VerifiedBy = &verifiedBy{Info: trust.Describe(root, time.Now()), TrustedHere: added}
+		out.VerifiedBy = &verifiedBy{Info: trust.Describe(root, now), TrustedHere: added}
 	}
 	writeJSON(w, 200, out)
 }
@@ -229,7 +250,7 @@ func (a *AuthAPI) oidcPeerChain(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	chain, err := oidc.PeerChain(r.Context(), issuer)
+	_, chain, err := trust.PeerChain(r.Context(), issuer)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, apiError{Error: "unreachable", Message: err.Error()})
 		return

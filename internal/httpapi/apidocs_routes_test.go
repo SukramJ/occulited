@@ -104,6 +104,7 @@ var routeDocs = map[string]apidoc.Doc{
 	"POST /api/system/v1/addonctl":                                       {Summary: "An addon's own start/stop/restart request, with its addon token"},
 	"GET /api/system/v1/addons":                                          {Summary: "The installed addons"},
 	"GET /api/system/v1/addons/install":                                  {Summary: "The state of the running addon install job"},
+	"GET /api/system/v1/addons/stream":                                   {Summary: "The addons' revision as server-sent events"},
 	"POST /api/system/v1/addons/install":                                 {Summary: "Installs an addon archive (multipart `file` or a raw .tar.gz)", ReqContent: "application/octet-stream"},
 	"POST /api/system/v1/addons/install/local":                           {Summary: "The firmware's install_addon hands an archive over, with its install token", ReqContent: "application/octet-stream"},
 	"GET /api/system/v1/addons/updates":                                  {Summary: "The addon update check's results"},
@@ -118,6 +119,7 @@ var routeDocs = map[string]apidoc.Doc{
 	"POST /api/system/v1/addons/{id}/reinstall-dismiss":                  {Summary: "Hides an addon's reinstall hint at its current version"},
 	"POST /api/system/v1/addons/{id}/uninstall":                          {Summary: "Uninstalls an addon"},
 	"GET /api/system/v1/addons/{id}/update":                              {Summary: "Checks one addon for an update"},
+	"GET /api/system/v1/addons/{id}/images/{kind}":                       {Summary: "An installed addon's icon or logo (kind: icon, icon-dark, logo, logo-dark), from its tree, as an image with a Content-Security-Policy", RespContent: "image/*"},
 	"GET /api/system/v1/backup":                                          {Summary: "Creates a backup and downloads it (.sbk, or .sbk.age when encrypted)", RespContent: "application/octet-stream"},
 	"GET /api/system/v1/backup/encryption":                               {Summary: "The backup encryption's switch and recovery key"},
 	"PUT /api/system/v1/backup/encryption":                               {Summary: "Switches the backup encryption"},
@@ -150,6 +152,7 @@ var routeDocs = map[string]apidoc.Doc{
 	"POST /api/system/v1/catalog/refresh":                                {Summary: "Checks the addon catalogue now"},
 	"PUT /api/system/v1/catalog/settings":                                {Summary: "Switches the catalogue's daily check"},
 	"POST /api/system/v1/catalog/{id}/install":                           {Summary: "Installs or updates an addon from the catalogue"},
+	"GET /api/system/v1/catalog/{id}/images/{kind}":                      {Summary: "A catalogue entry's icon or logo (kind: icon, icon-dark, logo, logo-dark), fetched with its manifest, as an image with a Content-Security-Policy", RespContent: "image/*"},
 	"GET /api/system/v1/certificate":                                     {Summary: "The certificate: settings, the current one and the issued one"},
 	"GET /api/system/v1/certificate/csr":                                 {Summary: "Downloads the pending certificate signing request", RespContent: "application/pkcs10"},
 	"POST /api/system/v1/certificate/inspect":                            {Summary: "Parses a certificate or chain for the preview"},
@@ -341,6 +344,9 @@ var routeDocs = map[string]apidoc.Doc{
 	"POST /api/system/v1/trust/{store}/{id}/copy":                        {Summary: "Copies a certificate into another trust store"},
 	"GET /api/system/v1/trust/{store}/{id}/pem":                          {Summary: "Downloads a certificate as PEM"},
 	"POST /api/system/v1/trust/{store}/{id}/restore":                     {Summary: "Trusts a distrusted certificate again"},
+	"POST /api/system/v1/trust/{store}/pins":                             {Summary: "Pins a public key for the OIDC or ACME connections"},
+	"POST /api/system/v1/trust/{store}/pins/peer":                        {Summary: "Reads the chain the purpose's server presents, to pin one of its keys"},
+	"DELETE /api/system/v1/trust/{store}/pins/{id}":                      {Summary: "Removes a pin"},
 	"GET /api/system/v1/usb":                                             {Summary: "The USB devices"},
 	"GET /api/system/v1/usb/storage":                                     {Summary: "The USB sticks mounted, for a directory backup target"},
 	"GET /api/system/v1/warnings":                                        {Summary: "The Status page's warnings"},
@@ -357,9 +363,9 @@ var routeDocs = map[string]apidoc.Doc{
 // extraDocs are routes outside the table: registered in main, open.
 var extraDocs = map[string]apidoc.Doc{
 	"GET /api/system/v1/health": {Summary: "Health check: the versions and the uptime, while occulited serves", RespSchema: apidoc.Schema{
-		"type": "object", "required": []string{"ok", "version", "release", "base", "uptime_s", "meta"},
+		"type": "object", "required": []string{"ok", "version", "commit", "release", "base", "uptime_s", "meta"},
 		"properties": apidoc.Schema{
-			"ok": apidoc.Schema{"type": "boolean"}, "version": apidoc.Schema{"type": "string"}, "release": apidoc.Schema{"type": "string"},
+			"ok": apidoc.Schema{"type": "boolean"}, "version": apidoc.Schema{"type": "string"}, "commit": apidoc.Schema{"type": "string"}, "release": apidoc.Schema{"type": "string"},
 			"base": apidoc.Schema{"type": "string"}, "uptime_s": apidoc.Schema{"type": "integer"},
 			"meta": apidoc.Schema{"type": "object", "required": []string{"revision", "recovered"}, "properties": apidoc.Schema{
 				"revision": apidoc.Schema{"type": "integer"}, "recovered": apidoc.Schema{"type": "boolean"}}},

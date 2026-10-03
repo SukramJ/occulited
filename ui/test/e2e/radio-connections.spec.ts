@@ -27,7 +27,7 @@ test('the panels say what each process runs on, and the choices are the detected
     await expect(mmd.locator('.conn-mmd-uses')).toHaveText('connected to /dev/raw-uart · HMIP-RFUSB 0000000A02');
     // HmIP is never offered as off (D-98); one entry per path; BidCos-RF has "none"
     await expect(page.getByLabel('Module for HmIP-RF').locator('option')).toHaveText(['Automatic', 'HMIP-RFUSB · 0000000A02 · /dev/raw-uart', 'HMIP-RFUSB · 0000000A02 · /dev/mmd_hmip through multimacd on /dev/raw-uart']);
-    await expect(page.getByLabel('Module for BidCos-RF').locator('option')).toHaveText(['Automatic', 'HMIP-RFUSB · 0000000A02 · /dev/mmd_bidcos through multimacd on /dev/raw-uart', 'No local radio (LAN gateways only)']);
+    await expect(page.getByLabel('Module for BidCos-RF').locator('option')).toHaveText(['Automatic', 'HMIP-RFUSB · 0000000A02 · /dev/mmd_bidcos through multimacd on /dev/raw-uart', 'No local radio (LAN gateway only)']);
     await expect(page.getByRole('button', {name: 'Apply changes'})).toBeDisabled();
     // the module card names its USB device
     await expect(page.locator('.ol-module-usb').first()).toHaveText('1b1f:c020 · eQ-3 HmIP-RFUSB (Silicon Labs)');
@@ -82,7 +82,7 @@ test('HmIP-direct: the dialog lists the paired BidCos devices, then the change r
     const dialog = page.getByRole('dialog');
     await expect(dialog).toContainText('Change the radio connections?');
     await expect(dialog).toContainText('HmIP-RF: Automatic');
-    await expect(dialog).toContainText('BidCos-RF: No local radio (LAN gateways only)');
+    await expect(dialog).toContainText('BidCos-RF: No local radio (LAN gateway only)');
     await expect(dialog).toContainText('hmipserver: HMIP-RFUSB 0000000A02, directly on /dev/raw-uart');
     await expect(dialog).toContainText('multimacd: not needed');
     await expect(dialog).toContainText('multimacd, rfd, hmipserver are stopped and started again');
@@ -318,6 +318,81 @@ test('refused, and the record names the local swap onto the previous module as t
     await expect(notice).toContainText('Die Auswege: das Modul, auf dem das Netz jetzt liegt');
 });
 
+// openccu-lite B-289: the record as B-289 writes a local swap - a failed move with the module's
+// firmware; the diagnosis names it and the update, and the Status page's warning for a network
+// stranded on such a module
+test('refused after a local swap: the firmware, the update, the failed entry; the hmip-local-swap warning', async ({page, baseURL}) => {
+    const id = `conn-${Math.random().toString(36).slice(2)}`;
+    await page.context().addCookies([{name: 'stub-conn', value: id, url: baseURL!}, {name: 'stub-conn-fatal', value: 'refused', url: baseURL!}, {name: 'stub-conn-exchanges', value: 'swap-failed', url: baseURL!}]);
+    await page.goto('/radio');
+    const notice = page.locator('[data-notice="hmip-fatal"]');
+    await expect(notice.locator('[data-local-swap="3014F711A0001F0000000A04"]')).toContainText('its application firmware 1.8.3 is below 2.8.0 and could not take the network key');
+    await expect(notice.locator('[data-local-swap-update]')).toContainText('Update the firmware of module 3014F711A0001F0000000A04 (Updates page, radio firmware)');
+    await notice.locator('[data-exchanges] summary').click();
+    await expect(notice.locator('[data-exchanges] li').nth(1)).toContainText("firmware 1.8.3 · local swap without the key server (the module's firmware cannot take the network key) · failed: the module's firmware cannot take the network key");
+    await page.route('**/api/system/v1/warnings', async (route) => {
+        if (route.request().method() !== 'GET') return route.fallback();
+        const response = await route.fetch();
+        const j = await response.json();
+        j.warnings = [...(j.warnings ?? []), {id: 'hmip-local-swap', variant: '3014F711A000040000000A02@2026-10-01T16:36:00Z', severity: 'error', href: '/system/interfaces#connections', since: new Date().toISOString(), params: {module: '3014F711A000040000000A02', from: '3014F711A0001F0000000A04', version: '1.8.3', minimum: '2.8.0'}}];
+        await route.fulfill({response, json: j});
+    });
+    await page.goto('/');
+    const warning = page.locator('[data-notice="hmip-local-swap"]');
+    await expect(warning).toContainText("HmIP-RF runs on module 3014F711A000040000000A02 without the HmIP network's key");
+    await expect(warning).toContainText('its application firmware 1.8.3 is below 2.8.0');
+    await expect(warning).toContainText('The way out is the saved files of 3014F711A0001F0000000A04');
+    await page.addInitScript(() => localStorage.setItem('ol.language', 'de'));
+    await page.goto('/radio');
+    await expect(notice.locator('[data-local-swap="3014F711A0001F0000000A04"]')).toContainText('Anwendungsfirmware 1.8.3 liegt unter 2.8.0');
+});
+
+// openccu-lite B-289 (maintainer, 2026-10-02): the preview refuses moving HmIP-RF onto a module whose
+// firmware is below 2.8.0 while local key mode is off - the dialog names the firmware and the
+// update and offers nothing to confirm; a PUT the daemon refuses anyway gets the same words
+test('a move onto a module below firmware 2.8.0 is refused in the preview, and the 422 is said the same', async ({page, baseURL}) => {
+    await ownConn(page, baseURL);
+    const refused = {module: '3014F711A000040000000A02', version: '1.8.3', minimum: '2.8.0'};
+    let previewRefuses = true;
+    const puts: string[] = [];
+    await page.route('**/api/system/v1/radio/connections/preview', async (route) => {
+        const response = await route.fetch();
+        const j = await response.json();
+        j.hmip_move = {from: '3014F711A0001F0000000A04', to: refused.module, local_key: false, snapshot: true, to_version: '1.8.3', ...(previewRefuses ? {refused} : {})};
+        await route.fulfill({response, json: j});
+    });
+    await page.route('**/api/system/v1/radio/connections', async (route) => {
+        if (route.request().method() !== 'PUT') return route.fallback();
+        puts.push(route.request().postData() ?? '');
+        await route.fulfill({status: 422, json: {error: 'hmip-firmware', message: 'module refused', detail: refused}});
+    });
+    await page.goto('/radio');
+    await page.locator('[data-process="rfd"]').getByRole('button', {name: 'Use the LAN gateways only'}).click();
+    await page.getByRole('button', {name: 'Apply changes'}).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toContainText('HmIP-RF cannot move to this module');
+    await expect(dialog).toContainText('HmIP-RF cannot move to module 3014F711A000040000000A02: it runs application firmware 1.8.3, and below 2.8.0');
+    await expect(dialog).toContainText("Update the module's firmware first (Updates page, radio firmware). With local key mode on, the move needs no key server and is allowed.");
+    await expect(dialog.getByRole('button', {name: 'Cancel'})).toHaveCount(0);
+    await expect(dialog.getByRole('button', {name: 'Change'})).toHaveCount(0);
+    await dialog.getByRole('button', {name: 'Close', exact: true}).and(dialog.locator('.hmm-button')).click();
+    await expect(dialog).toBeHidden();
+    expect(puts).toHaveLength(0);
+    // the daemon's own refusal, should the preview have let it through
+    previewRefuses = false;
+    await page.getByRole('button', {name: 'Apply changes'}).click();
+    await dialog.getByRole('button', {name: 'Change'}).click();
+    await expect(dialog).toContainText('HmIP-RF cannot move to module 3014F711A000040000000A02: it runs application firmware 1.8.3');
+    expect(puts).toHaveLength(1);
+    // German
+    await page.addInitScript(() => localStorage.setItem('ol.language', 'de'));
+    previewRefuses = true;
+    await page.goto('/radio');
+    await page.locator('[data-process="rfd"]').getByRole('button', {name: 'Nur die LAN-Gateways nutzen'}).click();
+    await page.getByRole('button', {name: 'Änderungen übernehmen'}).click();
+    await expect(dialog).toContainText('HmIP-RF kann nicht auf das Modul 3014F711A000040000000A02 wechseln: Es hat die Anwendungsfirmware 1.8.3');
+});
+
 // openccu-lite B-272: an HB-RF-ETH added under LAN devices while both processes are pinned to the
 // stick. The module cards come from /var/hm_mode (a module in a role), so the board's module had no
 // card and, until the radio hotplug had attached it, no dropdown entry either - and nothing said a
@@ -346,7 +421,7 @@ test("an HB-RF-ETH's module in no role has a card, is offered in both dropdowns 
     await expect(page.locator('[data-notice="hb-rf-eth-pending"]')).toHaveCount(0);
     // both dropdowns offer it beside the stick: HmIP through multimacd only (an HM-MOD-RPI-PCB)
     await expect(page.getByLabel('Module for HmIP-RF').locator('option')).toHaveText(['Automatic', 'HMIP-RFUSB · 0000000A02 · /dev/raw-uart', 'HMIP-RFUSB · 0000000A02 · /dev/mmd_hmip through multimacd on /dev/raw-uart', 'HM-MOD-RPI-PCB · MEQ9000005 · /dev/mmd_hmip through multimacd on /dev/raw-uart1']);
-    await expect(page.getByLabel('Module for BidCos-RF').locator('option')).toHaveText(['Automatic', 'HMIP-RFUSB · 0000000A02 · /dev/mmd_bidcos through multimacd on /dev/raw-uart', 'HM-MOD-RPI-PCB · MEQ9000005 · /dev/mmd_bidcos through multimacd on /dev/raw-uart1', 'No local radio (LAN gateways only)']);
+    await expect(page.getByLabel('Module for BidCos-RF').locator('option')).toHaveText(['Automatic', 'HMIP-RFUSB · 0000000A02 · /dev/mmd_bidcos through multimacd on /dev/raw-uart', 'HM-MOD-RPI-PCB · MEQ9000005 · /dev/mmd_bidcos through multimacd on /dev/raw-uart1', 'No local radio (LAN gateway only)']);
     // choosing it: the preview names it, the change carries it
     await page.getByLabel('Module for HmIP-RF').selectOption('MEQ9000005|multimacd');
     await page.getByLabel('Module for BidCos-RF').selectOption('MEQ9000005');
@@ -356,10 +431,13 @@ test("an HB-RF-ETH's module in no role has a card, is offered in both dropdowns 
     await expect(dialog).toContainText('BidCos-RF: HM-MOD-RPI-PCB · MEQ9000005 · /dev/raw-uart1');
     await expect(dialog).toContainText('hmipserver: HM-MOD-RPI-PCB MEQ9000005, shared with BidCos-RF through multimacd');
     await expect(dialog).toContainText('multimacd: runs on /dev/raw-uart1');
+    await expect(dialog).toContainText("HmIP-RF moves from module 3014F711A000040000000A02 to module 3014F711A061A70000000A05. That is an adapter exchange through eQ-3's key server");
     await dialog.getByRole('button', {name: 'Change'}).click();
     await expect(dialog).toBeHidden();
     expect(puts).toHaveLength(1);
-    expect(JSON.parse(puts[0]!)).toEqual({hmip: 'MEQ9000005', hmip_path: 'multimacd', bidcos: 'MEQ9000005', confirm: false});
+    // task 317 (D-120): HmIP-RF moves to the board's module - its identity files are rewritten, so
+    // the change is confirmed (the daemon refuses it otherwise)
+    expect(JSON.parse(puts[0]!)).toEqual({hmip: 'MEQ9000005', hmip_path: 'multimacd', bidcos: 'MEQ9000005', confirm: true});
     await expect(page.locator('[data-process="hmipserver"] .conn-now')).toHaveText('Chosen: HM-MOD-RPI-PCB MEQ9000005, shared with BidCos-RF through multimacd');
     await expect(page.locator('[data-process="multimacd"] .conn-mmd-uses')).toHaveText('connected to /dev/raw-uart1 · HM-MOD-RPI-PCB MEQ9000005');
     // in both roles now: no "not used" card for it
@@ -422,9 +500,181 @@ test('an HmIP-only stick: HmIP directly, not for BidCos-RF, the reason and the f
     await expect(hmip.locator('.conn-now')).toHaveText('Automatic: HMIP-RFUSB 0000000A02, directly on /dev/raw-uart');
     await expect(hmip).toContainText('No routing through HmIP-HAPs or DRAPs');
     await expect(page.getByLabel('Module for HmIP-RF').locator('option')).toHaveText(['Automatic', 'HMIP-RFUSB · 0000000A02 · /dev/raw-uart · HmIP only - firmware 1.8.3']);
-    await expect(page.getByLabel('Module for BidCos-RF').locator('option')).toHaveText(['Automatic', 'No local radio (LAN gateways only)']);
+    await expect(page.getByLabel('Module for BidCos-RF').locator('option')).toHaveText(['Automatic', 'No local radio (LAN gateway only)']);
     const why = hmip.locator('[data-hmip-only="0000000A02"]');
     await expect(why).toContainText('HMIP-RFUSB 0000000A02 runs the HmIP-only firmware 1.8.3: BidCos-RF cannot use it, and hmipserver reaches it directly only, not through multimacd. The DualCoPro firmware adds BidCos-RF; the radio firmware section flashes it.');
     await expect(why.getByRole('link', {name: 'Radio firmware'})).toHaveAttribute('href', '/system/updates#radio-firmware');
     await expect(page.locator('[data-process="multimacd"]')).toContainText('not needed');
+});
+
+// openccu-lite B-300: a Pi with no module on its GPIO header (rpi4-2: USB sticks only) showed a card
+// for the header's UART, "The module did not answer the detection (no answer within 6s)". An empty
+// header has no card; a module there that answered wrongly keeps one; a hint only while a chosen
+// module is missing.
+async function withHeader(page: Page, baseURL: string | undefined, mode: string, missing?: string) {
+    await ownConn(page, baseURL);
+    await page.context().addCookies([{name: 'stub-conn-header', value: mode, url: baseURL!}, ...(missing ? [{name: 'stub-conn-missing', value: missing, url: baseURL!}] : [])]);
+}
+
+test('an empty GPIO header has no module card and no hint', async ({page, baseURL}) => {
+    await withHeader(page, baseURL, 'empty');
+    await page.goto('/radio');
+    await expect(page.locator('#ol-module-BidCos-RF [data-module-device]')).toHaveText('HMIP-RFUSB');
+    await expect(page.locator('[data-module-unused]')).toHaveCount(0);
+    await expect(page.locator('[data-notice="header-silent"]')).toHaveCount(0);
+    await expect(page.getByText('did not answer the detection')).toHaveCount(0);
+    // the dropdowns offer the stick alone
+    await expect(page.getByLabel('Module for HmIP-RF').locator('option')).toHaveCount(3);
+});
+
+test('a module on the GPIO header that answered wrongly keeps its card', async ({page, baseURL}) => {
+    await withHeader(page, baseURL, 'wrong');
+    await page.goto('/radio');
+    const card = page.locator('[data-module-unused="/dev/raw-uart2"]');
+    await expect(card.locator('.ol-card-title')).toHaveText('GPIO@fe201000.serial');
+    await expect(card.locator('[data-module-unused-why]')).toHaveText('The module did not answer the detection (unexpected answer: 0x00).');
+    await expect(page.locator('[data-notice="header-silent"]')).toHaveCount(0);
+});
+
+test('a silent GPIO header while the chosen module is missing: the hint, no card (en and de)', async ({page, baseURL}) => {
+    await withHeader(page, baseURL, 'empty', '0000000A03');
+    await page.goto('/radio');
+    const hint = page.locator('[data-notice="header-silent"]');
+    await expect(hint).toHaveText('No radio module answered on the GPIO header (/dev/raw-uart2: no answer within 6s), and the module chosen under Connections (0000000A03) is missing. Check that the module is seated, or choose another one.');
+    await expect(page.locator('[data-module-unused]')).toHaveCount(0);
+    await page.addInitScript(() => localStorage.setItem('ol.language', 'de'));
+    await page.reload();
+    await expect(hint).toHaveText('An der GPIO-Leiste hat kein Funkmodul geantwortet (/dev/raw-uart2: no answer within 6s), und das unter Verbindungen gewählte Modul (0000000A03) fehlt. Prüfen Sie, ob das Modul richtig sitzt, oder wählen Sie ein anderes.');
+    await expect(page.locator('[data-module-unused]')).toHaveCount(0);
+});
+
+// openccu-lite task 318 (D-120): on Automatic HmIP-RF is kept on the module that holds the HmIP
+// network. That module missing, the stick beside it is offered but not taken: the notice says so,
+// the Status page carries the error, and the move is the confirmed change.
+test('the module holding the HmIP network is missing: kept, said, and moved only on the word (en and de)', async ({page, baseURL}) => {
+    const held = '3014F711A0001F0000000A03';
+    await ownConn(page, baseURL);
+    await page.context().addCookies([{name: 'stub-conn-held', value: held, url: baseURL!}]);
+    const puts: string[] = [];
+    page.on('request', (r) => {
+        if (r.method() === 'PUT' && r.url().endsWith('/radio/connections')) puts.push(r.postData() ?? '');
+    });
+    await page.goto('/radio');
+    const notice = page.locator('[data-notice="missing-hmip"]');
+    await expect(notice).toHaveAttribute('data-pinned', '');
+    await expect(notice).toHaveText(`The module that holds the HmIP network (${held}) is missing. hmipserver runs its virtual devices only until it is back; no other module is taken without asking, since the network would have to move. To move HmIP-RF to another module, choose it for HmIP-RF below and confirm the change.`);
+    await expect(page.locator('[data-process="hmipserver"] .conn-now')).toHaveText(`Automatic: the module ${held}, which holds the HmIP network, is missing: virtual devices only`);
+    // the stick is offered; choosing it is a move from the held module, confirmed in red
+    await page.getByLabel('Module for HmIP-RF').selectOption('0000000A02|multimacd');
+    await page.getByRole('button', {name: 'Apply changes'}).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toContainText(`HmIP-RF moves from module ${held} to module 3014F711A000040000000A02.`);
+    await expect(dialog.getByRole('button', {name: 'Change'})).toHaveClass(/danger/);
+    await dialog.getByRole('button', {name: 'Cancel'}).click();
+    expect(puts).toEqual([]);
+    // the Status page: the error, the card
+    await page.goto('/');
+    await expect(page.locator('[data-warnings] [data-notice="hmip-module-missing"]')).toContainText(`HmIP-RF is down: the radio module ${held}, which holds the HmIP network, is missing or did not answer.`);
+    await expect(page.locator('[data-component="HmIP-RF-module"] .ol-card-body')).toHaveText('module missing');
+    await page.addInitScript(() => localStorage.setItem('ol.language', 'de'));
+    await page.goto('/radio');
+    await expect(notice).toContainText(`Das Modul, das das HmIP-Netzwerk hält (${held}), fehlt.`);
+    await page.goto('/');
+    await expect(page.locator('[data-component="HmIP-RF-module"] .ol-card-body')).toHaveText('Modul fehlt');
+});
+
+// openccu-lite B-302 step 1: the way back to the previous module says the expected wait of the
+// HmIP security counter before the user confirms, and after the way back a notice says until when
+async function withMoveBack(page: Page, baseURL: string | undefined, cookies: Record<string, string>) {
+    await ownConn(page, baseURL);
+    await page.context().addCookies(Object.entries(cookies).map(([name, value]) => ({name, value, url: baseURL!})));
+}
+
+test('the way back with a counter gap: the dialog says the wait before the confirmation', async ({page, baseURL}) => {
+    await withMoveBack(page, baseURL, {'stub-conn-moveback': 'gap'});
+    const posts: string[] = [];
+    page.on('request', (r) => {
+        if (r.method() === 'POST' && r.url().endsWith('/module-move/back')) posts.push(r.postData() ?? '');
+    });
+    await page.goto('/radio');
+    await page.locator('[data-notice="hmip-move-back"]').getByRole('button', {name: 'Back to the previous module…'}).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toContainText('The HmIP security counter of module 3014F5AC9400040000000A09 is 245,247 behind what module 3014F711A000040000000A02 has sent.');
+    await expect(dialog).toContainText("devices that heard module 3014F711A000040000000A02 may ignore this system's commands (switching, configuration) until about");
+    await expect(dialog).toContainText('about 20 hours; their own reports still arrive.');
+    await expect(dialog).toContainText('Nothing is written to the identity files for this. To avoid the wait, stay on the module in use.');
+    await dialog.getByRole('button', {name: 'Cancel'}).click();
+    expect(posts).toEqual([]);
+    // confirmed: the request as before
+    await page.locator('[data-notice="hmip-move-back"]').getByRole('button', {name: 'Back to the previous module…'}).click();
+    await dialog.getByLabel('Host name').fill('openccu');
+    await dialog.getByRole('button', {name: 'Back to the previous module'}).click();
+    await expect.poll(() => posts.map((p) => JSON.parse(p))).toEqual([{confirm: true, hostname: 'openccu'}]);
+});
+
+test('the way back without a gap says nothing of the counter', async ({page, baseURL}) => {
+    await withMoveBack(page, baseURL, {'stub-conn-moveback': 'plain'});
+    await page.goto('/radio');
+    await page.locator('[data-notice="hmip-move-back"]').getByRole('button', {name: 'Back to the previous module…'}).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toContainText('HmIP-RF goes back to module 3014F5AC9400040000000A09.');
+    await expect(dialog).not.toContainText('security counter');
+});
+
+test('after the way back: the notice until the counter has caught up (en and de)', async ({page, baseURL}) => {
+    await withMoveBack(page, baseURL, {'stub-conn-gap': '1'});
+    await page.goto('/radio');
+    const notice = page.locator('[data-notice="hmip-counter-gap"]');
+    await expect(notice).toContainText('HmIP-RF is back on module 3014F5AC9400040000000A09, whose HmIP security counter is 245,247 behind what module 3014F711A000040000000A02 sent.');
+    await expect(notice).toContainText('the counter catches up at the first start of HmIP-RF after that time, and this notice goes then.');
+    await page.addInitScript(() => localStorage.setItem('ol.language', 'de'));
+    await page.reload();
+    await expect(notice).toContainText('HmIP-RF ist wieder auf Modul 3014F5AC9400040000000A09, dessen HmIP-Sicherheitszähler');
+});
+
+// openccu-lite B-301 (maintainer: the refusal stays): a snapshot of the module in use from before
+// local key mode was switched off blocks the move's own snapshot - the page says so before the
+// attempt and offers its discard in red; after the discard the change is asked as usual
+test('a kept local-key snapshot blocks the move: said, discarded on the word, then the move (en and de)', async ({page, baseURL}) => {
+    await ownConn(page, baseURL);
+    await page.context().addCookies([{name: 'stub-conn-board', value: 'detected', url: baseURL!}, {name: 'stub-conn-lksnap', value: '1', url: baseURL!}]);
+    const calls: string[] = [];
+    page.on('request', (r) => {
+        if (r.method() === 'PUT' && r.url().endsWith('/radio/connections')) calls.push('PUT ' + (r.postData() ?? ''));
+        if (r.method() === 'DELETE' && r.url().includes('/local-key/snapshots/')) calls.push('DELETE ' + decodeURIComponent(r.url().split('/').pop()!));
+    });
+    await page.goto('/radio');
+    await page.getByLabel('Module for HmIP-RF').selectOption('MEQ9000005|multimacd');
+    await page.getByLabel('Module for BidCos-RF').selectOption('MEQ9000005');
+    await page.getByRole('button', {name: 'Apply changes'}).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toContainText('A kept snapshot blocks the move');
+    await expect(dialog).toContainText('A snapshot of module 3014F711A000040000000A02 from before local key mode was switched off is still kept.');
+    await expect(dialog).toContainText('The identity in use is not touched.');
+    await expect(dialog.getByRole('button', {name: 'Discard the snapshot'})).toHaveClass(/danger/);
+    await expect(dialog.getByRole('button', {name: 'Cancel'})).toBeFocused();
+    await dialog.getByRole('button', {name: 'Cancel'}).click();
+    expect(calls).toEqual([]);
+    // discarded: the change is asked as usual, and goes out confirmed
+    await page.getByRole('button', {name: 'Apply changes'}).click();
+    await dialog.getByRole('button', {name: 'Discard the snapshot'}).click();
+    await expect(dialog).toContainText('HmIP-RF moves from module 3014F711A000040000000A02 to module 3014F711A061A70000000A05.');
+    await dialog.getByRole('button', {name: 'Change'}).click();
+    await expect(dialog).toBeHidden();
+    expect(calls.map((c) => c.split(' ')[0])).toEqual(['DELETE', 'PUT']);
+    expect(calls[0]).toBe('DELETE 3014F711A000040000000A02');
+    expect(JSON.parse(calls[1]!.slice(4))).toMatchObject({hmip: 'MEQ9000005', confirm: true});
+});
+
+test('the blocked move in German', async ({page, baseURL}) => {
+    await ownConn(page, baseURL);
+    await page.context().addCookies([{name: 'stub-conn-board', value: 'detected', url: baseURL!}, {name: 'stub-conn-lksnap', value: '1', url: baseURL!}]);
+    await page.addInitScript(() => localStorage.setItem('ol.language', 'de'));
+    await page.goto('/radio');
+    await page.getByLabel('Modul für HmIP-RF').selectOption('MEQ9000005|multimacd');
+    await page.getByLabel('Modul für BidCos-RF').selectOption('MEQ9000005');
+    await page.getByRole('button', {name: 'Änderungen übernehmen'}).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toContainText('Eine aufbewahrte Sicherung verhindert den Wechsel');
+    await expect(dialog.getByRole('button', {name: 'Sicherung verwerfen'})).toBeVisible();
 });

@@ -2391,6 +2391,15 @@
           "id": {
             "type": "string"
           },
+          "images": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": [
+              "object",
+              "null"
+            ]
+          },
           "latest": {
             "anyOf": [
               {
@@ -4087,6 +4096,9 @@
           "id": {
             "type": "string"
           },
+          "level": {
+            "type": "integer"
+          },
           "since": {
             "format": "date-time",
             "type": "string"
@@ -4112,6 +4124,9 @@
               "null"
             ]
           },
+          "max_brightness": {
+            "type": "integer"
+          },
           "patterns": {
             "items": {
               "type": "string"
@@ -4134,11 +4149,20 @@
           "addon_units": {
             "type": "boolean"
           },
+          "brightness": {
+            "type": "integer"
+          },
           "enabled": {
             "type": "boolean"
           },
           "external": {
             "$ref": "#/components/schemas/LedExternal"
+          },
+          "fade": {
+            "type": [
+              "boolean",
+              "null"
+            ]
           },
           "locate": {
             "$ref": "#/components/schemas/LedLocate"
@@ -4151,6 +4175,9 @@
           },
           "pwr_error_light": {
             "type": "boolean"
+          },
+          "radio": {
+            "$ref": "#/components/schemas/LedRadioConfig"
           },
           "states": {
             "items": {
@@ -4173,12 +4200,14 @@
         },
         "required": [
           "addon_units",
+          "brightness",
           "enabled",
           "external",
           "locate",
           "night",
           "normal",
           "pwr_error_light",
+          "radio",
           "states",
           "warnings_off"
         ],
@@ -4189,11 +4218,20 @@
           "addon_units": {
             "type": "boolean"
           },
+          "brightness": {
+            "type": "integer"
+          },
           "enabled": {
             "type": "boolean"
           },
           "external": {
             "$ref": "#/components/schemas/LedExternalInput"
+          },
+          "fade": {
+            "type": [
+              "boolean",
+              "null"
+            ]
           },
           "locate": {
             "$ref": "#/components/schemas/LedLocateInput"
@@ -4206,6 +4244,9 @@
           },
           "pwr_error_light": {
             "type": "boolean"
+          },
+          "radio": {
+            "$ref": "#/components/schemas/LedRadioConfigInput"
           },
           "states": {
             "items": {
@@ -4282,6 +4323,9 @@
               "array",
               "null"
             ]
+          },
+          "max_brightness": {
+            "type": "integer"
           },
           "patterns": {
             "items": {
@@ -4378,6 +4422,9 @@
       },
       "LedNight": {
         "properties": {
+          "dim": {
+            "type": "integer"
+          },
           "enabled": {
             "type": "boolean"
           },
@@ -4392,6 +4439,7 @@
           }
         },
         "required": [
+          "dim",
           "enabled",
           "from",
           "show",
@@ -4401,6 +4449,9 @@
       },
       "LedNightInput": {
         "properties": {
+          "dim": {
+            "type": "integer"
+          },
           "enabled": {
             "type": "boolean"
           },
@@ -4603,6 +4654,108 @@
         ],
         "type": "object"
       },
+      "LedRadioConfig": {
+        "properties": {
+          "carrier_sense": {
+            "items": {
+              "$ref": "#/components/schemas/LedRadioLevel"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "duty_cycle": {
+            "items": {
+              "$ref": "#/components/schemas/LedRadioLevel"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "carrier_sense",
+          "duty_cycle"
+        ],
+        "type": "object"
+      },
+      "LedRadioConfigInput": {
+        "properties": {
+          "carrier_sense": {
+            "items": {
+              "$ref": "#/components/schemas/LedRadioLevelInput"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "duty_cycle": {
+            "items": {
+              "$ref": "#/components/schemas/LedRadioLevelInput"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "LedRadioLevel": {
+        "properties": {
+          "color": {
+            "type": "string"
+          },
+          "color2": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "over_normal": {
+            "type": "boolean"
+          },
+          "pattern": {
+            "type": "string"
+          },
+          "threshold": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "color",
+          "enabled",
+          "pattern",
+          "threshold"
+        ],
+        "type": "object"
+      },
+      "LedRadioLevelInput": {
+        "properties": {
+          "color": {
+            "type": "string"
+          },
+          "color2": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "over_normal": {
+            "type": "boolean"
+          },
+          "pattern": {
+            "type": "string"
+          },
+          "threshold": {
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
       "LedShownView": {
         "properties": {
           "background": {
@@ -4617,8 +4770,14 @@
           "detail": {
             "type": "string"
           },
+          "dim": {
+            "type": "integer"
+          },
           "id": {
             "type": "string"
+          },
+          "level": {
+            "type": "integer"
           },
           "over_normal": {
             "type": "boolean"
@@ -5703,8 +5862,31 @@
           "issuer_mismatch": {
             "type": "boolean"
           },
+          "leaf": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TrustInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "ok": {
             "type": "boolean"
+          },
+          "pin_only": {
+            "type": "boolean"
+          },
+          "pinned": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TrustPin"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "tls": {
             "type": "boolean"
@@ -5956,6 +6138,41 @@
         ],
         "type": "object"
       },
+      "PeerAnswer": {
+        "properties": {
+          "chain": {
+            "items": {
+              "$ref": "#/components/schemas/PeerEntry"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "error": {
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          },
+          "pin_only": {
+            "type": "boolean"
+          },
+          "url": {
+            "type": "string"
+          },
+          "verified": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "chain",
+          "host",
+          "url",
+          "verified"
+        ],
+        "type": "object"
+      },
       "PeerCert": {
         "properties": {
           "added": {
@@ -6027,6 +6244,9 @@
           "source": {
             "type": "string"
           },
+          "spki": {
+            "type": "string"
+          },
           "subject": {
             "type": "string"
           },
@@ -6044,8 +6264,106 @@
           "pem",
           "purposes",
           "self_signed",
+          "spki",
           "subject",
           "trusted"
+        ],
+        "type": "object"
+      },
+      "PeerEntry": {
+        "properties": {
+          "added": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "added_by": {
+            "type": "string"
+          },
+          "ca": {
+            "type": "boolean"
+          },
+          "distrusted": {
+            "type": "boolean"
+          },
+          "expired": {
+            "type": "boolean"
+          },
+          "expires_soon": {
+            "type": "boolean"
+          },
+          "fingerprint": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "issuer": {
+            "type": "string"
+          },
+          "names": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "not_after": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "not_before": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "origin": {
+            "type": "string"
+          },
+          "pem": {
+            "type": "string"
+          },
+          "pinned": {
+            "type": "boolean"
+          },
+          "purposes": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "removable": {
+            "type": "boolean"
+          },
+          "self_signed": {
+            "type": "boolean"
+          },
+          "source": {
+            "type": "string"
+          },
+          "spki": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ca",
+          "fingerprint",
+          "id",
+          "issuer",
+          "not_after",
+          "not_before",
+          "pem",
+          "pinned",
+          "purposes",
+          "self_signed",
+          "spki",
+          "subject"
         ],
         "type": "object"
       },
@@ -6059,6 +6377,33 @@
           },
           "response": {}
         },
+        "type": "object"
+      },
+      "PinsAnswer": {
+        "properties": {
+          "pin": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TrustPin"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pins": {
+            "items": {
+              "$ref": "#/components/schemas/TrustPin"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "pins"
+        ],
         "type": "object"
       },
       "ProtocolAuthenticatorSelection": {
@@ -6313,6 +6658,9 @@
             "type": "string"
           },
           "to": {
+            "type": "string"
+          },
+          "to_version": {
             "type": "string"
           }
         },
@@ -6717,6 +7065,9 @@
             "type": "string"
           },
           "sgtin": {
+            "type": "string"
+          },
+          "version": {
             "type": "string"
           }
         },
@@ -7596,6 +7947,15 @@
           "id": {
             "type": "string"
           },
+          "images": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": [
+              "object",
+              "null"
+            ]
+          },
           "info": {
             "type": "string"
           },
@@ -8081,6 +8441,34 @@
         ],
         "type": "object"
       },
+      "SystemConnHeaderSilent": {
+        "properties": {
+          "detail": {
+            "type": "string"
+          },
+          "missing": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "node": {
+            "type": "string"
+          },
+          "probe": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "missing",
+          "node",
+          "probe"
+        ],
+        "type": "object"
+      },
       "SystemConnModule": {
         "properties": {
           "detail": {
@@ -8139,6 +8527,9 @@
           },
           "hmip_advanced": {
             "type": "boolean"
+          },
+          "hmip_pin": {
+            "type": "string"
           },
           "hmipserver": {
             "$ref": "#/components/schemas/SystemConnDaemon"
@@ -8955,6 +9346,64 @@
         ],
         "type": "object"
       },
+      "SystemHmIPCounterGap": {
+        "properties": {
+          "at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "back": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "behind": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "from": {
+            "type": "string"
+          },
+          "highest": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "to": {
+            "type": "string"
+          },
+          "until": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "back",
+          "behind",
+          "from",
+          "highest",
+          "to",
+          "until"
+        ],
+        "type": "object"
+      },
+      "SystemHmIPFirmwareRefused": {
+        "properties": {
+          "minimum": {
+            "type": "string"
+          },
+          "module": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "minimum",
+          "module",
+          "version"
+        ],
+        "type": "object"
+      },
       "SystemHmIPMoveBack": {
         "properties": {
           "at": {
@@ -8963,6 +9412,16 @@
           },
           "choices": {
             "$ref": "#/components/schemas/RadioChoices"
+          },
+          "counter_gap": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SystemHmIPCounterGap"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "devices": {
             "type": "integer"
@@ -8987,10 +9446,26 @@
           "local_key": {
             "type": "boolean"
           },
+          "refused": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SystemHmIPFirmwareRefused"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "snapshot": {
             "type": "boolean"
           },
+          "snapshot_blocked": {
+            "type": "boolean"
+          },
           "to": {
+            "type": "string"
+          },
+          "to_version": {
             "type": "string"
           }
         },
@@ -10488,6 +10963,26 @@
               }
             ]
           },
+          "header_silent": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SystemConnHeaderSilent"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "hmip_counter_gap": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SystemHmIPCounterGap"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "hmip_fatal": {
             "anyOf": [
               {
@@ -10849,6 +11344,15 @@
           "id": {
             "type": "string"
           },
+          "images": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": [
+              "object",
+              "null"
+            ]
+          },
           "kind": {
             "type": "string"
           },
@@ -11106,6 +11610,9 @@
           },
           "meta_recovered": {
             "type": "boolean"
+          },
+          "occulited_commit": {
+            "type": "string"
           },
           "occulited_version": {
             "type": "string"
@@ -12088,6 +12595,9 @@
           "source": {
             "type": "string"
           },
+          "spki": {
+            "type": "string"
+          },
           "subject": {
             "type": "string"
           }
@@ -12101,6 +12611,7 @@
           "not_before",
           "purposes",
           "self_signed",
+          "spki",
           "subject"
         ],
         "type": "object"
@@ -12131,6 +12642,80 @@
         ],
         "type": "object"
       },
+      "TrustPin": {
+        "properties": {
+          "added": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "added_by": {
+            "type": "string"
+          },
+          "fingerprint": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "not_after": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "purpose": {
+            "type": "string"
+          },
+          "spki": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "added",
+          "id",
+          "mode",
+          "purpose",
+          "spki"
+        ],
+        "type": "object"
+      },
+      "TrustPinFailure": {
+        "properties": {
+          "at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "chain": {
+            "items": {
+              "$ref": "#/components/schemas/TrustInfo"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "error": {
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          },
+          "purpose": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "at",
+          "error",
+          "host",
+          "purpose"
+        ],
+        "type": "object"
+      },
       "TrustStoreView": {
         "properties": {
           "certificates": {
@@ -12147,6 +12732,15 @@
           },
           "id": {
             "type": "string"
+          },
+          "pins": {
+            "items": {
+              "$ref": "#/components/schemas/TrustPin"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           }
         },
         "required": [
@@ -12167,6 +12761,15 @@
               "null"
             ]
           },
+          "pin_failures": {
+            "items": {
+              "$ref": "#/components/schemas/TrustPinFailure"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "stores": {
             "items": {
               "$ref": "#/components/schemas/TrustStoreView"
@@ -12179,6 +12782,7 @@
         },
         "required": [
           "pending",
+          "pin_failures",
           "stores"
         ],
         "type": "object"
@@ -12354,6 +12958,9 @@
           "source": {
             "type": "string"
           },
+          "spki": {
+            "type": "string"
+          },
           "subject": {
             "type": "string"
           },
@@ -12370,6 +12977,7 @@
           "not_before",
           "purposes",
           "self_signed",
+          "spki",
           "subject",
           "trusted_here"
         ],
@@ -17974,6 +18582,9 @@
                         "null"
                       ]
                     },
+                    "commit": {
+                      "type": "string"
+                    },
                     "format": {
                       "type": "integer"
                     },
@@ -19065,6 +19676,51 @@
         "x-occulite-scopes": []
       }
     },
+    "/api/system/v1/addons/stream": {
+      "get": {
+        "operationId": "getSystemAddonsStream",
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "A stream of server-sent events; the messages are in the AsyncAPI document."
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "bearer": [
+              "system:read"
+            ]
+          },
+          {
+            "cookie": [
+              "system:read"
+            ]
+          }
+        ],
+        "summary": "The addons' revision as server-sent events",
+        "tags": [
+          "system/addons"
+        ],
+        "x-occulite-scopes": [
+          "system:read"
+        ]
+      }
+    },
     "/api/system/v1/addons/updates": {
       "get": {
         "operationId": "getSystemAddonsUpdates",
@@ -19369,6 +20025,70 @@
         ],
         "x-occulite-scopes": [
           "addons:write"
+        ]
+      }
+    },
+    "/api/system/v1/addons/{id}/images/{kind}": {
+      "get": {
+        "operationId": "getSystemAddonsByIdImagesByKind",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/*": {
+                "schema": {
+                  "contentMediaType": "image/*",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "bearer": [
+              "system:read"
+            ]
+          },
+          {
+            "cookie": [
+              "system:read"
+            ]
+          }
+        ],
+        "summary": "An installed addon's icon or logo (kind: icon, icon-dark, logo, logo-dark), from its tree, as an image with a Content-Security-Policy",
+        "tags": [
+          "system/addons"
+        ],
+        "x-occulite-scopes": [
+          "system:read"
         ]
       }
     },
@@ -22035,6 +22755,70 @@
         ],
         "x-occulite-scopes": [
           "addons:write"
+        ]
+      }
+    },
+    "/api/system/v1/catalog/{id}/images/{kind}": {
+      "get": {
+        "operationId": "getSystemCatalogByIdImagesByKind",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/*": {
+                "schema": {
+                  "contentMediaType": "image/*",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "bearer": [
+              "system:read"
+            ]
+          },
+          {
+            "cookie": [
+              "system:read"
+            ]
+          }
+        ],
+        "summary": "A catalogue entry's icon or logo (kind: icon, icon-dark, logo, logo-dark), fetched with its manifest, as an image with a Content-Security-Policy",
+        "tags": [
+          "system/catalog"
+        ],
+        "x-occulite-scopes": [
+          "system:read"
         ]
       }
     },
@@ -24743,6 +25527,9 @@
                     "base": {
                       "type": "string"
                     },
+                    "commit": {
+                      "type": "string"
+                    },
                     "meta": {
                       "properties": {
                         "recovered": {
@@ -24774,6 +25561,7 @@
                   "required": [
                     "ok",
                     "version",
+                    "commit",
                     "release",
                     "base",
                     "uptime_s",
@@ -28781,6 +29569,24 @@
     "/api/system/v1/radio/hmip/local-key": {
       "delete": {
         "operationId": "deleteSystemRadioHmipLocalKey",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "confirm": {
+                    "type": "boolean"
+                  },
+                  "hostname": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "202": {
             "content": {
@@ -28883,6 +29689,12 @@
               "schema": {
                 "properties": {
                   "backbone_key": {
+                    "type": "string"
+                  },
+                  "confirm": {
+                    "type": "boolean"
+                  },
+                  "hostname": {
                     "type": "string"
                   },
                   "mode": {
@@ -30496,6 +31308,9 @@
             "application/json": {
               "schema": {
                 "properties": {
+                  "confirm": {
+                    "type": "boolean"
+                  },
                   "file": {
                     "type": "string"
                   },
@@ -30784,6 +31599,16 @@
                     "backup": {
                       "$ref": "#/components/schemas/SystemRadioBackup"
                     },
+                    "hmip_firmware": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/components/schemas/SystemHmIPFirmwareRefused"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "module_changed": {
                       "type": "boolean"
                     },
@@ -30845,6 +31670,9 @@
             "application/json": {
               "schema": {
                 "properties": {
+                  "confirm": {
+                    "type": "boolean"
+                  },
                   "file": {
                     "type": "string"
                   },
@@ -34273,6 +35101,218 @@
           }
         ],
         "summary": "Adds a certificate to a trust store",
+        "tags": [
+          "system/trust"
+        ],
+        "x-occulite-scopes": [
+          "system:write"
+        ]
+      }
+    },
+    "/api/system/v1/trust/{store}/pins": {
+      "post": {
+        "operationId": "postSystemTrustByStorePins",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "store",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "mode": {
+                    "type": "string"
+                  },
+                  "pem": {
+                    "type": "string"
+                  },
+                  "replace": {
+                    "type": "boolean"
+                  },
+                  "spki": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PinsAnswer"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "bearer": [
+              "system:write"
+            ]
+          },
+          {
+            "cookie": [
+              "system:write"
+            ]
+          }
+        ],
+        "summary": "Pins a public key for the OIDC or ACME connections",
+        "tags": [
+          "system/trust"
+        ],
+        "x-occulite-scopes": [
+          "system:write"
+        ]
+      }
+    },
+    "/api/system/v1/trust/{store}/pins/peer": {
+      "post": {
+        "operationId": "postSystemTrustByStorePinsPeer",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "store",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "url": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PeerAnswer"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "bearer": [
+              "system:write"
+            ]
+          },
+          {
+            "cookie": [
+              "system:write"
+            ]
+          }
+        ],
+        "summary": "Reads the chain the purpose's server presents, to pin one of its keys",
+        "tags": [
+          "system/trust"
+        ],
+        "x-occulite-scopes": [
+          "system:write"
+        ]
+      }
+    },
+    "/api/system/v1/trust/{store}/pins/{id}": {
+      "delete": {
+        "operationId": "deleteSystemTrustByStorePinsById",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "store",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PinsAnswer"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "bearer": [
+              "system:write"
+            ]
+          },
+          {
+            "cookie": [
+              "system:write"
+            ]
+          }
+        ],
+        "summary": "Removes a pin",
         "tags": [
           "system/trust"
         ],

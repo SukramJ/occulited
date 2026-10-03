@@ -235,6 +235,7 @@ func (a *SystemAPI) runInstall(job *InstallJob, staged *system.StagedArchive) {
 	// nothing left behind (Gitea run 618 caught the deferred remove after finish)
 	staged.Remove()
 	a.installs.finish(job, res, err)
+	a.addonsChanged() // openccu-lite B-297
 	if err != nil {
 		slog.Warn("addons: an uploaded archive was not installed", "job", job.ID, "err", err)
 		return

@@ -20,6 +20,14 @@
     import {startingSeconds} from '../lib/starting';
     import BootTimeline from '../lib/BootTimeline.svelte';
     import {holdColumns} from '../lib/holdcolumns';
+    import {imageCandidates} from '../lib/addonimages';
+    import AddonImage from '../lib/AddonImage.svelte';
+    import {isDark} from '../lib/theme.svelte';
+    import {warnEdge} from '../lib/systemmenu.svelte';
+    import {worse, type Edge} from '../lib/warnedge';
+    // occulited task 12: a unit the Status page's crash-loop warning names, and an addon its
+    // ownership warning names, carry the warning's edge on their row
+    const rowEdge = (id: string): Edge => worse(warnEdge(['crash-loop'], id), id.startsWith('addon-') ? warnEdge(['addon-ownership'], id.slice('addon-'.length)) : '');
 
     type Action = 'start' | 'stop' | 'restart' | 'enable' | 'disable';
     let services = $state<Service[] | null>(null);
@@ -592,10 +600,12 @@
         <tbody>
             {#each list as s (s.id)}
                 <!-- task 139: the Addons page's Service link lands on the unit's row (#service-<id>) -->
-                <tr data-service={s.id} id={`service-${s.id}`} class:sv-anchored={anchored === `service-${s.id}`}>
+                {@const edge = rowEdge(s.id)}
+                <tr data-service={s.id} id={`service-${s.id}`} class="ol-warn-edge {edge}" class:sv-anchored={anchored === `service-${s.id}`} data-warn-for="crash-loop addon-ownership" data-warn-edge={edge || undefined}>
                     <!-- B-65: the dot is red for a failure only (lib/units.ts). B-75: kind and description
                          stand in a line under the id where their columns are hidden -->
-                    <td class="sv-name"><span class="sv-id"><span class={`ol-dot ${statusDot(s)}`}></span>{s.id}</span><span class="sv-sub ol-muted">{subline(s)}</span></td>
+                    <!-- openccu-lite task 100: an addon unit's row carries the addon's icon, where its manifest declares one -->
+                    <td class="sv-name"><span class="sv-id"><span class={`ol-dot ${statusDot(s)}`}></span>{#if s.images}<AddonImage candidates={imageCandidates(s.images, 'icon', isDark())} size={16} class="sv-icon" />{/if}{s.id}</span><span class="sv-sub ol-muted">{subline(s)}</span></td>
                     <td class="ol-muted sv-kind">{t(s.category ?? (s.kind === 'addon' ? 'addon' : 'system'))}</td>
                     <td class="ol-muted sv-desc">{s.description ?? ''}</td>
                     <td class="hmm-mono ol-pid" data-label="PID">{#if s.pid}{@render pidCell(s)}{/if}</td>
@@ -927,6 +937,7 @@
        before its +N, and the cells' side padding narrows. A description and a timer's unit names
        wrap anywhere, so no word in them can widen a table: an own timer's name is up to 32
        characters without a hyphen. */
+    .sv-id :global(img.sv-icon) { width: 16px; height: 16px; object-fit: contain; vertical-align: -3px; margin-right: 6px; }
     .sv-sub, .sv-runs-sub, .sv-stack { display: none; }
     td.sv-desc, table.ol-timers td:first-child, td.sv-runs { overflow-wrap: anywhere; }
     @media (max-width: 1350px) {

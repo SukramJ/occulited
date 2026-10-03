@@ -60,6 +60,11 @@ type warningsState struct {
 	fwLoaded    map[string]bool
 	fwAvailable bool
 
+	// the radio load's warning (openccu-lite task 316): which kinds are above their threshold now,
+	// kept for the hysteresis
+	loadMu sync.Mutex
+	loadOn map[string]bool
+
 	// test seams: crypttool's answer, the radio sampler's last poll and the INPUT policies; nil =
 	// the real ones
 	keyState func(ctx context.Context) (set, known bool, err error)
@@ -226,11 +231,15 @@ func (a *SystemAPI) warningSources() []warnings.Source {
 		{IDs: []string{"addon-ownership"}, Lists: true, Eval: a.ownershipWarning},
 		{IDs: []string{"security-key"}, Eval: a.securityKeyWarning},
 		{IDs: []string{"hmip-adapter"}, Eval: a.hmipAdapterWarning},
+		{IDs: []string{"hmip-local-swap"}, Eval: a.hmipLocalSwapWarning},
+		{IDs: []string{"hmip-module-missing"}, Eval: a.hmipModuleMissingWarning},
 		// openccu-lite task 299: the HmIP security counter near, past or below its wrap, and the
 		// hold of hmipserver for a trusted clock
 		{IDs: []string{"hmip-security-counter", "hmip-clock-hold"}, Eval: a.hmipCounterWarnings},
 		{IDs: []string{"devices-import"}, Eval: a.devicesImportWarning},
 		{IDs: []string{"hb-rf-eth"}, Eval: a.hbRFETHWarning},
+		// openccu-lite task 316: the radio's load high, separate from the LED's levels
+		{IDs: []string{"radio-load"}, Eval: a.radioLoadWarning},
 		{IDs: []string{"radio-module-unusable", "radio-firmware"}, Eval: a.radioFirmwareWarnings},
 		{IDs: []string{"addon-update"}, Eval: a.addonUpdateWarning},
 		{IDs: []string{"rpc-stalled"}, Eval: a.rpcStallWarnings},
@@ -239,6 +248,7 @@ func (a *SystemAPI) warningSources() []warnings.Source {
 		{IDs: []string{"app-public"}, Eval: a.appPublicWarning},
 		// openccu-lite task 231: a server presents a CA occulited's store lacks (strict)
 		{IDs: []string{"trust-ca"}, Lists: true, Eval: a.trustWarnings},
+		{IDs: []string{"trust-pin"}, Eval: a.pinWarnings}, // openccu-lite task 232
 		{IDs: []string{"hmip-port-open"}, Eval: a.hmipPortWarning},
 		{IDs: []string{"hmip-local-key"}, Eval: a.hmipLocalKeyWarning},
 		{IDs: []string{"hmip-key-declined"}, Eval: a.hmipKeyDeclinedWarning},
@@ -375,7 +385,7 @@ func (a *SystemAPI) addonWarnings(ctx context.Context) ([]warnings.Warning, bool
 	}
 	var out []warnings.Warning
 	if len(payload) > 0 {
-		out = append(out, addonListWarning("addon-payload", warnings.SeverityWarning, "/addons#reinstall", payload))
+		out = append(out, addonListWarning("addon-payload", warnings.SeverityError, "/addons#reinstall", payload))
 	}
 	if len(ended) > 0 {
 		out = append(out, addonListWarning("addon-ended", warnings.SeverityWarning, "/addons", ended))
@@ -823,6 +833,48 @@ func (a *SystemAPI) hmipAdapterWarning(context.Context) ([]warnings.Warning, boo
 	return []warnings.Warning{{ID: "hmip-adapter", Variant: f.Code, Severity: warnings.SeverityError, Href: "/system/interfaces#connections", Params: map[string]any{"adapter": f.Adapter, "line": f.Line, "cause": f.Cause}}}, true
 }
 
+// hmip-local-swap (openccu-lite B-289): the newest adapter exchange in the local record moved the
+// HmIP network onto the module HmIP-RF runs on now without the network key - its application
+// firmware is below 2.8.0, so hmipserver swapped the access point locally and called it a success.
+// hmipserver runs, but the module cannot send, and the key server refuses every exchange away from
+// it; nothing else on the system says so. The variant is the module and the time of the move, so
+// a later one is new. Gone once HmIP-RF runs on another module (the way back from a kept identity).
+func (a *SystemAPI) hmipLocalSwapWarning(context.Context) ([]warnings.Warning, bool) {
+	list := radio.ReadHmIPExchanges(string(a.Root))
+	if len(list) == 0 || list[0].Outcome != radio.ExchangeRejected || list[0].Cause != radio.ExchangeCauseAdapterVersion {
+		return nil, true
+	}
+	x := list[0]
+	p, ok := a.RadioConnections.BootPlan()
+	if !ok {
+		var err error
+		p, err = radio.LoadPlan(string(a.Root))
+		ok = err == nil
+	}
+	if !ok || p.HmIP == nil || !strings.EqualFold(p.HmIP.SGTIN, x.To) {
+		return nil, true
+	}
+	return []warnings.Warning{{ID: "hmip-local-swap", Variant: x.To + "@" + x.At.UTC().Format(time.RFC3339), Severity: warnings.SeverityError, Href: "/system/interfaces#connections",
+		Params: map[string]any{"module": x.To, "from": x.From, "version": x.ToVersion, "minimum": radio.MinHmIPKeyExchangeVersion}}}, true
+}
+
+// hmip-module-missing (openccu-lite task 318, D-120): on Automatic, HmIP-RF is kept on the module
+// that holds the HmIP network, and that module is missing or did not answer at the last run - the
+// HmIP devices are out of reach, hmipserver runs its VirtualDevices half alone, and no other module
+// is taken unasked. The variant is the module. Gone once it is back, or HmIP-RF is moved by choice.
+func (a *SystemAPI) hmipModuleMissingWarning(context.Context) ([]warnings.Warning, bool) {
+	p, ok := a.RadioConnections.BootPlan()
+	if !ok {
+		var err error
+		p, err = radio.LoadPlan(string(a.Root))
+		ok = err == nil
+	}
+	if !ok || p.HmIPPin == "" || !strings.EqualFold(p.MissingHmIP, p.HmIPPin) {
+		return nil, true
+	}
+	return []warnings.Warning{{ID: "hmip-module-missing", Variant: p.HmIPPin, Severity: warnings.SeverityError, Href: "/system/interfaces#connections", Params: map[string]any{"module": p.HmIPPin}}}, true
+}
+
 // devices-import (openccu-lite task 275): a device import brought an HmIP identity of another
 // module, and hmipserver has not taken it over onto this one yet - it is starting, the key server
 // was not reached, or the devices have not answered. The variant is the state, so a state that
@@ -1179,4 +1231,73 @@ func (a *SystemAPI) hmipCounterWarnings(context.Context) ([]warnings.Warning, bo
 		out = append(out, warnings.Warning{ID: "hmip-security-counter", Variant: ap.Verdict, Severity: sev, Href: "/system/interfaces#connections", Params: params})
 	}
 	return out, true
+}
+
+// The radio load's thresholds (openccu-lite task 316, the maintainer): a duty cycle above 50 %, a
+// carrier sense above 10 %; a kind clears once its value is radioLoadHysteresis points below.
+const (
+	radioLoadDutyCycle    = 50
+	radioLoadCarrierSense = 10
+	radioLoadHysteresis   = 5
+)
+
+// radioLoadWarning: the radio sampler's last poll puts an interface's duty cycle above 50 % or
+// its carrier sense above 10 % (openccu-lite task 316). The variant names the kinds (`dc`, `cs`,
+// `dc,cs`), the params the highest values and the interface of the highest one. With hysteresis,
+// so a value around the threshold does not raise and clear the warning every sample.
+func (a *SystemAPI) radioLoadWarning(_ context.Context) ([]warnings.Warning, bool) {
+	polled, list := a.rfdPoll()
+	if polled.IsZero() {
+		return nil, false
+	}
+	dc, cs, dcIface, csIface, hasCS := -1, -1, "", "", false
+	for _, ri := range list {
+		if ri.DutyCycle > dc {
+			dc, dcIface = ri.DutyCycle, ri.Interface
+		}
+		if ri.CarrierSense != nil && (!hasCS || *ri.CarrierSense > cs) {
+			cs, csIface, hasCS = *ri.CarrierSense, ri.Interface, true
+		}
+	}
+	a.warn.loadMu.Lock()
+	defer a.warn.loadMu.Unlock()
+	if a.warn.loadOn == nil {
+		a.warn.loadOn = map[string]bool{}
+	}
+	above := func(kind string, value, threshold int) bool {
+		on := a.warn.loadOn[kind]
+		switch {
+		case value > threshold:
+			on = true
+		case value <= threshold-radioLoadHysteresis:
+			on = false
+		}
+		a.warn.loadOn[kind] = on
+		return on
+	}
+	var kinds []string
+	params := map[string]any{}
+	iface := ""
+	if dc >= 0 && above("dc", dc, radioLoadDutyCycle) {
+		kinds = append(kinds, "dc")
+		params["duty_cycle"], iface = dc, dcIface
+	}
+	if hasCS && above("cs", cs, radioLoadCarrierSense) {
+		kinds = append(kinds, "cs")
+		params["carrier_sense"] = cs
+		if iface == "" {
+			iface = csIface
+		}
+	}
+	if len(kinds) == 0 {
+		return nil, true
+	}
+	params["interface"] = iface
+	if dc >= 0 {
+		params["duty_cycle"] = dc
+	}
+	if hasCS {
+		params["carrier_sense"] = cs
+	}
+	return []warnings.Warning{{ID: "radio-load", Variant: strings.Join(kinds, ","), Severity: warnings.SeverityWarning, Href: "/radio", Params: params}}, true
 }

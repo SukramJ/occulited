@@ -5,6 +5,7 @@
     import {prefs, setAppPreferences, type StartPage} from '../lib/prefs.svelte';
     import {auth} from '../lib/auth.svelte';
     import PublicControl from '../lib/PublicControl.svelte';
+    import WarnEdge from '../lib/WarnEdge.svelte';
 
     // task 29: the Settings page behind the gear - the two switches that used to sit in the top
     // bar. How the box authenticates was here too until 2026-09-10; it is on System → Users now,
@@ -63,5 +64,5 @@
 <!-- openccu-lite task 223 (the maintainer, 2026-09-24): Control without a login, from the Remote
      access page - beside the Control choices, for an administrator, who alone may switch it -->
 {#if auth.role === 'admin'}
-    <PublicControl />
+    <WarnEdge ids={['app-public']}><PublicControl /></WarnEdge>
 {/if}

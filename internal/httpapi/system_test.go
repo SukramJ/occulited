@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -381,6 +382,7 @@ func TestSystemUpdateRoutes(t *testing.T) {
 // (nil: they end at once).
 type fakeCatalog struct {
 	view      *catalog.View
+	images    map[string][]byte // "<id>/<kind>" → the image (openccu-lite task 100)
 	refreshes int
 	release   chan struct{}
 
@@ -411,6 +413,14 @@ func (f *fakeCatalog) Start(_ context.Context, id string) (<-chan error, error) 
 		done <- nil
 	}()
 	return done, nil
+}
+func (f *fakeCatalog) Image(id, kind string) ([]byte, error) {
+	if f.images != nil {
+		if b, ok := f.images[id+"/"+kind]; ok {
+			return b, nil
+		}
+	}
+	return nil, fs.ErrNotExist
 }
 func (f *fakeCatalog) Progress() *catalog.Progress {
 	f.mu.Lock()
