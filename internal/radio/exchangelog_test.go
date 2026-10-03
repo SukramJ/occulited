@@ -151,7 +151,8 @@ func TestAdapterExchangeRecord(t *testing.T) {
 	if err := Ready(ctx, d, "hmipserver", 4245, logf); err != nil {
 		t.Fatal(err)
 	}
-	if got = ReadHmIPExchanges(root); len(got) != 4 || got[0].Outcome != ExchangeAccepted || got[0].Mode != ExchangeModeLocalSwap || got[0].Line != "Adapter exchange successful." {
+	// B-289: with local key mode off that is a failed move - the module holds no network key
+	if got = ReadHmIPExchanges(root); len(got) != 4 || got[0].Outcome != ExchangeRejected || got[0].Cause != ExchangeCauseAdapterVersion || got[0].Mode != ExchangeModeLocalSwap || got[0].Line != "Could not exchange network key, adapter version not supported" || got[0].ToVersion != p.HmIP.Version {
 		t.Fatalf("local swap: %+v", got[0])
 	}
 
@@ -221,6 +222,19 @@ func TestExchangeLine(t *testing.T) {
 	} {
 		if got := exchangeLine(in); got != want {
 			t.Errorf("%q: %q, want %q", in, got, want)
+		}
+	}
+}
+
+// openccu-lite B-289: an HmIP module below application firmware 2.8.0 cannot take the network key
+// in an adapter exchange through the key server; an unknown version is not judged.
+func TestHmIPKeyExchangeUnsupported(t *testing.T) {
+	for v, want := range map[string]bool{
+		"1.8.3": true, "2.7.99": true, "2.8": false, "2.8.0": false, "2.8.6": false, "4.4.22": false, "10.0.0": false,
+		"": false, "n/a": false, "2": false, "2.x.0": false, "1.2.3.4": false, " 1.8.3 ": true, "-1.0": false,
+	} {
+		if got := HmIPKeyExchangeUnsupported(v); got != want {
+			t.Errorf("%q: %v, want %v", v, got, want)
 		}
 	}
 }

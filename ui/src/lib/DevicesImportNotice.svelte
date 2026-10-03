@@ -91,6 +91,9 @@
                 <p data-hmip="pending">{t('HmIP: the identity of module {from} is not on {to} yet. hmipserver attempts the move (the adapter exchange) at its start: offline in local key mode, else through eQ-3\'s key server, which needs an internet connection. If it does not come through, try again - that restarts HmIP-RF.', {from: r.hmip.from_sgtin ?? '', to: o.hmip.module_now ?? r.hmip.to_sgtin ?? ''})}</p>
                 {#if view.switching}<p class="ol-muted" data-switching={view.switching}><span class="ol-dot starting"></span>{t('HmIP-RF is restarting and tries the move to this module again.')}</p>{/if}
                 {#if view.error}<p class="ol-warn">{view.error}</p>{/if}
+            {:else if hmipState === 'rejected' && o.hmip.cause === 'adapter-version'}
+                <!-- openccu-lite B-289: hmipserver moved the identity without the network key - a failed move -->
+                <p class="ol-warn" data-hmip="rejected" data-cause="adapter-version">{t('HmIP: the identity of module {from} was moved onto {to} without the network key - the module\'s firmware is below 2.8.0 and cannot take it. HmIP devices do not answer on this module, and eQ-3\'s key server refuses every move away from it. The way out is the saved files of module {from} (a kept identity or a backup); update the firmware of {to} (Updates page, radio firmware) before the network moves onto it again.', {from: r.hmip.from_sgtin ?? '', to: o.hmip.module_now ?? r.hmip.to_sgtin ?? ''})}</p>
             {:else if hmipState === 'rejected'}
                 <p data-hmip="rejected">{t('HmIP: eQ-3\'s key server rejected the move of the identity of module {from} onto this module - see the notice above for the way out.', {from: r.hmip.from_sgtin ?? ''})}</p>
             {:else if hmipState === 'no-module'}

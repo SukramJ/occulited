@@ -43,6 +43,23 @@ test('done: hmipserver took the identity over, the battery hint, no retry, dismi
     await expect(page.locator('[data-notice="devices-import"]')).toHaveCount(0);
 });
 
+// openccu-lite B-289: hmipserver moved the identity onto a module whose firmware cannot take the
+// network key - a failed move, said with the way out and the firmware update; no retry
+test('a local swap without the network key is a failed move; German', async ({page}) => {
+    await open(page, 'local-swap');
+    const n = page.locator('[data-notice="devices-import"]');
+    await expect(n).toHaveAttribute('data-state', 'rejected');
+    const p = n.locator('[data-hmip="rejected"][data-cause="adapter-version"]');
+    await expect(p).toContainText('was moved onto 3014F711A0001F0000000A03 without the network key');
+    await expect(p).toContainText('below 2.8.0');
+    await expect(p).toContainText('update the firmware of 3014F711A0001F0000000A03 (Updates page, radio firmware)');
+    await expect(n.locator('[data-hmip-line]')).toHaveText('Could not exchange network key, adapter version not supported');
+    await expect(n.locator('[data-action="import-retry"]')).toHaveCount(0);
+    await page.addInitScript(() => localStorage.setItem('ol.language', 'de'));
+    await page.reload();
+    await expect(p).toContainText('ohne den Netzwerkschlüssel auf 3014F711A0001F0000000A03 übertragen');
+});
+
 test('no module, and a user sees the notice without its buttons; German', async ({page}) => {
     await open(page, 'no-module', false);
     const n = page.locator('[data-notice="devices-import"]');

@@ -57,46 +57,80 @@
         return s.source === 'generated' ? t('generated on this system') : s.source === 'entered' ? t('entered') : t('set by hand in hmip_user.conf');
     }
 
+    // openccu-lite task 317 (D-120): both directions change the module's identity files - the warning
+    // says what and the risk, the danger dialog asks; a generated key (every device taught in again)
+    // and the way back (the snapshot's files replace the ones in use) take the host name typed
+    async function typedHost(title: string, message: string[], confirm: string): Promise<string | null> {
+        const host = st?.hostname ?? '';
+        const typed = await askText({
+            title,
+            message: [...message, t('Type the host name {host} to confirm.', {host})].join('\n\n'),
+            input: {label: t('Host name'), placeholder: host},
+            confirm,
+            danger: true,
+            focusCancel: true,
+        });
+        if (typed === null) return null;
+        if (!sameHostname(typed, host)) {
+            err = t('The name typed is not this system\'s host name; nothing happened.');
+            return null;
+        }
+        return typed;
+    }
+
     async function switchOn() {
         if (!how) return;
-        const body = how === 'known' ? {mode: 'known', network_key: nwk, backbone_key: bbk} : {mode: 'generate'};
         const message = [
             how === 'known'
                 ? t('The key is written into the radio module. If it is the network\'s real key, every HmIP device keeps working and nothing has to be paired again. If it is not, the devices go silent - the system watches them for ten minutes after the switch and says so, with the way back beside it.')
                 : t('A new random key is written into the radio module. Every HmIP device has to be taught in again once, one by one, with its button (physical access to each). Until then it does not answer.'),
             t('HmIP-RF restarts at once; the radio is unavailable for about a minute.'),
             t('The module\'s identity from before is kept aside, so "Back to eQ-3\'s key server" can undo this later.'),
-        ].join('\n\n');
+        ];
+        const done = async () => {
+            nwk = bbk = '';
+            how = '';
+            open = false;
+            await load();
+        };
+        if (how === 'generate') {
+            const typed = await typedHost(t('Switch to local key mode?'), message, t('Switch'));
+            if (typed === null) return;
+            try {
+                st = await api.put<Status>('/api/system/v1/radio/hmip/local-key', {mode: 'generate', confirm: true, hostname: typed});
+                err = '';
+                await done();
+            } catch (e) {
+                err = (e as Error).message;
+            }
+            return;
+        }
         await ask({
             title: t('Switch to local key mode?'),
-            message,
+            message: message.join('\n\n'),
             confirm: t('Switch'),
-            danger: how === 'generate',
-            focusCancel: how === 'generate',
+            danger: true,
             run: async () => {
-                st = await api.put<Status>('/api/system/v1/radio/hmip/local-key', body);
-                nwk = bbk = '';
-                how = '';
-                open = false;
-                await load();
+                st = await api.put<Status>('/api/system/v1/radio/hmip/local-key', {mode: 'known', network_key: nwk, backbone_key: bbk, confirm: true});
+                await done();
             },
         });
     }
 
     async function switchOff() {
-        await ask({
-            title: t("Back to eQ-3's key server?"),
-            message: [
-                t('The radio module\'s identity from before the switch is put back, and the key lines leave hmip_user.conf. HmIP-RF restarts at once.'),
-                t('Devices that were taught in under the local key since then have to be taught in again.'),
-            ].join('\n\n'),
-            confirm: t('Go back'),
-            danger: true,
-            run: async () => {
-                st = await api.del<Status>('/api/system/v1/radio/hmip/local-key');
-                await load();
-            },
-        });
+        const typed = await typedHost(t("Back to eQ-3's key server?"), [
+            t('The radio module\'s identity from before the switch is put back, and the key lines leave hmip_user.conf. HmIP-RF restarts at once.'),
+            t('Devices that were taught in under the local key since then have to be taught in again.'),
+            t('The identity files in use now are copied aside on the system first.'),
+        ], t('Go back'));
+        if (typed === null) return;
+        try {
+            st = await api.del<Status>('/api/system/v1/radio/hmip/local-key', {confirm: true, hostname: typed});
+            err = '';
+            await load();
+        } catch (e) {
+            err = (e as Error).message;
+        }
     }
 
     async function override(on: boolean) {

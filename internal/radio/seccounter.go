@@ -134,6 +134,15 @@ func (ap AccessPoint) Calc(now time.Time) (calc uint64, behind bool) {
 	return uint64(now.Sub(ap.FirstConnect)/counterTick) + 1 + ap.Offset, false
 }
 
+// ReachesAt is the first time the computed value is at least v (openccu-lite B-302): the first
+// connection when the offset alone reaches it.
+func (ap AccessPoint) ReachesAt(v uint64) time.Time {
+	if ap.Offset+1 >= v {
+		return ap.FirstConnect
+	}
+	return ap.FirstConnect.Add(time.Duration(v-ap.Offset-1) * counterTick)
+}
+
 // WrapsAt is the time the computed value reaches 2^32 with this offset.
 func (ap AccessPoint) WrapsAt() time.Time {
 	if ap.Offset+1 >= CounterWrap {

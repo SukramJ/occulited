@@ -244,6 +244,10 @@ func TestLocalKeyGenerateOverrideRevert(t *testing.T) {
 	if b := readFile(filepath.Join(root, "etc/config/crRFD/data/"+lkSGTIN+".ap")); b != "EQ3-.ap" {
 		t.Errorf("the .ap is %q", b)
 	}
+	// task 317 (D-120): the files the revert replaced were copied first
+	if got := identityBackup(t, k, "local-key-off"); got[lkSGTIN+".ap"] != "CHANGED" || len(got) != 3 {
+		t.Errorf("the copy before the revert: %v", got)
+	}
 	if fi, _ := os.Stat(filepath.Join(root, "etc/config/crRFD/hmip_user.conf")); fi.Mode().Perm() != 0o644 {
 		t.Errorf("mode %v after the revert", fi.Mode().Perm())
 	}
@@ -575,5 +579,67 @@ func TestLocalKeyThroughClosedDataDir(t *testing.T) {
 	}
 	if fi, err := os.Stat(filepath.Join(data, lkSGTIN+".ap")); err != nil || fi.Mode().Perm() != 0o600 {
 		t.Errorf("the restored identity file: %v %v, want 0600", err, fi)
+	}
+}
+
+// identityBackup reads the newest copy of the identity files the reason made (task 317).
+func identityBackup(t *testing.T, k *HmIPLocalKey, reason string) map[string]string {
+	t.Helper()
+	base := filepath.Join(k.StateDir, identityBackupDir)
+	entries, _ := os.ReadDir(base)
+	for i := len(entries) - 1; i >= 0; i-- {
+		if !strings.HasSuffix(entries[i].Name(), "-"+reason) {
+			continue
+		}
+		if fi, _ := os.Stat(filepath.Join(base, entries[i].Name())); fi.Mode().Perm() != 0o700 {
+			t.Errorf("copy directory mode %v", fi.Mode().Perm())
+		}
+		out := map[string]string{}
+		files, _ := os.ReadDir(filepath.Join(base, entries[i].Name()))
+		for _, f := range files {
+			out[f.Name()] = readFile(filepath.Join(base, entries[i].Name(), f.Name()))
+		}
+		return out
+	}
+	return nil
+}
+
+// task 317 (D-120): the copy takes every module's identity files and nothing else, changes
+// nothing in the data directory, keeps the newest IdentityBackupsKept, and refuses an unreadable
+// file; without identity files there is nothing to copy.
+func TestBackupIdentity(t *testing.T) {
+	root := t.TempDir()
+	data := filepath.Join(root, "etc/config/crRFD/data")
+	_ = os.MkdirAll(data, 0o755)
+	now := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+	k := &HmIPLocalKey{Root: Root(root), StateDir: filepath.Join(root, "state"), Now: func() time.Time { now = now.Add(time.Second); return now }}
+	if dir, err := k.backupIdentity("empty"); err != nil || dir != "" {
+		t.Fatalf("nothing to copy: %q %v", dir, err)
+	}
+	for name, body := range map[string]string{"3014F711A0001F0000000A03.ap": "A", "3014F711A0001F0000000A03.apkx": "K", "3014F711A0001F0000000A03.bbkx": "B", "3014F711A000040000000A01.ap": "S", "3014F711A0000000000000B1.dev": "D", "metaData.conf": "M"} {
+		_ = os.WriteFile(filepath.Join(data, name), []byte(body), 0o600)
+	}
+	dir, err := k.backupIdentity("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := identityBackup(t, k, "test")
+	if len(got) != 4 || got["3014F711A0001F0000000A03.ap"] != "A" || got["3014F711A000040000000A01.ap"] != "S" || got["3014F711A0001F0000000A03.bbkx"] != "B" {
+		t.Fatalf("copied %v into %s", got, dir)
+	}
+	if readFile(filepath.Join(data, "3014F711A0001F0000000A03.ap")) != "A" {
+		t.Error("the data directory changed")
+	}
+	for i := 0; i < IdentityBackupsKept+3; i++ {
+		if _, err := k.backupIdentity("again"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if entries, _ := os.ReadDir(filepath.Join(k.StateDir, identityBackupDir)); len(entries) != IdentityBackupsKept || strings.HasSuffix(entries[0].Name(), "-test") {
+		t.Errorf("kept %d, the oldest %v", len(entries), entries[0].Name())
+	}
+	_ = os.WriteFile(filepath.Join(data, "3014F711A000040000000A01.ap"), nil, 0o600)
+	if _, err := k.backupIdentity("broken"); err == nil || identityBackup(t, k, "broken") != nil {
+		t.Errorf("an empty file: %v", err)
 	}
 }

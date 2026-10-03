@@ -186,9 +186,30 @@ func TestHotplugHeldNodeOfAPulledStick(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(rep.Restarted, []string{"multimacd", "rfd", "hmipserver"}) {
 		t.Fatalf("%+v %v", rep, err)
 	}
+	// openccu-lite task 318 (D-120): on Automatic HmIP-RF stays with the PCB, which holds the HmIP
+	// network - the TK in its place is not taken unasked (hmipserver would attempt the adapter
+	// exchange): the VirtualDevices half alone, the PCB named as missing
 	env := readFile(filepath.Join(root, "run/occulite/radio/hmipserver.env"))
+	p, _ := LoadPlan(root)
+	if !strings.Contains(env, "HMIP_DEVNODE=\n") || p.HmIP != nil || p.MissingHmIP != "3014F711A061A70000000A06" || p.HmIPPin != p.MissingHmIP {
+		t.Fatalf("HmIP-RF moved to the TK unasked:\n%s\n%+v", env, p)
+	}
+	// the move as the user's choice: hmipserver on the TK directly, no multimacd, and the record
+	// follows it
+	_ = os.MkdirAll(filepath.Join(root, "etc/config/crRFD"), 0o755)
+	if err := os.WriteFile(filepath.Join(root, "etc/config/crRFD/hmip_user.conf"), []byte(SetHmIPChoice("", "0000000A09")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Run(ctx, root, d, logf); err != nil {
+		t.Fatal(err)
+	}
+	env = readFile(filepath.Join(root, "run/occulite/radio/hmipserver.env"))
 	if !strings.Contains(env, "HMIP_DEVNODE=/dev/raw-uart2") || exists(filepath.Join(root, "run/occulite/radio/multimacd.enabled")) {
-		t.Fatalf("hmipserver on the TK directly, no multimacd:\n%s", env)
+		p, _ = LoadPlan(root)
+		t.Fatalf("hmipserver on the TK directly, no multimacd:\n%s\n%v", env, p.Notes)
+	}
+	if pin := ReadHmIPPin(root); pin == nil || pin.SGTIN != "3014F5AC9400040000000A09" {
+		t.Fatalf("the record: %+v", pin)
 	}
 }
 

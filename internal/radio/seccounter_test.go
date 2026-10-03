@@ -91,6 +91,16 @@ func TestAccessPointFile(t *testing.T) {
 	if calc, behind := ap.Calc(time.Date(2026, 3, 13, 17, 8, 28, 0, time.UTC)); !behind || calc != 2830 {
 		t.Fatalf("behind: %d %v", calc, behind)
 	}
+	// openccu-lite B-302: when the computed value reaches a given one - the offset alone at first
+	if at := ap.ReachesAt(7661307); !at.Before(time.Date(2026, 9, 30, 9, 5, 8, 0, time.UTC).Add(time.Second)) || at.Before(time.Date(2026, 9, 30, 9, 5, 7, 0, time.UTC)) {
+		t.Fatalf("reaches the journal's value at %s", at)
+	}
+	if c, _ := ap.Calc(ap.ReachesAt(7661307)); c != 7661307 {
+		t.Fatalf("calc at ReachesAt: %d", c)
+	}
+	if !ap.ReachesAt(100).Equal(ap.FirstConnect) {
+		t.Fatal("below the offset: the first connection")
+	}
 	// the wrap with this offset is about 40.8 years after the first connection
 	if y := ap.WrapsAt().Year(); y != 2067 {
 		t.Fatalf("wraps in %d", y)

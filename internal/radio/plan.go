@@ -42,7 +42,10 @@ type Plan struct {
 	// without it, never on another module (D-98).
 	MissingHmIP   string `json:"missing_hmip,omitempty"`
 	MissingBidCos string `json:"missing_bidcos,omitempty"`
-	HmRF          *Role  `json:"hmrf,omitempty"`
+	// HmIPPin is the module HmIP-RF is kept on while its choice is Automatic (openccu-lite task
+	// 318): the one it last ran on, on this board. MissingHmIP names it when it is not there.
+	HmIPPin string `json:"hmip_pin,omitempty"`
+	HmRF    *Role  `json:"hmrf,omitempty"`
 	// Conflict says why the choices cannot be served as they are, and the connection API refuses
 	// them: an HM-MOD-RPI-PCB carrying HmIP needs the multiplexer that serves another module for
 	// BidCos-RF (deviation 15), or a chosen HmIP path that the module or the BidCos-RF choice
@@ -210,6 +213,24 @@ func MakePlan(in Inputs) Plan {
 		if p.HmIP == nil {
 			p.MissingHmIP = ch.HmIP
 			note("HmIP: the chosen module %s is missing; hmipserver runs its VirtualDevices half alone", ch.HmIP)
+		}
+	}
+	// openccu-lite task 318 (D-120): on Automatic, HmIP-RF stays on the module it last ran on - its
+	// identity is bound to it, and another module would make hmipserver attempt the adapter
+	// exchange unasked. Missing, it is not replaced by another: the VirtualDevices half alone.
+	if ch.HmIP == ChoiceAuto && in.HmIPPin.holds(in.Detection.BoardMAC) {
+		pin := strings.ToUpper(in.HmIPPin.SGTIN)
+		p.HmIPPin, p.HmIP = pin, nil
+		for i, m := range in.Detection.Modules {
+			if m.SGTIN != "" && strings.EqualFold(m.SGTIN, pin) && m.HmIPCapable() {
+				p.HmIP = hmipRole(i, m)
+				note("HmIP: kept on module %s, which holds the HmIP network", pin)
+				break
+			}
+		}
+		if p.HmIP == nil {
+			p.MissingHmIP = pin
+			note("HmIP: the module %s, which holds the HmIP network, is missing; hmipserver runs its VirtualDevices half alone (moving HmIP-RF to another module is a confirmed connection change)", pin)
 		}
 	}
 	if p.HmRF != nil {

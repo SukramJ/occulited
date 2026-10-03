@@ -72,7 +72,7 @@ test('the backup\'s devices, a free system, the import asks in red and posts the
     await expect(page.locator('.ol-restorenotice pre')).toContainText('The paired devices are imported.');
     await expect(page.locator('.ol-restorenotice pre')).toContainText('HmIP: the identity of module 3014F711A0001F0000000A03 is moved onto RPI-RF-MOD 0000000A01');
     await expect(page.locator('.ol-restorenotice pre')).toContainText('Names: 109 named objects, 11 rooms, 10 functions imported from the backup.');
-    expect(posts).toEqual([{file: 'restore-ccu.sbk', replace_key: false, key: ''}]);
+    expect(posts).toEqual([{file: 'restore-ccu.sbk', replace_key: false, key: '', confirm: true}]);
 });
 
 test('refused with devices paired here, waiting while an interface is silent, a non-default key is said and never asked, the own key is replaced on the word only', async ({page}) => {
@@ -140,7 +140,7 @@ test('refused with devices paired here, waiting while an interface is silent, a 
     await expect(page.locator('.ol-restorenotice pre')).not.toContainText('Keep the other system');
     // task 281: a names failure is said and does not stop the devices
     await expect(page.locator('.ol-restorenotice pre')).toContainText('The names could not be imported from the backup: no ReGa database in the backup');
-    expect(posts).toEqual([{file: 'restore-ccu.sbk', replace_key: true, key: ''}]);
+    expect(posts).toEqual([{file: 'restore-ccu.sbk', replace_key: true, key: '', confirm: true}]);
 });
 
 test('German: the heading and the refusal', async ({page}) => {
@@ -160,4 +160,36 @@ test('German: the heading and the refusal', async ({page}) => {
     await expect(block.locator('[data-notice="bidcos-key"]')).toContainText('Der BidCos-Sicherheitsschlüssel der Sicherung');
     await expect(block.locator('[data-notice="bidcos-key"]')).toContainText('Der Import bringt ihn unverändert mit');
     await expect(block.locator('[data-action="keycheck-skip"]')).toHaveText('Überspringen - ich kenne sie nicht');
+});
+
+// openccu-lite B-289 (maintainer, 2026-10-02): the backup's HmIP network would move onto this
+// system's module, whose firmware is below 2.8.0, with local key mode off in the backup - the
+// import and the restore are refused: the notice names the firmware and the update, both buttons
+// are off, and the daemon's 422 for the same says the same
+test('a module below firmware 2.8.0: the import and the restore are refused, with the firmware and the update; German', async ({page}) => {
+    const refused = {module: '3014F711A000040000000A01', version: '1.8.3', minimum: '2.8.0'};
+    const backup = {...BACKUP, hmip: {...BACKUP.hmip, local_key: false}};
+    const target = {...FREE, hmip_module: {...MODULE, hardware: 'HMIP-RFUSB', version: '1.8.3'}};
+    await page.route('**/api/system/v1/restore/check', (r) => r.fulfill({json: {file: 'restore-ccu.sbk', check: CHECK, encryption: {encrypted: false}}}));
+    await page.route('**/api/system/v1/restore/devices?**', (r) => r.fulfill({json: {backup, target, module_changed: true, non_default_key: false, hmip_firmware: refused}}));
+    const posts: string[] = [];
+    await page.route('**/api/system/v1/restore/import-devices', (r) => { posts.push('import'); return r.fulfill({status: 422, json: {error: 'hmip-firmware', message: 'refused', detail: refused}}); });
+    await page.route('**/api/system/v1/restore/apply', (r) => { posts.push('apply'); return r.fulfill({status: 422, json: {error: 'hmip-firmware', message: 'refused', detail: refused}}); });
+    await page.goto('/system/backup');
+    await upload(page);
+    const block = page.locator('[data-restore="devices"]');
+    const n = block.locator('[data-notice="hmip-firmware"]');
+    await expect(n).toContainText('HmIP-RF cannot move to this module');
+    await expect(n).toContainText('The HmIP network of this backup cannot move onto module 3014F711A000040000000A01: it runs application firmware 1.8.3, and below 2.8.0');
+    await expect(n).toContainText("Update the module's firmware first (Updates page, radio firmware). A backup taken in local key mode moves without the key server and is allowed.");
+    await expect(block.locator('[data-notice="module-change"]')).toHaveCount(0);
+    await expect(block.locator('[data-action="import-devices"]')).toBeDisabled();
+    await expect(page.locator('[data-action="restore-apply"]')).toBeDisabled();
+    expect(posts).toHaveLength(0);
+    await page.addInitScript(() => localStorage.setItem('ol.language', 'de'));
+    await page.reload();
+    await page.locator('input[type="file"][accept=".sbk,.age"]').setInputFiles({name: 'ccu.sbk', mimeType: 'application/octet-stream', buffer: Buffer.from('ustar')});
+    await page.getByRole('button', {name: 'Prüfen', exact: true}).click();
+    await expect(n).toContainText('Das HmIP-Netz dieser Sicherung kann nicht auf das Modul 3014F711A000040000000A01 wechseln');
+    await expect(n).toContainText('Seite Updates, Funk-Firmware');
 });

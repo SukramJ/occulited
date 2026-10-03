@@ -80,9 +80,9 @@ test('restore: the passphrase matches - no warning, the key goes along, no force
     const dlg = page.getByRole('dialog');
     await expect(dlg).toContainText('Restore this backup and reboot?');
     await expect(dlg).not.toContainText('passphrase');
-    await dlg.getByRole('button', {name: 'OK'}).click();
+    await dlg.getByRole('button', {name: 'Restore and reboot'}).click();
     await expect.poll(() => r.applies.length).toBe(1);
-    expect(r.applies[0]).toEqual({file: 'restore-ccu.sbk', key: PASS, force: false});
+    expect(r.applies[0]).toEqual({file: 'restore-ccu.sbk', key: PASS, force: false, confirm: true});
     await expect(page.locator('.ol-restorenotice')).toContainText('the system reboots now');
     await expect(page.locator('[data-notice="restore-key-warning"]')).toHaveCount(0);
 });
@@ -121,7 +121,7 @@ test('restore: a wrong passphrase - the verdict, the danger question with the wa
     await apply.click();
     await page.getByRole('dialog').getByRole('button', {name: 'Restore anyway'}).click();
     await expect.poll(() => r.applies.length).toBe(1);
-    expect(r.applies[0]).toEqual({file: 'restore-ccu.sbk', key: 'Wrong_Pass296', force: true});
+    expect(r.applies[0]).toEqual({file: 'restore-ccu.sbk', key: 'Wrong_Pass296', force: true, confirm: true});
     // the result repeats it
     await expect(page.locator('[data-notice="restore-key-warning"]')).toContainText('Restored without a confirmed passphrase for the backup\'s BidCos security key.');
     await expect(page.locator('[data-notice="restore-key-warning"]')).toContainText('only a factory reset of every such device and pairing it again helps');
@@ -141,7 +141,7 @@ test('restore: skipped - the warning, then the restore on the word with force an
     await expect(dlg).toContainText('The passphrase of the backup\'s BidCos security key is not confirmed.');
     await dlg.getByRole('button', {name: 'Restore anyway'}).click();
     await expect.poll(() => r.applies.length).toBe(1);
-    expect(r.applies[0]).toEqual({file: 'restore-ccu.sbk', key: '', force: true});
+    expect(r.applies[0]).toEqual({file: 'restore-ccu.sbk', key: '', force: true, confirm: true});
 });
 
 test('restore: not checked at all - the same warning, force and no key', async ({page}) => {
@@ -153,7 +153,7 @@ test('restore: not checked at all - the same warning, force and no key', async (
     await expect(dlg).toContainText('is not confirmed');
     await dlg.getByRole('button', {name: 'Restore anyway'}).click();
     await expect.poll(() => r.applies.length).toBe(1);
-    expect(r.applies[0]).toEqual({file: 'restore-ccu.sbk', key: '', force: true});
+    expect(r.applies[0]).toEqual({file: 'restore-ccu.sbk', key: '', force: true, confirm: true});
     expect(r.verifies).toHaveLength(0);
 });
 
@@ -168,9 +168,9 @@ test('restore: the backup\'s passphrase matches, this system has another key - s
     await page.locator('[data-action="restore-apply"]').click();
     const dlg = page.getByRole('dialog');
     await expect(dlg).not.toContainText('passphrase');
-    await dlg.getByRole('button', {name: 'OK'}).click();
+    await dlg.getByRole('button', {name: 'Restore and reboot'}).click();
     await expect.poll(() => r.applies.length).toBe(1);
-    expect(r.applies[0]).toEqual({file: 'restore-ccu.sbk', key: PASS, force: true});
+    expect(r.applies[0]).toEqual({file: 'restore-ccu.sbk', key: PASS, force: true, confirm: true});
 });
 
 test('restore: only this system has a key - the firmware\'s field and force as before, no passphrase check', async ({page}) => {
@@ -198,7 +198,7 @@ test('import: a matching passphrase goes along and the question has no warning; 
     await expect(dlg).not.toContainText('not confirmed');
     await dlg.getByRole('button', {name: 'Import and reboot'}).click();
     await expect.poll(() => r.imports.length).toBe(1);
-    expect(r.imports[0]).toEqual({file: 'restore-ccu.sbk', replace_key: false, key: PASS});
+    expect(r.imports[0]).toEqual({file: 'restore-ccu.sbk', replace_key: false, key: PASS, confirm: true});
     await expect(page.locator('.ol-restorenotice pre')).toContainText('Keep the other system\'s passphrase safe');
     await expect(page.locator('[data-notice="restore-key-warning"]')).toHaveCount(0);
 });
@@ -216,7 +216,7 @@ test('import: skipped - the warning in the danger question, the import on the wo
     await expect(dlg).toContainText('Find the passphrase before you go on');
     await dlg.getByRole('button', {name: 'Import anyway and reboot'}).click();
     await expect.poll(() => r.imports.length).toBe(1);
-    expect(r.imports[0]).toEqual({file: 'restore-ccu.sbk', replace_key: false, key: ''});
+    expect(r.imports[0]).toEqual({file: 'restore-ccu.sbk', replace_key: false, key: '', confirm: true});
     await expect(page.locator('[data-notice="restore-key-warning"]')).toContainText('came along without a confirmed passphrase');
 });
 

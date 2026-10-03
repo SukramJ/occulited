@@ -45,6 +45,9 @@ type HmIPMoveBack struct {
 	At       time.Time     `json:"at"`
 	Choices  radio.Choices `json:"choices"` // the connection choices from before the move
 	Devices  int           `json:"devices"` // device files in the snapshot
+	// CounterGap: the previous module's HmIP security counter is behind what the module in use
+	// sent (openccu-lite B-302) - the dialog says the expected wait before the user confirms
+	CounterGap *HmIPCounterGap `json:"counter_gap,omitempty"`
 }
 
 // SnapshotBeforeMove copies the module's identity files, hmip_address.conf and every device file
@@ -121,6 +124,12 @@ func (k *HmIPLocalKey) SnapshotBeforeMove(from string, prev radio.Choices) error
 	return nil
 }
 
+// LocalKeySnapshotKept: a snapshot of the module from a switch to local key mode is kept (B-301).
+func (k *HmIPLocalKey) LocalKeySnapshotKept(sgtin string) bool {
+	s, ok := k.snapshotFor(strings.ToUpper(sgtin))
+	return ok && s.Kind == ""
+}
+
 // deviceFiles names hmipserver's device files (<SGTIN>.dev) in its data directory, sorted.
 func (k *HmIPLocalKey) deviceFiles() []string {
 	var out []string
@@ -156,7 +165,7 @@ func (k *HmIPLocalKey) MoveBackOffer() *HmIPMoveBack {
 			n++
 		}
 	}
-	return &HmIPMoveBack{Previous: s.SGTIN, At: s.At, Choices: *s.Choices, Devices: n}
+	return &HmIPMoveBack{Previous: s.SGTIN, At: s.At, Choices: *s.Choices, Devices: n, CounterGap: k.moveBackGap(s)}
 }
 
 // MoveBack takes HmIP-RF back to the module a module-move snapshot belongs to (openccu-lite
@@ -182,12 +191,18 @@ func (k *HmIPLocalKey) MoveBack() error {
 		return ErrLocalKey{"the connection change is not available"}
 	}
 	conf := k.conf()
+	// B-302: the counter gap, while the snapshot's access point file is still there
+	gap := k.moveBackGap(snap)
 	ctx, err := k.begin("move-back")
 	if err != nil {
 		return err
 	}
 	dir := k.snapshotDir(snap.SGTIN)
 	restore := func() error {
+		// D-120 (task 317): the identity files as they are now, copied before anything moves
+		if _, err := k.backupIdentity("move-back"); err != nil {
+			return fmt.Errorf("the copy of the identity files failed: %w", err)
+		}
 		for _, p := range k.previousIdentities(snap.SGTIN) {
 			if err := k.moveIdentityAside(p, conf); err != nil {
 				return fmt.Errorf("moving the identity of %s aside: %w", p, err)
@@ -224,7 +239,14 @@ func (k *HmIPLocalKey) MoveBack() error {
 	}
 	go func() {
 		k.log().Warn("module move: back to the previous module from its snapshot", "module", snap.SGTIN, "choices", fmt.Sprintf("%+v", *snap.Choices), "files", len(snap.Files))
-		k.end(k.Conn(ctx, *snap.Choices, restore))
+		err := k.Conn(ctx, *snap.Choices, restore)
+		if err == nil && gap != nil {
+			gap.At = k.now().UTC()
+			k.saveCounterGap(gap)
+			k.log().Warn("module move: the previous module's HmIP security counter is behind what the other module sent; devices that heard it may ignore commands until the counter has caught up",
+				"module", gap.To, "from", gap.From, "behind", gap.Behind, "until", gap.Until.Format(time.RFC3339))
+		}
+		k.end(err)
 	}()
 	return nil
 }
@@ -390,6 +412,11 @@ func (k *HmIPLocalKey) FreshStart(localKey bool) error {
 		return err
 	}
 	go func() {
+		// D-120 (task 317): the identity files as they are now, copied before anything moves
+		if _, err := k.backupIdentity("fresh-start"); err != nil {
+			k.end(fmt.Errorf("the copy of the identity files failed, nothing was changed: %w", err))
+			return
+		}
 		for _, p := range prev {
 			if err := k.moveIdentityAside(p, conf); err != nil {
 				k.end(fmt.Errorf("moving the identity of %s aside: %w", p, err))
@@ -520,6 +547,11 @@ func (k *HmIPLocalKey) RestoreSnapshot(sgtin string) error {
 		return err
 	}
 	go func() {
+		// D-120 (task 317): the identity files as they are now, copied before anything moves
+		if _, err := k.backupIdentity("restore"); err != nil {
+			k.end(fmt.Errorf("the copy of the identity files failed, nothing was changed: %w", err))
+			return
+		}
 		for _, p := range others {
 			if err := k.moveIdentityAside(p, conf); err != nil {
 				k.end(fmt.Errorf("moving the identity of %s aside: %w", p, err))

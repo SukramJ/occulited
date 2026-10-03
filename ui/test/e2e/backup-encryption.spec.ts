@@ -282,10 +282,13 @@ for (const rebooting of [true, false]) {
         await page.getByRole('button', {name: 'Restore and reboot'}).click();
         const dialog = page.getByRole('dialog');
         await expect(dialog).toContainText('Restore this backup and reboot?');
-        await dialog.getByRole('button', {name: 'OK'}).click();
+        // task 317 (D-120): the restore replaces the HmIP identity with the rest - asked in red
+        await expect(dialog).toContainText('pairings, keys, the HmIP identity, addons and their settings');
+        await expect(dialog.getByRole('button', {name: 'Restore and reboot'})).toHaveClass(/danger/);
+        await dialog.getByRole('button', {name: 'Restore and reboot'}).click();
         // the page reads the uptime and the boot expectation first, then posts
         await expect.poll(() => posts.length).toBe(1);
-        expect(JSON.parse(posts[0])).toEqual({file: 'restore-ccu.sbk', key: '', force: false});
+        expect(JSON.parse(posts[0])).toEqual({file: 'restore-ccu.sbk', key: '', force: false, confirm: true});
         if (rebooting) {
             await expect(page.locator('.ol-restorenotice')).toContainText('Restoring — the system reboots now.');
             await expect(page.locator('.ol-restorenotice pre')).toContainText('Scheduling backup restore');

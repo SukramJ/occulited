@@ -400,3 +400,31 @@ func TestHmIPOnlyRFUSB(t *testing.T) {
 		t.Fatalf("direct: %q", p.Conflict)
 	}
 }
+
+// openccu-lite B-300: which nodes are the header, and when the header is empty.
+func TestEmptyHeader(t *testing.T) {
+	for _, c := range []struct {
+		name           string
+		m              Module
+		header, silent bool
+	}{
+		{"GPIO, cut at the limit", Module{Name: "raw-uart", GPIO: true, DeviceType: "GPIO@fe201000.serial", Probe: "timeout"}, true, true},
+		{"GPIO, no module", Module{Name: "raw-uart", GPIO: true, Probe: "none"}, true, true},
+		{"GPIO, a wrong answer", Module{Name: "raw-uart", GPIO: true, Probe: "error"}, true, false},
+		{"GPIO, a module", Module{Name: "raw-uart", GPIO: true, Probe: "ok"}, true, false},
+		{"the ttyAMA0 fallback", Module{Name: "ttyAMA0", Node: "/dev/ttyAMA0", Probe: "timeout"}, true, true},
+		{"a stick", Module{Name: "raw-uart1", DeviceType: "eQ-3 HmIP-RFUSB@usb-1.3", Probe: "timeout"}, false, false},
+		{"an HB-RF-ETH", Module{Name: "raw-uart1", DeviceType: "HB-RF-ETH@192.0.2.50", Probe: "none"}, false, false},
+		{"the HM-CFG-USB-2", Module{USBAdapter: true, DeviceType: "USB", Probe: "ok"}, false, false},
+	} {
+		if c.m.Header() != c.header || c.m.EmptyHeader() != c.silent {
+			t.Errorf("%s: header %v empty %v, want %v %v", c.name, c.m.Header(), c.m.EmptyHeader(), c.header, c.silent)
+		}
+	}
+	det := Detection{Modules: []Module{{Serial: "0000000A07", SGTIN: "3014F711A000040000000A07", Probe: "ok"}, {Serial: "0000000A03", Probe: "error"}}}
+	for id, want := range map[string]bool{"0000000a07": true, "3014F711A000040000000A07": true, "0000000A03": false, "": false} {
+		if det.HasModule(id) != want {
+			t.Errorf("HasModule(%q) = %v", id, !want)
+		}
+	}
+}

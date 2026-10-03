@@ -454,6 +454,11 @@ func (k *HmIPLocalKey) Disable() error {
 		return err
 	}
 	go func() {
+		// D-120 (task 317): the identity files the snapshot's replace are copied first
+		if _, err := k.backupIdentity("local-key-off"); err != nil {
+			k.end(fmt.Errorf("the copy of the identity files failed, nothing was changed: %w", err))
+			return
+		}
 		dir := k.snapshotDir(snap.SGTIN)
 		for _, f := range snap.Files {
 			b, err := os.ReadFile(filepath.Join(dir, f))
@@ -655,6 +660,65 @@ func (k *HmIPLocalKey) identityFiles(sg string) []string {
 		}
 	}
 	return out
+}
+
+// HasIdentity: the module's HmIP identity files are in hmipserver's data directory (task 318).
+func (k *HmIPLocalKey) HasIdentity(sgtin string) bool {
+	return len(k.identityFiles(strings.ToUpper(sgtin))) > 0
+}
+
+// IdentityBackupsKept is how many copies backupIdentity keeps; the oldest beyond go.
+const IdentityBackupsKept = 10
+
+// identityBackupDir holds the copies, one directory per action, under the state directory.
+const identityBackupDir = "identity-backups"
+
+// backupIdentity copies every HmIP identity file in hmipserver's data directory - <SGTIN>.ap,
+// .apkx, .bbkx of every module - into <StateDir>/identity-backups/<time>-<reason>/ before an
+// action of the user's replaces or removes them (openccu-lite task 317, D-120): the files as they
+// were, a way back by hand should the action go wrong. The data directory is not touched. Without
+// identity files nothing is copied and "" is answered; a file that cannot be read fails the backup,
+// and the caller then changes nothing. The newest IdentityBackupsKept copies stay.
+func (k *HmIPLocalKey) backupIdentity(reason string) (string, error) {
+	var names []string
+	for _, name := range readDir(k.Root.join(crRFDDataDir)) {
+		u := strings.ToUpper(name)
+		for _, ext := range []string{".AP", ".APKX", ".BBKX"} {
+			if strings.HasSuffix(u, ext) && sgtinRe.MatchString(strings.TrimSuffix(u, ext)) {
+				names = append(names, name)
+			}
+		}
+	}
+	if len(names) == 0 {
+		return "", nil
+	}
+	sort.Strings(names)
+	base := filepath.Join(k.StateDir, identityBackupDir)
+	dir := filepath.Join(base, k.now().UTC().Format("20060102-150405.000")+"-"+reason)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	_ = os.Chmod(base, 0o700)
+	_ = os.Chmod(k.StateDir, 0o700)
+	for _, name := range names {
+		b := readFile(k.Root.join(filepath.Join(crRFDDataDir, name)))
+		if b == "" {
+			_ = os.RemoveAll(dir)
+			return "", fmt.Errorf("%s is empty or unreadable", name)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(b), 0o600); err != nil {
+			_ = os.RemoveAll(dir)
+			return "", err
+		}
+	}
+	if entries, err := os.ReadDir(base); err == nil && len(entries) > IdentityBackupsKept {
+		// the names start with the time: sorted, the oldest come first
+		for _, e := range entries[:len(entries)-IdentityBackupsKept] {
+			_ = os.RemoveAll(filepath.Join(base, e.Name()))
+		}
+	}
+	k.log().Info("HmIP identity files copied before they change", "reason", reason, "files", strings.Join(names, ","), "dir", dir)
+	return dir, nil
 }
 
 // DiscardSnapshot removes one module's snapshot.

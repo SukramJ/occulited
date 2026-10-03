@@ -543,10 +543,71 @@ func TestConnModulesRoles(t *testing.T) {
 	}
 }
 
+// openccu-lite B-300: the GPIO header's UART that nothing answered on has no card - a Pi with
+// only USB sticks (the header probed under the short limit) and one with nothing at all (the
+// second pass's full probe found no module); a header that answered wrongly keeps its card, as do
+// a silent USB or HB-RF node; the hint only where a chosen module is missing.
+func TestConnModulesEmptyHeader(t *testing.T) {
+	gpio := func(probe, detail string) radio.Module {
+		return radio.Module{Name: "raw-uart", Node: "/dev/raw-uart", DeviceType: "GPIO@fe201000.serial", GPIO: true, Probe: probe, Detail: detail}
+	}
+	stick := radio.Module{Name: "raw-uart1", Node: "/dev/raw-uart1", DeviceType: "eQ-3 HmIP-RFUSB@usb-1.3", Hardware: "HMIP-RFUSB", Serial: "0000000A07", SGTIN: "3014F711A000040000000A07", HmRFAddress: "0x3D0A07", HmIPAddress: "0xBC0A07", Version: "4.4.18", Probe: "ok"}
+	tty := radio.Module{Name: "ttyAMA0", Node: "/dev/ttyAMA0", Probe: "none", Detail: "no module"}
+	deadUSB := radio.Module{Name: "raw-uart2", Node: "/dev/raw-uart2", DeviceType: "eQ-3 HmIP-RFUSB@usb-1.2", Probe: "timeout", Detail: "no answer within 45s"}
+	nodes := func(ms []ConnModule) []string {
+		out := []string{}
+		for _, m := range ms {
+			out = append(out, m.Node+":"+m.Probe)
+		}
+		return out
+	}
+	p := radio.Plan{HmIP: &radio.Role{Node: "/dev/raw-uart1"}, HmIPServerHmIP: true}
+	for _, c := range []struct {
+		name string
+		mods []radio.Module
+		want []string
+	}{
+		{"sticks only, the header cut at 6s", []radio.Module{gpio("timeout", "no answer within 6s"), stick}, []string{"/dev/raw-uart1:ok"}},
+		{"nothing at all, the second pass", []radio.Module{gpio("none", "no module")}, []string{}},
+		{"the ttyAMA0 fallback", []radio.Module{tty}, []string{}},
+		{"a module on the header that answered wrongly", []radio.Module{gpio("error", "unexpected answer: x"), stick}, []string{"/dev/raw-uart:error", "/dev/raw-uart1:ok"}},
+		{"a stick that does not answer", []radio.Module{deadUSB, stick}, []string{"/dev/raw-uart2:timeout", "/dev/raw-uart1:ok"}},
+	} {
+		if got := nodes(connModules(radio.Detection{Modules: c.mods}, p)); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
+
+	empty := radio.Detection{Modules: []radio.Module{gpio("timeout", "no answer within 6s"), stick}}
+	for _, c := range []struct {
+		name string
+		det  radio.Detection
+		ch   radio.Choices
+		want *ConnHeaderSilent
+	}{
+		{"auto", empty, radio.Choices{}, nil},
+		{"the chosen stick is there (serial)", empty, radio.Choices{HmIP: "0000000a07"}, nil},
+		{"the chosen stick is there (SGTIN), BidCos-RF none", empty, radio.Choices{HmIP: "3014F711A000040000000A07", BidCos: radio.BidCosNone}, nil},
+		{"the chosen module is missing", empty, radio.Choices{HmIP: "0000000A03", BidCos: "0000000A03"}, &ConnHeaderSilent{Node: "/dev/raw-uart", Probe: "timeout", Detail: "no answer within 6s", Missing: []string{"0000000A03"}}},
+		{"missing, but the header answered wrongly", radio.Detection{Modules: []radio.Module{gpio("error", "x"), stick}}, radio.Choices{HmIP: "0000000A03"}, nil},
+		{"missing, no header", radio.Detection{Modules: []radio.Module{stick}}, radio.Choices{BidCos: "0000000A03"}, nil},
+	} {
+		if got := headerSilent(c.det, c.ch); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s: got %+v, want %+v", c.name, got, c.want)
+		}
+	}
+}
+
 // twoHmIPRoot is a system with two modules that can carry HmIP-RF: the RPI-RF-MOD on the header
 // (HmIP-RF runs on it, its identity, hmip_address.conf and two device files are on the system) and
 // an HmIP-RFUSB.
 func twoHmIPRoot(t *testing.T) string {
+	t.Helper()
+	return twoHmIPRootStick(t, "4.4.18")
+}
+
+// twoHmIPRootStick is twoHmIPRoot with the stick's application firmware.
+func twoHmIPRootStick(t *testing.T, stickVersion string) string {
 	t.Helper()
 	root := t.TempDir()
 	w := func(p, c string) {
@@ -557,7 +618,7 @@ func twoHmIPRoot(t *testing.T) string {
 		}
 	}
 	mod := radio.Module{Name: "raw-uart", Node: "/dev/raw-uart", DeviceType: "GPIO@3f201000.serial", GPIO: true, Hardware: "RPI-RF-MOD", Serial: "0000000A03", SGTIN: "3014F711A0001F0000000A03", HmRFAddress: "0x1F6C2E", HmIPAddress: "0x3FAE2C", Version: "4.4.22", Probe: "ok"}
-	stick := radio.Module{Name: "raw-uart1", Node: "/dev/raw-uart1", DeviceType: "eQ-3 HmIP-RFUSB@usb-0000:01:00.0-1.3", Hardware: "HMIP-RFUSB", Serial: "0000000A01", SGTIN: "3014F711A000040000000A01", HmRFAddress: "0xFF0001", HmIPAddress: "0xB00001", Version: "4.4.18", Probe: "ok"}
+	stick := radio.Module{Name: "raw-uart1", Node: "/dev/raw-uart1", DeviceType: "eQ-3 HmIP-RFUSB@usb-0000:01:00.0-1.3", Hardware: "HMIP-RFUSB", Serial: "0000000A01", SGTIN: "3014F711A000040000000A01", HmRFAddress: "0xFF0001", HmIPAddress: "0xB00001", Version: stickVersion, Probe: "ok"}
 	det := radio.Detection{Modules: []radio.Module{mod, stick}}
 	w("var/hm_mode", "HM_HOST='rpi3'\nHM_MODE='NORMAL'\n")
 	w("etc/config/rfd.conf", connRFDConf)
@@ -605,8 +666,19 @@ func TestHmIPModuleMoveSnapshotAndTheWayBack(t *testing.T) {
 	if pv, err := s.Preview(context.Background(), radio.Choices{BidCos: radio.BidCosNone}); err != nil || pv.HmIPMove != nil {
 		t.Fatalf("a BidCos-only change names a move: %+v %v", pv.HmIPMove, err)
 	}
+	// openccu-lite task 317 (D-120): not without the user's word - nothing is taken or written
+	var cr *ConfirmRequired
+	if _, err := s.Apply(context.Background(), toStick, false); !errors.As(err, &cr) || cr.HmIPMove == nil || cr.HmIPMove.From != mod || len(cr.Devices) != 0 {
+		t.Fatalf("a move without confirm: %v", err)
+	}
+	if snaps := k.Snapshots(); len(snaps) != 0 {
+		t.Fatalf("a refused move took a snapshot: %+v", snaps)
+	}
+	if got := radio.ReadChoices(readFile(filepath.Join(root, "etc/config/crRFD/hmip_user.conf")), ""); got.HmIP != "" {
+		t.Fatalf("a refused move wrote its choice: %+v", got)
+	}
 	// the move: the snapshot first, then the change
-	if _, err := s.Apply(context.Background(), toStick, false); err != nil {
+	if _, err := s.Apply(context.Background(), toStick, true); err != nil {
 		t.Fatal(err)
 	}
 	a := waitApply(t, s)
@@ -660,6 +732,10 @@ func TestHmIPModuleMoveSnapshotAndTheWayBack(t *testing.T) {
 			t.Errorf("restored %s: %q", ext, b)
 		}
 	}
+	// task 317 (D-120): the identity files as they were before the way back, copied first
+	if got := identityBackup(t, k, "move-back"); len(got) == 0 {
+		t.Error("no copy of the identity files before the way back")
+	}
 	if readFile(filepath.Join(data, "3014F711A0000000000000B1.dev")) != "DEV-B1-before" || readFile(filepath.Join(data, "3014F711A0000000000000B2.dev")) != "DEV-B2-before" {
 		t.Error("the device files were not restored")
 	}
@@ -708,7 +784,7 @@ func TestHmIPModuleMoveWithLocalKeyOnTakesNoSnapshot(t *testing.T) {
 	if err != nil || pv.HmIPMove == nil || !pv.HmIPMove.LocalKey || pv.HmIPMove.Snapshot {
 		t.Fatalf("preview: %+v %v", pv.HmIPMove, err)
 	}
-	if _, err := s.Apply(context.Background(), toStick, false); err != nil {
+	if _, err := s.Apply(context.Background(), toStick, true); err != nil {
 		t.Fatal(err)
 	}
 	if a := waitApply(t, s); !a.OK || strings.Contains(strings.Join(a.Lines, "\n"), "snapshot") {
@@ -719,5 +795,148 @@ func TestHmIPModuleMoveWithLocalKeyOnTakesNoSnapshot(t *testing.T) {
 	}
 	if err := k.MoveBack(); err == nil {
 		t.Fatal("a way back without a snapshot")
+	}
+}
+
+// openccu-lite B-289: HmIP-RF does not move onto a module whose application firmware is below
+// 2.8.0 while local key mode is off - the preview names the refusal, the change is refused before
+// anything is written or kept; with local key mode on the move is offline and goes ahead
+func TestHmIPModuleMoveRefusedBelowFirmware280(t *testing.T) {
+	root := twoHmIPRootStick(t, "1.8.3")
+	s, svc := newConn(t, root, nil)
+	k := &HmIPLocalKey{Root: Root(root), Services: svc, StateDir: filepath.Join(root, "state/hmip-local-key"), Plan: s.BootPlan, Busy: s.Busy}
+	s.BeforeHmIPMove, s.MoveBackOffer, k.Conn = k.SnapshotBeforeMove, k.MoveBackOffer, s.ApplyRestore
+	const stick = "3014F711A000040000000A01"
+	toStick := radio.Choices{HmIP: "0000000A01", HmIPPath: radio.PathDirect}
+	pv, err := s.Preview(context.Background(), toStick)
+	if err != nil || pv.HmIPMove == nil || pv.HmIPMove.ToVersion != "1.8.3" {
+		t.Fatalf("preview: %+v %v", pv.HmIPMove, err)
+	}
+	want := HmIPFirmwareRefused{Module: stick, Version: "1.8.3", Minimum: "2.8.0"}
+	if r := pv.HmIPMove.Refused; r == nil || *r != want {
+		t.Fatalf("refusal: %+v", r)
+	}
+	before, _ := os.ReadFile(filepath.Join(root, "etc/config/crRFD/hmip_user.conf"))
+	_, err = s.Apply(context.Background(), toStick, true)
+	var refused *HmIPFirmwareRefused
+	if !errors.As(err, &refused) || *refused != want || !strings.Contains(err.Error(), "1.8.3") || !strings.Contains(err.Error(), "update the module's firmware") {
+		t.Fatalf("apply: %v", err)
+	}
+	after, _ := os.ReadFile(filepath.Join(root, "etc/config/crRFD/hmip_user.conf"))
+	if string(after) != string(before) || len(k.Snapshots()) != 0 || s.Status().Running != nil || s.Status().Last != nil {
+		t.Fatalf("a refused change wrote or kept something: %q %+v", after, k.Snapshots())
+	}
+	// the other module's side is untouched: a BidCos-only change goes ahead
+	if pv, err := s.Preview(context.Background(), radio.Choices{BidCos: radio.BidCosNone}); err != nil || pv.HmIPMove != nil {
+		t.Fatalf("BidCos-only: %+v %v", pv.HmIPMove, err)
+	}
+	// local key mode on: offline, allowed
+	_ = os.WriteFile(filepath.Join(root, "etc/config/crRFD/hmip_user.conf"), []byte("occulite.hmip.path=\nKeyServer.Mode=LOCAL\nNetwork.Key=00112233445566778899AABBCCDDEEFF\n"), 0o644)
+	if pv, err := s.Preview(context.Background(), toStick); err != nil || pv.HmIPMove == nil || pv.HmIPMove.Refused != nil || !pv.HmIPMove.LocalKey {
+		t.Fatalf("local key mode: %+v %v", pv.HmIPMove, err)
+	}
+	if _, err := s.Apply(context.Background(), toStick, true); err != nil {
+		t.Fatal(err)
+	}
+	if a := waitApply(t, s); !a.OK {
+		t.Fatalf("%+v", a)
+	}
+}
+
+func TestHmIPFirmwareRefusal(t *testing.T) {
+	if HmIPFirmwareRefusal("x", "1.8.3", true) != nil || HmIPFirmwareRefusal("x", "2.8.0", false) != nil || HmIPFirmwareRefusal("x", "", false) != nil {
+		t.Fatal("refused what may go")
+	}
+	if r := HmIPFirmwareRefusal("3014f711a000040000000a01", "2.6.1", false); r == nil || r.Module != "3014F711A000040000000A01" || r.Minimum != radio.MinHmIPKeyExchangeVersion {
+		t.Fatalf("%+v", r)
+	}
+}
+
+// openccu-lite task 318 (D-120): on Automatic HmIP-RF is kept on the module holding the network;
+// with that module missing the status names it, Automatic stays without HmIP, and a choice of
+// another module is a move from it - confirmed, with the snapshot of its identity where the files
+// are on the system.
+func TestHmIPKeptOnItsMissingModule(t *testing.T) {
+	root := twoHmIPRoot(t)
+	const mod, stick, mac = "3014F711A0001F0000000A03", "3014F711A000040000000A01", "aa:aa:aa:aa:aa:01"
+	var det radio.Detection
+	_ = json.Unmarshal([]byte(readFile(filepath.Join(root, "run/occulite/radio/modules.json"))), &det)
+	det.Modules, det.BoardMAC = det.Modules[1:], mac // the RPI-RF-MOD is gone
+	b, _ := json.Marshal(det)
+	_ = os.WriteFile(filepath.Join(root, "run/occulite/radio/modules.json"), b, 0o644)
+	_ = os.MkdirAll(filepath.Dir(filepath.Join(root, radio.HmIPPinFile)), 0o755)
+	_ = os.WriteFile(filepath.Join(root, radio.HmIPPinFile), []byte(`{"sgtin":"`+mod+`","board_mac":"`+mac+`"}`), 0o644)
+	b, _ = json.Marshal(radio.MakePlan(radio.Load(context.Background(), root, fakeRunner, det)))
+	_ = os.WriteFile(filepath.Join(root, "run/occulite/radio/plan.json"), b, 0o644)
+
+	s, svc := newConn(t, root, nil)
+	k := &HmIPLocalKey{Root: Root(root), Services: svc, StateDir: filepath.Join(root, "state/hmip-local-key"), Plan: s.BootPlan, Busy: s.Busy}
+	s.BeforeHmIPMove, s.HmIPIdentity = k.SnapshotBeforeMove, k.HasIdentity
+	st := s.Status()
+	if st.Plan.HmIP != nil || st.Plan.MissingHmIP != mod || st.Plan.HmIPPin != mod || len(st.Options.HmIP) != 1 {
+		t.Fatalf("status: %+v", st.Plan)
+	}
+	// Automatic again: no move, still the VirtualDevices half
+	if pv, err := s.Preview(context.Background(), radio.Choices{}); err != nil || pv.HmIPMove != nil || pv.Plan.HmIP != nil {
+		t.Fatalf("automatic: %+v %v", pv.HmIPMove, err)
+	}
+	toStick := radio.Choices{HmIP: "0000000A01"}
+	pv, err := s.Preview(context.Background(), toStick)
+	if err != nil || pv.HmIPMove == nil || pv.HmIPMove.From != mod || pv.HmIPMove.To != stick || !pv.HmIPMove.Snapshot {
+		t.Fatalf("the move from the missing module: %+v %v", pv.HmIPMove, err)
+	}
+	var cr *ConfirmRequired
+	if _, err := s.Apply(context.Background(), toStick, false); !errors.As(err, &cr) || cr.HmIPMove == nil {
+		t.Fatalf("not without confirm: %v", err)
+	}
+	// its identity files are not on the system: nothing to keep, the move goes without a snapshot
+	s.HmIPIdentity = func(string) bool { return false }
+	if pv, _ := s.Preview(context.Background(), toStick); pv.HmIPMove == nil || pv.HmIPMove.Snapshot {
+		t.Fatalf("no identity files: %+v", pv.HmIPMove)
+	}
+	if !k.HasIdentity(strings.ToLower(mod)) || k.HasIdentity(stick) {
+		t.Error("HasIdentity")
+	}
+}
+
+// openccu-lite B-301 (maintainer: the refusal stays): a snapshot of the module in use from a
+// switch to local key mode, kept after the switch back, blocks the module-move snapshot. The
+// preview says so beforehand, the change is refused before anything is written, and after the
+// discard the move goes through.
+func TestHmIPMoveBlockedByALocalKeySnapshot(t *testing.T) {
+	root := twoHmIPRoot(t)
+	s, svc := newConn(t, root, nil)
+	k := &HmIPLocalKey{Root: Root(root), Services: svc, StateDir: filepath.Join(root, "state/hmip-local-key"), Plan: s.BootPlan, Busy: s.Busy}
+	s.BeforeHmIPMove, s.LocalKeySnapshot = k.SnapshotBeforeMove, k.LocalKeySnapshotKept
+	const mod = "3014F711A0001F0000000A03"
+	if err := k.snapshot(mod, readFile(filepath.Join(root, "etc/config/crRFD/hmip_user.conf"))); err != nil {
+		t.Fatal(err)
+	}
+	if !k.LocalKeySnapshotKept(strings.ToLower(mod)) || k.LocalKeySnapshotKept("3014F711A000040000000A01") {
+		t.Fatal("LocalKeySnapshotKept")
+	}
+	toStick := radio.Choices{HmIP: "0000000A01", HmIPPath: radio.PathDirect}
+	pv, err := s.Preview(context.Background(), toStick)
+	if err != nil || pv.HmIPMove == nil || !pv.HmIPMove.Snapshot || !pv.HmIPMove.SnapshotBlocked {
+		t.Fatalf("preview: %+v %v", pv.HmIPMove, err)
+	}
+	var sb *SnapshotBlocked
+	if _, err := s.Apply(context.Background(), toStick, true); !errors.As(err, &sb) || sb.SGTIN != mod {
+		t.Fatalf("not refused: %v", err)
+	}
+	if st := s.Status(); st.Running != nil || st.Choices.HmIP != "" {
+		t.Fatalf("a refused move started or wrote: %+v %+v", st.Running, st.Choices)
+	}
+	if err := k.DiscardSnapshot(mod); err != nil {
+		t.Fatal(err)
+	}
+	if pv, _ := s.Preview(context.Background(), toStick); pv.HmIPMove == nil || pv.HmIPMove.SnapshotBlocked {
+		t.Fatalf("after the discard: %+v", pv.HmIPMove)
+	}
+	if _, err := s.Apply(context.Background(), toStick, true); err != nil {
+		t.Fatal(err)
+	}
+	if a := waitApply(t, s); !a.OK {
+		t.Fatalf("the move: %+v", a)
 	}
 }

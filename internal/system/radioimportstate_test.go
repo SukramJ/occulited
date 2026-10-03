@@ -185,6 +185,32 @@ func TestImportRecordOutcome(t *testing.T) {
 	}
 	_ = os.Remove(radio.FatalPath(root))
 
+	// openccu-lite B-289: the files moved, but hmipserver could not hand the network key to the
+	// module (its firmware is below 2.8.0) - a failed move, from its line or from the local record
+	lines = []string{"Could not exchange network key, adapter version not supported", "Adapter exchange successful."}
+	if out = rec0.Outcome(context.Background(), rec); out.HmIP.State != ImportRejected || out.HmIP.Cause != radio.ExchangeCauseAdapterVersion || out.HmIP.Line != "Could not exchange network key, adapter version not supported" {
+		t.Errorf("local swap from the journal: %+v", out.HmIP)
+	}
+	lines = []string{"Adapter exchange successful."}
+	_ = os.MkdirAll(filepath.Join(root, "etc/config/occulite"), 0o755)
+	swap := `{"at":"` + at.Add(time.Minute).UTC().Format(time.RFC3339) + `","from":"` + rec.HmIP.FromSGTIN + `","to":"` + rec.HmIP.ToSGTIN + `","mode":"local-swap","outcome":"rejected","cause":"adapter-version"}` + "\n"
+	_ = os.WriteFile(filepath.Join(root, radio.ExchangeRecordFile), []byte(swap), 0o644)
+	if out = rec0.Outcome(context.Background(), rec); out.HmIP.State != ImportRejected || out.HmIP.Cause != radio.ExchangeCauseAdapterVersion {
+		t.Errorf("local swap from the record: %+v", out.HmIP)
+	}
+	// in local key mode the move is offline, and an entry from before the import is not this one's
+	lk := rec
+	lk.HmIP.LocalKey = true
+	if out = rec0.Outcome(context.Background(), lk); out.HmIP.State != ImportDone {
+		t.Errorf("local key mode: %+v", out.HmIP)
+	}
+	old := `{"at":"` + at.Add(-time.Hour).UTC().Format(time.RFC3339) + `","from":"` + rec.HmIP.FromSGTIN + `","to":"` + rec.HmIP.ToSGTIN + `","mode":"local-swap","outcome":"rejected","cause":"adapter-version"}` + "\n"
+	_ = os.WriteFile(filepath.Join(root, radio.ExchangeRecordFile), []byte(old), 0o644)
+	if out = rec0.Outcome(context.Background(), rec); out.HmIP.State != ImportDone {
+		t.Errorf("an older local swap: %+v", out.HmIP)
+	}
+	_ = os.Remove(filepath.Join(root, radio.ExchangeRecordFile))
+
 	// unknown: neither identity file
 	_ = os.Remove(filepath.Join(data, rec.HmIP.ToSGTIN+".ap"))
 	if out = rec0.Outcome(context.Background(), rec); out.HmIP.State != ImportUnknown {

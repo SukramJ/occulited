@@ -85,7 +85,8 @@ const (
 // ImportHmIPOutcome is the HmIP half of the outcome: the identity's move.
 type ImportHmIPOutcome struct {
 	State string `json:"state"`
-	// Cause: the rejection's cause (unreachable, refused) when State is rejected
+	// Cause: the rejection's cause (unreachable, refused; adapter-version for a move onto a module
+	// whose firmware cannot take the network key, openccu-lite B-289) when State is rejected
 	Cause string `json:"cause,omitempty"`
 	// ModuleNow is the HmIP module in use now (the plan's), which may differ from the import's
 	ModuleNow string `json:"module_now,omitempty"`
@@ -114,7 +115,8 @@ type ImportRecord struct {
 	// Plan answers the radio plan in use (this system's modules); nil = radio.LoadPlan(Root).
 	Plan func() (radio.Plan, bool)
 	// Journal answers hmipserver's lines about the exchange since a time, one per line; nil =
-	// journalctl -u hmipserver.service. A test's seam.
+	// journalctl -u hmipserver.service -g exchange (case-insensitive: "Adapter exchange …" and
+	// B-289's "Could not exchange network key, adapter version not supported"). A test's seam.
 	Journal func(ctx context.Context, since time.Time) []string
 	// Interfaces answers the XML-RPC clients of the interface processes; nil = no BidCos check.
 	Interfaces func() []interfaces.Interface
@@ -241,10 +243,19 @@ func (r *ImportRecord) Outcome(ctx context.Context, rec ImportedRadio) ImportOut
 		} else {
 			out.HmIP.State = ImportUnknown
 		}
+		swap := false
 		for _, l := range r.journal(ctx, rec.At) {
-			if strings.Contains(l, "Adapter exchange") {
+			if strings.Contains(l, "Adapter exchange") && !swap {
 				out.HmIP.Line = strings.TrimSpace(l)
 			}
+			if strings.Contains(l, "adapter version not supported") {
+				swap, out.HmIP.Line = true, strings.TrimSpace(l)
+			}
+		}
+		// openccu-lite B-289: the files moved, but onto a module that could not take the network
+		// key (hmipserver's line, or the local record of exchanges) - a failed move, not a success
+		if out.HmIP.State == ImportDone && !rec.HmIP.LocalKey && (swap || localSwapSince(root, now, rec.At) != nil) {
+			out.HmIP.State, out.HmIP.Cause = ImportRejected, radio.ExchangeCauseAdapterVersion
 		}
 		if (out.HmIP.State == ImportDone || out.HmIP.State == ImportRejected) && r != nil && r.Path != "" {
 			final := out.HmIP
@@ -343,6 +354,21 @@ func (r *ImportRecord) plan() (radio.Plan, bool) {
 	return p, err == nil
 }
 
+// localSwapSince is the record's entry of a local swap onto module since a time (B-289), nil
+// without one: the newest entry onto that module decides.
+func localSwapSince(root, module string, since time.Time) *radio.HmIPExchange {
+	for _, x := range radio.ReadHmIPExchanges(root) {
+		if !strings.EqualFold(x.To, module) {
+			continue
+		}
+		if x.At.Before(since) || x.Outcome != radio.ExchangeRejected || x.Cause != radio.ExchangeCauseAdapterVersion {
+			return nil
+		}
+		return &x
+	}
+	return nil
+}
+
 func (r *ImportRecord) journal(ctx context.Context, since time.Time) []string {
 	if r == nil {
 		return nil
@@ -353,7 +379,7 @@ func (r *ImportRecord) journal(ctx context.Context, since time.Time) []string {
 	if string(r.Root) != "/" {
 		return nil
 	}
-	out, err := run(ctx, "journalctl", "-u", "hmipserver.service", "-o", "cat", "-q", "--no-pager", "-g", "Adapter exchange", "--since", since.Local().Format("2006-01-02 15:04:05"))
+	out, err := run(ctx, "journalctl", "-u", "hmipserver.service", "-o", "cat", "-q", "--no-pager", "-g", "exchange", "--since", since.Local().Format("2006-01-02 15:04:05"))
 	if err != nil {
 		return nil
 	}

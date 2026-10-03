@@ -50,6 +50,8 @@ type Inputs struct {
 	CgroupMemMax int64  `json:"cgroup_mem_max,omitempty"` // 0 = "max" or no cgroup limit
 	UserfsOnMMC  bool   `json:"userfs_on_mmc"`
 	Hostname     string `json:"hostname,omitempty"`
+	// HmIPPin is the module HmIP-RF last ran on (openccu-lite task 318), nil without a record.
+	HmIPPin *HmIPPin `json:"hmip_pin,omitempty"`
 	// RandomAddress is the BidCos address S47 makes up for a module that answers 0x000000
 	// (0xFF0000-0xFFFFFE); Load draws one, a test sets it.
 	RandomAddress string `json:"random_address,omitempty"`
@@ -81,6 +83,7 @@ func Load(ctx context.Context, root string, run Runner, det Detection) Inputs {
 	in.IDs, in.IDsExists = readExisting(p("/etc/config/ids"))
 	in.HmIPAddressConf, in.HmIPAddressOK = readExisting(p("/etc/config/hmip_address.conf"))
 	in.HmIPUserConf, _ = readExisting(p("/etc/config/crRFD/hmip_user.conf"))
+	in.HmIPPin = ReadHmIPPin(root)
 	in.CustomStorage = strings.TrimSpace(readFile(p("/etc/config/CustomStoragePath")))
 	in.HmIPNetworkKey = exists(p("/etc/config/hmip_networkkey.conf"))
 	in.TemplateRFDConf = readFile(p("/etc/config_templates/rfd.conf"))

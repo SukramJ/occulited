@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -36,12 +37,32 @@ var ErrConnUnavailable = errors.New("the radio plan is not available on this sys
 
 // ConfirmRequired is the refusal of a change that takes the local BidCos-RF radio away while
 // devices are paired: the caller repeats it with confirm once the user has seen the list (D-81).
+//
+// It is also the refusal of a change that moves HmIP-RF to another module without confirm
+// (openccu-lite task 317, D-120): the move makes hmipserver rewrite the HmIP identity files
+// (crRFD/data/<SGTIN>.ap, .apkx, .bbkx) for the new module - with eQ-3's key server an adapter
+// exchange it may refuse back - so it happens only on the user's word after the warning.
 type ConfirmRequired struct {
-	Devices []BidCosDevice `json:"devices"`
+	Devices  []BidCosDevice `json:"devices"`
+	HmIPMove *HmIPMoveInfo  `json:"hmip_move,omitempty"`
 }
 
 func (e *ConfirmRequired) Error() string {
+	if e.HmIPMove != nil && len(e.Devices) == 0 {
+		return fmt.Sprintf("HmIP-RF moves from module %s to module %s and its identity files are rewritten; confirm the change", e.HmIPMove.From, e.HmIPMove.To)
+	}
 	return fmt.Sprintf("%d paired BidCos-RF devices lose the local radio; confirm the change", len(e.Devices))
+}
+
+// SnapshotBlocked refuses a move of HmIP-RF away from a module of which a snapshot from a switch to
+// local key mode is kept (openccu-lite B-301): the module-move snapshot would replace it, so it is
+// discarded first, on the user's word.
+type SnapshotBlocked struct {
+	SGTIN string `json:"sgtin"`
+}
+
+func (e *SnapshotBlocked) Error() string {
+	return "a snapshot of " + e.SGTIN + " from before local key mode was switched off is kept; discard it, then move HmIP-RF"
 }
 
 // BidCosDevice is one paired device as rfd lists it.
@@ -81,11 +102,14 @@ type ConnPlan struct {
 	RFDLANGateway bool        `json:"rfd_lan_gateway"`
 	// HmIPAdvanced: duty cycle, carrier sense and LAN routing (HAP, DRAP) - an RPI-RF-MOD or an
 	// HmIP-RFUSB only, as upstream sets it.
-	HmIPAdvanced  bool     `json:"hmip_advanced"`
-	MissingHmIP   string   `json:"missing_hmip,omitempty"`
-	MissingBidCos string   `json:"missing_bidcos,omitempty"`
-	Interfaces    []string `json:"interfaces"`
-	Notes         []string `json:"notes"`
+	HmIPAdvanced  bool   `json:"hmip_advanced"`
+	MissingHmIP   string `json:"missing_hmip,omitempty"`
+	MissingBidCos string `json:"missing_bidcos,omitempty"`
+	// HmIPPin: on Automatic, the module HmIP-RF is kept on - the one holding the HmIP network
+	// (openccu-lite task 318); missing_hmip names it when it is not there.
+	HmIPPin    string   `json:"hmip_pin,omitempty"`
+	Interfaces []string `json:"interfaces"`
+	Notes      []string `json:"notes"`
 }
 
 func connPlan(p radio.Plan) ConnPlan {
@@ -95,7 +119,7 @@ func connPlan(p radio.Plan) ConnPlan {
 		HmIPServer: ConnDaemon{Run: p.HmIPServer.Run, Node: p.HmIPServer.Node, Reason: p.HmIPServer.Reason},
 		HmRF:       p.HmRF, HmIP: p.HmIP, RFDLocal: p.RFDLocal, RFDUSBAdapter: p.RFDUSBAdapter, RFDLANGateway: p.RFDLANGateway,
 		HmIPAdvanced: p.HmIPServerAdvanced, MissingHmIP: p.MissingHmIP, MissingBidCos: p.MissingBidCos,
-		Interfaces: []string{}, Notes: p.Notes,
+		HmIPPin: p.HmIPPin, Interfaces: []string{}, Notes: p.Notes,
 	}
 	for _, i := range p.Interfaces {
 		c.Interfaces = append(c.Interfaces, i.Name)
@@ -124,6 +148,10 @@ type RadioConnStatus struct {
 	// module cards (openccu-lite B-272): a module in no role, such as the one on an HB-RF-ETH
 	// added while both interface processes are pinned to a stick, is shown all the same.
 	Modules []ConnModule `json:"modules"`
+	// HeaderSilent: the GPIO header's UART answered nothing while a module chosen for an interface
+	// process is missing from the detection (openccu-lite B-300) - the one case where a module may
+	// be expected on the header; nil otherwise. An empty header has no module card.
+	HeaderSilent *ConnHeaderSilent `json:"header_silent,omitempty"`
 	// HBRFETH is the configured HB-RF-ETH's state, nil when none is configured (B-272): the page
 	// says a board is on its way while its module is not in the detection yet.
 	HBRFETH *ConnHBRFETH `json:"hb_rf_eth,omitempty"`
@@ -133,7 +161,10 @@ type RadioConnStatus struct {
 	// page offers the way back (openccu-lite B-285); absent without one, and during a change.
 	// Hostname is the system's name, which the way back has typed as its confirmation.
 	HmIPMoveBack *HmIPMoveBack `json:"hmip_move_back,omitempty"`
-	Hostname     string        `json:"hostname,omitempty"`
+	// HmIPCounterGap: after the way back, the previous module's HmIP security counter is still
+	// behind what the other module sent (openccu-lite B-302): the page's notice with the end time.
+	HmIPCounterGap *HmIPCounterGap `json:"hmip_counter_gap,omitempty"`
+	Hostname       string          `json:"hostname,omitempty"`
 }
 
 // ConnModule is one detected module as the Interfaces page lists it (openccu-lite B-272).
@@ -152,6 +183,36 @@ type ConnModule struct {
 	Roles []string `json:"roles"`
 }
 
+// ConnHeaderSilent is the silent GPIO header where a chosen module is missing (openccu-lite B-300).
+type ConnHeaderSilent struct {
+	Node string `json:"node"`
+	// Probe is timeout or none; Detail the detection's message.
+	Probe  string `json:"probe"`
+	Detail string `json:"detail,omitempty"`
+	// Missing are the chosen identities no answering module carries.
+	Missing []string `json:"missing"`
+}
+
+// headerSilent is the hint for a silent header while a chosen module is missing, nil otherwise.
+func headerSilent(det radio.Detection, c radio.Choices) *ConnHeaderSilent {
+	var missing []string
+	for _, id := range []string{c.HmIP, c.BidCos} {
+		if id == radio.ChoiceAuto || id == radio.BidCosNone || det.HasModule(id) || slices.Contains(missing, id) {
+			continue
+		}
+		missing = append(missing, id)
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	for _, m := range det.Modules {
+		if m.EmptyHeader() {
+			return &ConnHeaderSilent{Node: m.Node, Probe: m.Probe, Detail: m.Detail, Missing: missing}
+		}
+	}
+	return nil
+}
+
 // ConnHBRFETH is the configured HB-RF-ETH's state on the Interfaces page (openccu-lite B-272).
 type ConnHBRFETH struct {
 	Address string `json:"address"`
@@ -164,7 +225,8 @@ type ConnHBRFETH struct {
 }
 
 // connModules lists the detection's modules with the plan's roles (B-272). A role names its module
-// by node, the HM-CFG-USB-2 (no node) by serial.
+// by node, the HM-CFG-USB-2 (no node) by serial. The GPIO header's UART that nothing answered on
+// is no module and is left out (openccu-lite B-300).
 func connModules(det radio.Detection, p radio.Plan) []ConnModule {
 	out := []ConnModule{}
 	holds := func(r *radio.Role, m radio.Module) bool {
@@ -186,6 +248,9 @@ func connModules(det radio.Detection, p radio.Plan) []ConnModule {
 		}
 		if p.HmIPServerHmIP && holds(p.HmIP, m) {
 			c.Roles = append(c.Roles, "HmIP-RF")
+		}
+		if m.EmptyHeader() && len(c.Roles) == 0 {
+			continue
 		}
 		out = append(out, c)
 	}
@@ -234,6 +299,41 @@ type HmIPMoveInfo struct {
 	To       string `json:"to"`
 	LocalKey bool   `json:"local_key"`
 	Snapshot bool   `json:"snapshot"`
+	// SnapshotBlocked: a snapshot of From from a switch to local key mode is kept (openccu-lite
+	// B-301, maintainer 2026-10-03: the refusal stays) - the module-move snapshot cannot be taken
+	// until it is discarded; the page explains it and offers the discard before the attempt.
+	SnapshotBlocked bool `json:"snapshot_blocked,omitempty"`
+	// ToVersion is the target module's application firmware, when the detection read it.
+	ToVersion string `json:"to_version,omitempty"`
+	// Refused: the change is refused (openccu-lite B-289) - the target's firmware cannot take the
+	// network key and local key mode is off; Apply answers *HmIPFirmwareRefused.
+	Refused *HmIPFirmwareRefused `json:"refused,omitempty"`
+}
+
+// HmIPFirmwareRefused refuses moving HmIP-RF onto a module whose application firmware is below
+// radio.MinHmIPKeyExchangeVersion while local key mode is off (openccu-lite B-289, maintainer
+// 2026-10-02): hmipserver would move the access point without the network key, the module could
+// not send, and the key server refuses every exchange away from it. The way is the module's
+// firmware update first, or local key mode. The same refusal guards the device import and the
+// restore of a backup whose HmIP identity belongs to another module.
+type HmIPFirmwareRefused struct {
+	Module  string `json:"module"`
+	Version string `json:"version"`
+	Minimum string `json:"minimum"`
+}
+
+func (e *HmIPFirmwareRefused) Error() string {
+	return fmt.Sprintf("module %s runs application firmware %s: below %s it cannot take the HmIP network's key, so HmIP-RF cannot move onto it while local key mode is off - update the module's firmware first", e.Module, e.Version, e.Minimum)
+}
+
+// HmIPFirmwareRefusal is the refusal for moving an HmIP network onto a module with this firmware,
+// nil when the move may go ahead: in local key mode (offline, no key server), or with a version
+// that is not known or not below the minimum.
+func HmIPFirmwareRefusal(module, version string, localKey bool) *HmIPFirmwareRefused {
+	if localKey || !radio.HmIPKeyExchangeUnsupported(version) {
+		return nil
+	}
+	return &HmIPFirmwareRefused{Module: strings.ToUpper(module), Version: version, Minimum: radio.MinHmIPKeyExchangeVersion}
 }
 
 // RadioConnections is the service.
@@ -247,9 +347,18 @@ type RadioConnections struct {
 	// module (openccu-lite B-285: HmIPLocalKey.SnapshotBeforeMove); nil = no snapshot. An error
 	// fails the change before anything is written.
 	BeforeHmIPMove func(from string, prev radio.Choices) error
+	// HmIPIdentity says whether the module's HmIP identity files are on the system (task 318: a
+	// move away from a missing module takes the snapshot only when they are); nil = assume so.
+	HmIPIdentity func(sgtin string) bool
+	// LocalKeySnapshot says whether a snapshot of the module from a switch to local key mode is
+	// kept (HmIPLocalKey.LocalKeySnapshotKept, B-301); nil = none.
+	LocalKeySnapshot func(sgtin string) bool
 	// MoveBackOffer says whether a module-move snapshot is kept (HmIPLocalKey.MoveBackOffer); the
 	// status carries it for the page's "back to the previous module".
 	MoveBackOffer func() *HmIPMoveBack
+	// CounterGap is the open HmIP security counter gap after a way back (HmIPLocalKey.CounterGap,
+	// openccu-lite B-302); nil = none.
+	CounterGap func() *HmIPCounterGap
 	// BidCosDevices lists rfd's paired devices; nil = not available.
 	BidCosDevices func(ctx context.Context) ([]BidCosDevice, error)
 	// Run executes commands for radio.Load (uname, hostname); nil = exec.
@@ -367,6 +476,7 @@ func (s *RadioConnections) Status() RadioConnStatus {
 		st.Available = true
 		st.Options = radio.ChoiceOptions(det)
 		st.Modules = connModules(det, p)
+		st.HeaderSilent = headerSilent(det, st.Choices)
 		cp := connPlan(p)
 		st.Plan, st.Mode = &cp, p.Mode
 		st.HmIPFatal = radio.ReadHmIPFatal(string(s.Root))
@@ -375,6 +485,9 @@ func (s *RadioConnections) Status() RadioConnStatus {
 	s.mu.Lock()
 	st.Running, st.Last = copyApply(s.running), copyApply(s.last)
 	// openccu-lite B-285: the way back after a module move, while its snapshot is kept
+	if s.CounterGap != nil {
+		st.HmIPCounterGap = s.CounterGap()
+	}
 	if s.MoveBackOffer != nil && st.Running == nil {
 		if st.HmIPMoveBack = s.MoveBackOffer(); st.HmIPMoveBack != nil {
 			st.Hostname = s.Root.Hostname()
@@ -475,11 +588,24 @@ func (s *RadioConnections) Preview(ctx context.Context, c radio.Choices) (ConnPr
 	if pv.Changed {
 		pv.Restarts = append(pv.Restarts, radioUnits...)
 	}
-	// openccu-lite B-285: HmIP-RF leaves one module for another
-	if cp.HmIP != nil && pv.Plan.HmIP != nil && cp.HmIP.SGTIN != "" && pv.Plan.HmIP.SGTIN != "" && !strings.EqualFold(cp.HmIP.SGTIN, pv.Plan.HmIP.SGTIN) {
+	// openccu-lite B-285: HmIP-RF leaves one module for another - task 318: or leaves the missing
+	// module it was kept on, which holds the HmIP network
+	from := ""
+	switch {
+	case cp.HmIP != nil:
+		from = cp.HmIP.SGTIN
+	case cp.HmIPPin != "" && strings.EqualFold(cp.MissingHmIP, cp.HmIPPin):
+		from = cp.HmIPPin
+	}
+	if from != "" && pv.Plan.HmIP != nil && pv.Plan.HmIP.SGTIN != "" && !strings.EqualFold(from, pv.Plan.HmIP.SGTIN) {
 		hu, _ := s.read(hmipUserConf)
 		local := radio.ReadLocalKey(hu).Enabled()
-		pv.HmIPMove = &HmIPMoveInfo{From: strings.ToUpper(cp.HmIP.SGTIN), To: strings.ToUpper(pv.Plan.HmIP.SGTIN), LocalKey: local, Snapshot: !local && s.BeforeHmIPMove != nil}
+		// the snapshot needs the identity files of the module left; a missing module's that are not
+		// on the system (never written) leave nothing to keep
+		snap := !local && s.BeforeHmIPMove != nil && (cp.HmIP != nil || s.HmIPIdentity == nil || s.HmIPIdentity(from))
+		pv.HmIPMove = &HmIPMoveInfo{From: strings.ToUpper(from), To: strings.ToUpper(pv.Plan.HmIP.SGTIN), LocalKey: local, Snapshot: snap,
+			ToVersion: pv.Plan.HmIP.Version, Refused: HmIPFirmwareRefusal(pv.Plan.HmIP.SGTIN, pv.Plan.HmIP.Version, local)}
+		pv.HmIPMove.SnapshotBlocked = snap && s.LocalKeySnapshot != nil && s.LocalKeySnapshot(from)
 	}
 	pv.BidCosLost = cp.localBidCos() && !pv.Plan.localBidCos()
 	if pv.BidCosLost && s.BidCosDevices != nil {
@@ -495,8 +621,8 @@ func (s *RadioConnections) Preview(ctx context.Context, c radio.Choices) (ConnPr
 }
 
 // Apply writes the choices and re-plans the stack in the background. A change that takes the
-// local BidCos-RF radio away while devices are paired needs confirm (a *ConfirmRequired
-// otherwise).
+// local BidCos-RF radio away while devices are paired, or that moves HmIP-RF to another module
+// (D-120), needs confirm (a *ConfirmRequired otherwise).
 func (s *RadioConnections) Apply(ctx context.Context, c radio.Choices, confirm bool) (*ConnApply, error) {
 	if s.Firmware != nil && s.Firmware.Status().Running != nil {
 		return nil, ErrConnApplyRunning
@@ -505,8 +631,21 @@ func (s *RadioConnections) Apply(ctx context.Context, c radio.Choices, confirm b
 	if err != nil {
 		return nil, err
 	}
+	// openccu-lite B-289: not onto a module that cannot take the network key
+	if pv.HmIPMove != nil && pv.HmIPMove.Refused != nil {
+		return nil, pv.HmIPMove.Refused
+	}
 	if pv.BidCosLost && !confirm && (len(pv.Devices) > 0 || pv.DevicesError != "") {
-		return nil, &ConfirmRequired{Devices: pv.Devices}
+		return nil, &ConfirmRequired{Devices: pv.Devices, HmIPMove: pv.HmIPMove}
+	}
+	// openccu-lite B-301: the module-move snapshot is blocked by a kept local-key snapshot - refused
+	// before anything starts, with the module named for the discard
+	if pv.HmIPMove != nil && pv.HmIPMove.SnapshotBlocked {
+		return nil, &SnapshotBlocked{SGTIN: pv.HmIPMove.From}
+	}
+	// openccu-lite task 317 (D-120): moving HmIP-RF rewrites its identity files - on the user's word
+	if pv.HmIPMove != nil && !confirm {
+		return nil, &ConfirmRequired{Devices: []BidCosDevice{}, HmIPMove: pv.HmIPMove}
 	}
 	s.mu.Lock()
 	if s.running != nil {
@@ -630,11 +769,12 @@ func (s *RadioConnections) finish(a *ConnApply, err error) {
 	if err != nil {
 		a.Error = err.Error()
 	}
-	s.running, s.last = nil, a
-	last := copyApply(a)
-	s.mu.Unlock()
-	_ = writeJSONFile(filepath.Join(s.StateDir, "last.json"), last)
+	// the files settle before the change counts as finished: a reader that sees no running change
+	// finds no running.json, and the next change's running.json is never removed by this one
+	_ = writeJSONFile(filepath.Join(s.StateDir, "last.json"), copyApply(a))
 	_ = os.Remove(filepath.Join(s.StateDir, "running.json"))
+	s.running, s.last = nil, a
+	s.mu.Unlock()
 	if err != nil {
 		s.log().Warn("radio connections: the change failed", "err", err)
 	}

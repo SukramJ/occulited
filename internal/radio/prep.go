@@ -23,7 +23,8 @@ import (
 //	         leave root-owned files behind
 //	ready    ExecStartPost: the daemon reports itself started (the status file carries its pid;
 //	         hmipserver touches HMServerStarted), and the nodes multimacd created get their groups
-//	stopped  ExecStopPost: what follows the kill (hmipserver's diagram data back to the stick)
+//	stopped  ExecStopPost: what follows the kill (hmipserver's diagram data back to the stick, the
+//	         last good copy of its metadata and link stores)
 //
 // Whether the daemon runs at all is the plan's (the unit's ConditionPathExists on the marker Run
 // wrote); a missing node or file here is a failure the unit retries, not a skip.
@@ -114,6 +115,9 @@ func Prep(ctx context.Context, d Detector, daemon string, p Plan, logf func(stri
 		// sgtin.map are 0640 and read through the helper, tasks 149 and 154).
 		Own(d.path(cfg+"/crRFD"), "hmipserver", "hmipserver", 0o750)
 		RestrictTree(d.path(cfg+"/crRFD/data"), 0o700, 0o600)
+		// openccu-lite B-298: an empty or broken metadata or link store is repaired from its last
+		// good copy before the server reads it, and a good one is copied
+		guardHMIPStores(d, "prep", logf)
 		// the HmIP address: the server writes a random one into this file when it has none, in
 		// place - its unit opens the file, not /etc/config, and a missing bind source is skipped,
 		// so the file exists from the start (B-266); the plan reads an empty file as none. 0644:
@@ -318,6 +322,8 @@ func Stopped(ctx context.Context, d Detector, daemon string, logf func(string, .
 	_ = os.Remove(d.path("/var/status/HMServerStarted"))
 	// openccu-lite task 301: an adapter exchange the ready step left open is closed from the files
 	exchangeAfterStop(ctx, d, logf)
+	// openccu-lite B-298: the server is gone, so its stores hold still - the last good copy
+	guardHMIPStores(d, "stopped", logf)
 	stick, measure := d.path("/media/usb0/measurement"), d.path(DiagramPath)
 	if isDir(stick) && isDir(measure) {
 		// B-146: with rsync, as upstream's S62HMServer mirrored. The image carries it again

@@ -811,15 +811,6 @@ func (s *RadioFirmware) run(a *FlashAttempt, cm coproModule) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	err := s.attempt(ctx, a, cm)
-	s.mu.Lock()
-	now := s.now()
-	a.Finished = &now
-	a.OK = err == nil
-	if err != nil {
-		a.Error = err.Error()
-	}
-	s.running, s.last = nil, a
-	s.mu.Unlock()
 	if err != nil {
 		s.fail(a, "failed: "+err.Error())
 		s.log().Warn("radio firmware: the flash failed", "module", a.Module, "file", a.File, "run_id", a.RunID, "err", err)
@@ -827,9 +818,19 @@ func (s *RadioFirmware) run(a *FlashAttempt, cm coproModule) {
 		s.line(a, "done: the coprocessor runs "+a.After)
 		s.log().Info("radio firmware: flashed", "module", a.Module, "file", a.File, "before", a.Before, "after", a.After, "run_id", a.RunID)
 	}
+	// the files settle before the flash counts as finished: a reader that sees no running flash
+	// finds its last.json and no running.json (TestRadioFirmwareNodeGone's temporary directory was
+	// still being written when the test ended, on Gitea's runner)
 	s.mu.Lock()
+	now := s.now()
+	a.Finished = &now
+	a.OK = err == nil
+	if err != nil {
+		a.Error = err.Error()
+	}
 	s.saveLast(a)
 	_ = os.Remove(filepath.Join(s.StateDir, "running.json"))
+	s.running, s.last = nil, a
 	s.mu.Unlock()
 }
 

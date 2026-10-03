@@ -36,7 +36,8 @@ test('enter the network key, the check, the override, back to eQ-3 and discard t
     await expect(dialog).toContainText('HmIP-RF restarts at once');
     await dialog.getByRole('button', {name: 'Switch', exact: true}).click();
     await expect(dialog).toBeHidden();
-    expect(JSON.parse(puts[0]!)).toEqual({mode: 'known', network_key: '0011 2233 4455 6677 8899 aabb ccdd eeff', backbone_key: ''});
+    // task 317 (D-120): the identity files change - the danger dialog, and confirm in the request
+    expect(JSON.parse(puts[0]!)).toEqual({mode: 'known', network_key: '0011 2233 4455 6677 8899 aabb ccdd eeff', backbone_key: '', confirm: true});
     await expect(page.locator('[data-state="on"]')).toContainText('the HmIP network key is kept on this system (entered).');
     await expect(page.locator('[data-state="on"]')).toContainText("Radio module swaps and pairing work without eQ-3's key server; a device is paired with the key from its QR code.");
     await expect(page.locator('[data-check="ok"]')).toHaveText('All 3 HmIP devices answered after the switch.');
@@ -50,10 +51,25 @@ test('enter the network key, the check, the override, back to eQ-3 and discard t
     await page.getByLabel('Allow the key server for the next pairing').uncheck();
     await expect(page.locator('[data-state="on"]')).toContainText("Radio module swaps and pairing work without eQ-3's key server; a device is paired with the key from its QR code.");
 
-    // back to eQ-3's key server from the snapshot; the snapshot stays until it is discarded
+    // back to eQ-3's key server from the snapshot - task 317 (D-120): the files in use are copied
+    // first, the host name typed; a wrong one changes nothing. The snapshot stays until discarded
+    const dels: string[] = [];
+    page.on('request', (r) => {
+        if (r.method() === 'DELETE' && r.url().endsWith('/radio/hmip/local-key')) dels.push(r.postData() ?? '');
+    });
     await page.getByRole('button', {name: "Back to eQ-3's key server"}).click();
     await expect(dialog).toContainText('is put back, and the key lines leave hmip_user.conf');
+    await expect(dialog).toContainText('The identity files in use now are copied aside on the system first.');
+    await expect(dialog).toContainText('Type the host name openccu to confirm.');
+    await expect(dialog.getByLabel('Host name')).toBeFocused();
+    await dialog.getByLabel('Host name').fill('other');
     await dialog.getByRole('button', {name: 'Go back'}).click();
+    await expect(page.locator('.ol-notice, .ol-warn').filter({hasText: "The name typed is not this system's host name; nothing happened."})).toBeVisible();
+    expect(dels).toEqual([]);
+    await page.getByRole('button', {name: "Back to eQ-3's key server"}).click();
+    await dialog.getByLabel('Host name').fill('OpenCCU');
+    await dialog.getByRole('button', {name: 'Go back'}).click();
+    await expect.poll(() => dels.map((d) => JSON.parse(d))).toEqual([{confirm: true, hostname: 'OpenCCU'}]);
     await expect(page.locator('[data-state="off"]')).toBeVisible();
     await expect(page.locator('.lk-snapshots li')).toHaveCount(1);
     await page.locator('.lk-snapshots li').getByRole('button', {name: 'Discard'}).click();
@@ -62,7 +78,7 @@ test('enter the network key, the check, the override, back to eQ-3 and discard t
     await expect(page.locator('.lk-snapshots li')).toHaveCount(0);
 });
 
-test('generate: the dialog warns of the re-pairing and the cancel has the focus', async ({page, baseURL}) => {
+test('generate: the dialog warns of the re-pairing and asks for the host name', async ({page, baseURL}) => {
     await own(page, baseURL);
     await page.goto('/system/keys');
     await page.getByRole('button', {name: 'Switch to local key mode'}).first().click();
@@ -71,7 +87,10 @@ test('generate: the dialog warns of the re-pairing and the cancel has the focus'
     await page.locator('.lk-form').getByRole('button', {name: 'Switch to local key mode'}).click();
     const dialog = page.getByRole('dialog');
     await expect(dialog).toContainText('Every HmIP device has to be taught in again once');
-    await expect(dialog.getByRole('button', {name: 'Cancel'})).toBeFocused();
+    // task 317 (D-120): devices are paired - the host name typed
+    await expect(dialog).toContainText('Type the host name openccu to confirm.');
+    await expect(dialog.getByLabel('Host name')).toBeFocused();
+    await dialog.getByLabel('Host name').fill('openccu');
     await dialog.getByRole('button', {name: 'Switch', exact: true}).click();
     await expect(page.locator('[data-state="on"]')).toContainText('(generated on this system)');
 });
@@ -134,9 +153,19 @@ test('the welcome page: a step on an empty HmIP network, an explicit choice befo
     await expect(page.locator('[data-notice="lk-backup"]')).toContainText('protecting the backups becomes crucial');
     await expect(page.locator('[data-notice="lk-backup"]').getByRole('link', {name: 'Backup'})).toHaveAttribute('href', '/system/backup');
     await expect(done).toBeEnabled();
+    // task 317 (D-120): the identity files are written under the new key - asked in red first;
+    // Cancel stays on the page and sends nothing
     await done.click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toContainText('Generate a local key now?');
+    await expect(dialog).toContainText('HmIP-RF writes its identity files under it and restarts at once.');
+    await dialog.getByRole('button', {name: 'Cancel'}).click();
+    await expect(page).toHaveURL(/\/welcome$/);
+    expect(puts).toEqual([]);
+    await done.click();
+    await dialog.getByRole('button', {name: 'Generate', exact: true}).click();
     await expect(page).toHaveURL(/\/$/);
-    expect(puts.map((p) => JSON.parse(p))).toEqual([{mode: 'generate'}]);
+    expect(puts.map((p) => JSON.parse(p))).toEqual([{mode: 'generate', confirm: true}]);
 });
 
 test('the welcome page without the step: HmIP devices are paired already', async ({page, baseURL}) => {

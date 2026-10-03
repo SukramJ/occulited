@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -42,9 +43,56 @@ const (
 	// ExchangeModeLocalSwap: hmipserver swapped the access point locally without asking the key
 	// server, because the module's application firmware cannot take the network key over
 	// ("Could not exchange network key, adapter version not supported"; openccu-lite B-289) - the
-	// module then holds no network key and cannot send.
+	// module then holds no network key and cannot send. With local key mode off this is a failed
+	// move (ExchangeRejected with ExchangeCauseAdapterVersion), whatever hmipserver says after it.
 	ExchangeModeLocalSwap = "local-swap"
 )
+
+// ExchangeCauseAdapterVersion is the cause of a move that failed because the target module's
+// application firmware cannot take the network key (openccu-lite B-289); the key server was not
+// asked. The other causes are the rejection marker's (unreachable, refused).
+const ExchangeCauseAdapterVersion = "adapter-version"
+
+// MinHmIPKeyExchangeVersion is the oldest application firmware of an HmIP module that takes an
+// HmIP network's key over in an adapter exchange through eQ-3's key server (openccu-lite B-289):
+// below it hmipserver moves the access point without the key ("adapter version not supported"),
+// and the module cannot send. An HmIP-RFUSB on 1.x is such a module; the radio firmware update
+// brings it to a version that can.
+const MinHmIPKeyExchangeVersion = "2.8.0"
+
+// HmIPKeyExchangeUnsupported says whether a module with this application firmware version cannot
+// take an HmIP network's key over (below MinHmIPKeyExchangeVersion). A version that is not known
+// or not a dotted number is not judged: false.
+func HmIPKeyExchangeUnsupported(version string) bool {
+	v, ok := parseDotted(version)
+	if !ok {
+		return false
+	}
+	floor, _ := parseDotted(MinHmIPKeyExchangeVersion)
+	for i := range floor {
+		if v[i] != floor[i] {
+			return v[i] < floor[i]
+		}
+	}
+	return false
+}
+
+// parseDotted reads "major.minor[.patch]" into three numbers.
+func parseDotted(s string) ([3]int, bool) {
+	var out [3]int
+	parts := strings.Split(strings.TrimSpace(s), ".")
+	if len(parts) < 2 || len(parts) > 3 {
+		return out, false
+	}
+	for i, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 0 {
+			return out, false
+		}
+		out[i] = n
+	}
+	return out, true
+}
 
 // How it went.
 const (
@@ -64,11 +112,15 @@ type HmIPExchange struct {
 	To   string `json:"to"`
 	// Address is the HmIP network's address (hmip_address.conf) at the start, when known.
 	Address string `json:"address,omitempty"`
+	// ToVersion is the application firmware of the module in use at the start, when known
+	// (openccu-lite B-289: below MinHmIPKeyExchangeVersion it cannot take the network key).
+	ToVersion string `json:"to_version,omitempty"`
 	// Mode: key-server, local-key or local-swap; empty when the record was closed without
 	// hmipserver's output and local key mode was off.
 	Mode    string `json:"mode,omitempty"`
 	Outcome string `json:"outcome"`
-	// Cause: the rejection's cause (unreachable, refused) when rejected.
+	// Cause: the rejection's cause when rejected - unreachable or refused (the key server's), or
+	// adapter-version (a local swap onto a module that cannot take the key, B-289).
 	Cause string `json:"cause,omitempty"`
 	// Line is hmipserver's own word on the exchange, when it logged one.
 	Line string `json:"line,omitempty"`
@@ -81,6 +133,8 @@ type exchangePending struct {
 	To       string    `json:"to"`
 	Address  string    `json:"address,omitempty"`
 	LocalKey bool      `json:"local_key"`
+	// ToVersion is the module in use's application firmware (the plan's), when known.
+	ToVersion string `json:"to_version,omitempty"`
 }
 
 // exchangeNeedles are hmipserver's lines about the exchange, the ones the record quotes.
@@ -137,12 +191,15 @@ func exchangeBeforeStart(ctx context.Context, d Detector, p Plan, logf func(stri
 		return
 	}
 	x := exchangePending{At: d.now(), From: strings.Join(from, ","), To: to, Address: p.HmIPAddressActive,
-		LocalKey: ReadLocalKey(readFile(d.path("/etc/config/crRFD/hmip_user.conf"))).Enabled()}
+		LocalKey: ReadLocalKey(readFile(d.path("/etc/config/crRFD/hmip_user.conf"))).Enabled(), ToVersion: p.HmIP.Version}
 	if err := writeJSON(shadowPath(d.Root, exchangePendingFile), x); err != nil {
 		logf("prep hmipserver: the adapter exchange %s -> %s could not be noted: %v", x.From, x.To, err)
 		return
 	}
 	logf("prep hmipserver: this start moves the HmIP network from %s onto %s (local key mode %v)", x.From, x.To, x.LocalKey)
+	if !x.LocalKey && HmIPKeyExchangeUnsupported(x.ToVersion) {
+		logf("prep hmipserver: %s runs application firmware %s, below %s: it cannot take the network key, the move will fail", x.To, x.ToVersion, MinHmIPKeyExchangeVersion)
+	}
 }
 
 // exchangeAfterStart is the ready step's half: with a known fatal error the entry is written at
@@ -165,14 +222,19 @@ func exchangeAfterStop(ctx context.Context, d Detector, logf func(string, ...any
 	closeExchange(d, *x, journalSince(ctx, d, x.At), nil, true, logf)
 }
 
-// closeExchange decides the outcome and writes the entry. Rejected: the marker's cause. Accepted:
-// the module in use has its identity file and the previous module's is gone (hmipserver rewrites
-// the files when the exchange succeeds). Neither: unknown when final, else the note stays.
+// closeExchange decides the outcome and writes the entry. Rejected: the marker's cause, or a local
+// swap with local key mode off (B-289: the module took the access point without the network key -
+// hmipserver calls that a success, but the network is stranded on a module that cannot send).
+// Accepted: the module in use has its identity file and the previous module's is gone (hmipserver
+// rewrites the files when the exchange succeeds). Neither: unknown when final, else the note stays.
 func closeExchange(d Detector, x exchangePending, output string, fatal *HmIPFatal, final bool, logf func(string, ...any)) {
-	rec := HmIPExchange{At: d.now(), From: x.From, To: x.To, Address: x.Address}
+	rec := HmIPExchange{At: d.now(), From: x.From, To: x.To, Address: x.Address, ToVersion: x.ToVersion}
+	localSwap := strings.Contains(output, localSwapNeedle)
 	switch {
 	case fatal != nil && fatal.Code == "adapter-exchange-rejected":
 		rec.Outcome, rec.Cause = ExchangeRejected, fatal.Cause
+	case localSwap && !x.LocalKey:
+		rec.Outcome, rec.Cause = ExchangeRejected, ExchangeCauseAdapterVersion
 	case exchangeShows(d, x):
 		rec.Outcome = ExchangeAccepted
 	case final:
@@ -183,12 +245,16 @@ func closeExchange(d Detector, x exchangePending, output string, fatal *HmIPFata
 	switch {
 	case x.LocalKey:
 		rec.Mode = ExchangeModeLocalKey
-	case strings.Contains(output, localSwapNeedle):
+	case localSwap:
 		rec.Mode = ExchangeModeLocalSwap
 	case output != "" || rec.Outcome == ExchangeRejected:
 		rec.Mode = ExchangeModeKeyServer
 	}
 	rec.Line = exchangeLine(output)
+	if rec.Cause == ExchangeCauseAdapterVersion {
+		// hmipserver's "Adapter exchange successful." after it is not the word on this move
+		rec.Line = lineWith(output, "Could not exchange network key")
+	}
 	if err := appendExchange(d.Root, rec); err != nil {
 		logf("hmipserver: the adapter exchange %s -> %s (%s) could not be recorded: %v", rec.From, rec.To, rec.Outcome, err)
 		return
@@ -222,6 +288,17 @@ func exchangeLine(output string) string {
 			if i := strings.Index(l, n); i >= 0 {
 				line = strings.TrimSpace(l[i:])
 			}
+		}
+	}
+	return line
+}
+
+// lineWith is the last line of output with needle, from the needle on.
+func lineWith(output, needle string) string {
+	line := ""
+	for _, l := range strings.Split(output, "\n") {
+		if i := strings.Index(l, needle); i >= 0 {
+			line = strings.TrimSpace(l[i:])
 		}
 	}
 	return line

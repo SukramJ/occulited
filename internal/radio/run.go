@@ -208,6 +208,12 @@ func write(ctx context.Context, root string, d Detector, det Detection, in Input
 		}
 	}
 	sort.Strings(r.Enabled)
+	// openccu-lite task 318: the module HmIP-RF runs on is kept for the next plans on Automatic
+	if ok, err := recordHmIPPin(root, p, det.BoardMAC, time.Now()); err != nil {
+		logf("run: the HmIP module could not be recorded: %v", err)
+	} else if ok {
+		logf("run: HmIP-RF runs on module %s; on Automatic it stays there", p.HmIP.SGTIN)
+	}
 	logf("run: detection %s; %s enabled (multimacd %v, rfd %v, hmipserver %v on %s, hs485d %v, hmlangw %v); %d files written",
 		det.Duration.Round(10*time.Millisecond), strings.Join(r.Enabled, " "), p.Multimacd.Run, p.RFD.Run, p.HmIPServer.Run, p.HmIPServer.Node, p.HS485D.Run, p.Hmlangw.Run, len(r.Written))
 	return r, nil

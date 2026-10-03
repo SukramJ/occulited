@@ -71,6 +71,21 @@ type Module struct {
 // OK: the probe answered.
 func (m Module) OK() bool { return m.Probe == "ok" }
 
+// Header: the node is the board's own UART for a module on the GPIO header - the raw-uart node the
+// Pi images create whether or not a module is fitted (task 138), or the ttyAMA0 fallback.
+func (m Module) Header() bool {
+	return m.GPIO || (m.Name == "ttyAMA0" && m.DeviceType == "" && !m.USBAdapter)
+}
+
+// EmptyHeader: the header's UART, and nothing answered on it - the probe hit its limit (D-92: an
+// empty header keeps detect_radio_module waiting) or the tool found no module. On the UART that is
+// what a header without a module looks like, so it is no module (openccu-lite B-300): the
+// Interfaces page shows no card for it, the detection keeps it for the journal. A module that
+// answers wrongly is "error" and stays one; a USB or HB-RF node exists only with its device.
+func (m Module) EmptyHeader() bool {
+	return m.Header() && (m.Probe == "timeout" || m.Probe == "none")
+}
+
 // Detection is what the box has.
 type Detection struct {
 	Modules []Module `json:"modules"`
@@ -91,6 +106,16 @@ type Detection struct {
 	// BoardMAC is the fallback board serial's source: eth0's MAC, or the first physical
 	// interface's.
 	BoardMAC string `json:"board_mac,omitempty"`
+}
+
+// HasModule: a module that answered carries the identity (its serial or its SGTIN, case ignored).
+func (d Detection) HasModule(id string) bool {
+	for _, m := range d.Modules {
+		if m.OK() && m.matches(id) {
+			return true
+		}
+	}
+	return false
 }
 
 // Found: the scan found a module worth a role, or the adapter - S47's condition for skipping the
