@@ -1670,6 +1670,13 @@ func (s *Server) do(ctx context.Context, req request) response {
 			return refuse("led: " + err.Error())
 		}
 		return fail(ops.WriteLEDs(req.Path, req.LEDs))
+	case opLEDModule:
+		// one of LEDModules and nothing else
+		if !reflect.DeepEqual(req, request{Op: req.Op, Name: req.Name}) || !slices.Contains(LEDModules, req.Name) {
+			s.log("helper: refused an LED module request %q", req.Name)
+			return refuse("led-module: " + req.Name)
+		}
+		return fail(ops.LoadLEDModule(ctx, req.Name))
 	case opLogLevel:
 		// a level's name and nothing else
 		if req.Path != "" || len(req.Args) > 0 || len(req.Data) > 0 || len(req.Stdin) > 0 || len(req.Env) > 0 || req.Src != "" || req.Dst != "" {
@@ -1690,6 +1697,8 @@ func (s *Server) do(ctx context.Context, req request) response {
 		return s.listDir(req)
 	case opAddonFragment:
 		return s.addonFragment(req)
+	case opAddonImage:
+		return s.addonImage(req)
 	case opNetMount, opNetUnmount, opNetMountRemove, opWriteTest:
 		return s.netMount(ctx, req)
 	case opShareList:

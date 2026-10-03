@@ -78,9 +78,12 @@ test('the icon is the frontend\'s favicon, fetched when the dropdown first opens
     await expect.poll(() => page.evaluate(() => localStorage.getItem('ol.favicon.mh@3.0.0'))).toBe('');
     await expect(row(page, 'Homematic-Manager').locator('.ol-addonmono')).toHaveText('H');
     await expect(row(page, 'Homematic-Manager').locator('img')).toHaveCount(0);
-    // no frontend, no fetch: the letter, and the logo from the Info: line is not used any more
-    await expect(row(page, 'Mosquitto').locator('.ol-addonmono')).toHaveText('M');
-    await expect(row(page, 'Mosquitto').locator('img')).toHaveCount(0);
+    // no frontend, no fetch: the logo from the Info: line is not used any more - the icon is the
+    // manifest's (task 100: Mosquitto declares a logo, which stands in for the icon), never a fetch
+    // of an addon page; hm2mqtt declares none and has no frontend: the letter
+    await expect(row(page, 'Mosquitto').locator('.ol-addonicon img')).toHaveAttribute('src', /^\/api\/system\/v1\/addons\/mosquitto\/images\/logo\?v=/);
+    await expect(row(page, 'hm2mqtt').locator('.ol-addonmono')).toHaveText('H');
+    await expect(row(page, 'hm2mqtt').locator('img')).toHaveCount(0);
     expect(await page.evaluate(() => localStorage.getItem('ol.favicon.redmatic@9.4.0'))).toBe('/addons/red/favicon.ico');
     expect(frontends.filter((p) => p === '/addons/red/')).toHaveLength(1);
 

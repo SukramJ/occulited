@@ -102,6 +102,50 @@ A `<asset>.sha256` beside the asset is checked when it exists; without one the d
 | --- | --- |
 | `icon`, `icon_dark` | A square icon, SVG preferred (else PNG, at least 64×64), as a **path relative to the package root** (`mosquitto/www/icon.svg`); `_dark` for dark backgrounds. Used in the addon menu, the tab bar, the Services rows and the Addons page. |
 | `logo`, `logo_dark` | A wide logo (height about 48–96 px), the same way. Used on the addon's card. If only one of icon and logo is given, the other falls back to it. |
+
+**The images** (openccu-lite task 100). The system serves them itself, from its own origin, and shows them through `<img>`
+alone - never from the addon's pages, never inlined:
+
+- **Installed:** kept by the install (occulited task 11). The install reads every declared image out of the
+  package archive at its **path from the package root** - the archive's root, where `openccu-lite.json` lies - before
+  `update_script` runs, and keeps it root-owned beside the stored manifest. So `www/icon.svg` is the archive's
+  `www/icon.svg`, wherever `update_script` copies it afterwards (OpenCCU-Loom's goes to the CCU's addon web tree, not
+  into `/usr/local/addons/openccu-loom`). Only a regular file is taken (a link is not followed), at most 256 KiB, an
+  image by its content; a declared image the package does not carry is named in the install log and the shell shows
+  its fallback - the install goes on. The copies follow the package: an update keeps the new package's images and
+  drops the ones its manifest no longer declares, a package without a manifest (the catalogue's word standing in)
+  and an uninstall drop them.
+  - **An addon installed before** the system kept copies, or one whose manifest is the catalogue's, has its images
+    read out of its tree as before: the path's first segment is taken as the directory the package carries the
+    addon in, the one `update_script` copies to `/usr/local/addons/<id>` (`mosquitto/www/icon.svg` is read at
+    `/usr/local/addons/mosquitto/www/icon.svg`), through `os.Root` on the tree, and for a confined addon's closed
+    tree through the privilege helper, which resolves the kind from the stored manifest and answers nothing but a
+    declared image. A reinstall or the next update moves such an addon to the kept copies.
+- **In the catalogue, before an install:** the user's check fetches them from the addon's repository at the tag the
+  manifest was read at, **beside the manifest**: the manifest's directory in the repository is taken as the package
+  root, so a manifest at `addon_files/openccu-lite.json` that declares `mosquitto/www/icon.svg` has the catalogue read
+  `addon_files/mosquitto/www/icon.svg`. Keep the images in the repository where the package takes them from - a file
+  the build copies in from elsewhere is not there for the catalogue.
+- **The rules,** the same everywhere: at most 256 KiB; the type comes from the **content** (SVG, PNG, JPEG, GIF or
+  WebP - an HTML file named `.svg` is refused), never from the name; every answer carries `X-Content-Type-Options:
+  nosniff` and `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'`, so an SVG with a script or
+  an external reference is a picture and nothing more.
+- **Light and dark:** the shell shows the `_dark` variant in dark mode and the plain one otherwise; a missing dark
+  variant uses the light one and a missing light one the dark one. Declare a dark variant only where the light one
+  does not work on a dark background. The fallback order in the shell is the manifest's image → the frontend's
+  favicon (the addon menu and the tab bar) or the logo of the `Info:` line (the Addons page) → the first letter of
+  the name.
+
+```json
+"ui": {
+  "icon": "hmm/www/icon.svg",
+  "icon_dark": "hmm/www/icon-dark.svg",
+  "logo": "hmm/www/logo.svg",
+  "logo_dark": "hmm/www/logo-dark.svg",
+  "settings_url": "/addons/hmm/settings.cgi?cmd=config",
+  "session_header": true
+}
+```
 | `settings_url` | The addon's settings page **where its `Config-Url` is not it**: a path under `/addons/`, with a query. Homematic Manager's `Config-Url` is the CCU's button into the app, its settings page is `/addons/hmm/settings.cgi?cmd=config`. Without it the `Config-Url` is the settings page. |
 | `session_header` | `true`: **this version** reads the gate's `X-Occulite-Session` everywhere the shell opens it — its frontend and its settings page — so the shell leaves `?sid=@…@` off those URLs. The manifest is per version, so this is a boolean, not a "since" version. Keep accepting `?sid=` for the CCU3 and OpenCCU. |
 | `own_updater` | `true`: the addon still carries an update mechanism of its own, which the system's updates bypass; the page notes it. Addons should not ship one, or hide it on openccu-lite (`grep -q '^LITE=' /VERSION \|\| [ -x /usr/bin/occulited ]`). |

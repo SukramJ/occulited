@@ -54,9 +54,11 @@ func TestRepositoryCatalogue(t *testing.T) {
 		t.Fatalf("%d entries", len(v.Addons))
 	}
 	// the maintainer's word (2026-09-25): these are marked untested, the rest carry no label
+	// (OpenCCU-Loom lost the label with its own manifest, occulited B-39, 2026-10-03)
 	untested := map[string]bool{
-		"https://github.com/jp112sdl/JP-HB-Devices-addon": true, "https://github.com/SukramJ/openccu-loom": true,
-		"https://github.com/mdzio/ccu-jack": true, "https://github.com/bloop16/homekit-ccu": true,
+		"https://github.com/jp112sdl/JP-HB-Devices-addon": true,
+		"https://github.com/mdzio/ccu-jack":               true,
+		"https://github.com/bloop16/homekit-ccu":          true,
 	}
 	adapters := 0
 	for _, it := range v.Addons {
@@ -74,11 +76,34 @@ func TestRepositoryCatalogue(t *testing.T) {
 			t.Errorf("%s: the bundled adapter is not known: %+v", it.Git, it.Manifest)
 		}
 	}
-	if adapters != 4 {
+	if adapters != 3 {
 		t.Errorf("%d adapters", adapters)
 	}
+	// B-39: OpenCCU-Loom ships its own manifest and the entry reads it from its repository
+	for _, it := range v.Addons {
+		if it.Git == "https://github.com/SukramJ/openccu-loom" && (it.ManifestPath != "packaging/ccu-addon/ccu/openccu-lite.json" || it.Adapter || it.Untested) {
+			t.Errorf("OpenCCU-Loom: %+v", it)
+		}
+	}
+	// every adapter manifest the image carries is one an entry names, and every adapter an entry
+	// names is there: a stale file would still count as ReGa-free at the first boot
+	names, _ := filepath.Glob(filepath.Join(s.BundledManifests, "*.json"))
+	named := map[string]bool{}
+	for _, it := range v.Addons {
+		if it.Adapter {
+			named[filepath.Base(it.ManifestPath)] = true
+		}
+	}
+	if len(names) != len(named) {
+		t.Errorf("%d adapter files, %d named by the catalogue", len(names), len(named))
+	}
+	for _, n := range names {
+		if !named[filepath.Base(n)] {
+			t.Errorf("%s: no catalogue entry names it", n)
+		}
+	}
 	// homekit-ccu declares requires.rega: it is no exception to the ReGa scan
-	if ids := RegaFreeAdapterIDs(s.BundledManifests); strings.Join(ids, ",") != "ccu-jack,jp-hb-devices-addon,openccu-loom" {
+	if ids := RegaFreeAdapterIDs(s.BundledManifests); strings.Join(ids, ",") != "ccu-jack,jp-hb-devices-addon" {
 		t.Errorf("%v", ids)
 	}
 	if s.Manifest("jp-hb-devices-addon") == nil || s.Manifest("nope") != nil {

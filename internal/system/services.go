@@ -121,6 +121,9 @@ type Service struct {
 	MemoryBytes int64   `json:"memory_bytes,omitempty"`
 	CPUSeconds  float64 `json:"cpu_seconds,omitempty"`
 	Since       string  `json:"since,omitempty"`
+	// Images as on Addon (openccu-lite task 100), for a generated addon unit whose addon declares
+	// them. Set per request by GET /services.
+	Images map[string]string `json:"images,omitempty"`
 }
 
 // coreServices are what the Services page shows by default: the Homematic daemons, occulited, and
@@ -327,6 +330,10 @@ type Addon struct {
 	PayloadMissing     bool     `json:"payload_missing,omitempty"`
 	PayloadMissingDirs []string `json:"payload_missing_dirs,omitempty"`
 	ReinstallDismissed bool     `json:"reinstall_dismissed,omitempty"`
+	// Images are the addon's icon and logo as its stored manifest declares them (openccu-lite task
+	// 100): kind (icon, icon-dark, logo, logo-dark) → the URL the shell loads it from, on this
+	// origin. Absent for an addon that declares none. Set per request by GET /addons.
+	Images map[string]string `json:"images,omitempty"`
 }
 
 // AddonSettings is one entry of hm_addons.cfg.

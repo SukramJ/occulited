@@ -80,9 +80,9 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "icon": {"$ref": "#/$defs/relpath", "description": "a square icon, SVG preferred, relative to the package root"},
+        "icon": {"$ref": "#/$defs/relpath", "description": "a square icon, SVG preferred, the path from the package root (the archive's root, where openccu-lite.json lies); the install keeps it from the archive"},
         "icon_dark": {"$ref": "#/$defs/relpath"},
-        "logo": {"$ref": "#/$defs/relpath", "description": "a wide logo, relative to the package root"},
+        "logo": {"$ref": "#/$defs/relpath", "description": "a wide logo, the path from the package root, as icon"},
         "logo_dark": {"$ref": "#/$defs/relpath"},
         "settings_url": {
           "type": "string",

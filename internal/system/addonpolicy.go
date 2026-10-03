@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/hobbyquaker/occulited/internal/addonimage"
 	"github.com/hobbyquaker/occulited/internal/addonunit"
 	"github.com/hobbyquaker/occulited/internal/manifest"
 	"github.com/hobbyquaker/occulited/internal/priv"
@@ -30,7 +31,7 @@ import (
 // openccu-lite B-288), which outlives the addon. The busybox products ignore all of it.
 
 // AddonPolicyDir is where the files live.
-const AddonPolicyDir = "/usr/local/etc/config/addon-policy"
+const AddonPolicyDir = priv.AddonPolicyDir
 
 // AddonUIDBase is the first uid handed to an addon; the CCU's own users stay below.
 const AddonUIDBase = 30000
@@ -693,7 +694,9 @@ func readOnlyEtcHint(err error) string {
 // else in the directory is not touched. The manifest's suffix comes first: an id may carry dots,
 // and "<id>.manifest.json" cut at ".json" would read as the id "<id>.manifest" - on a lab system
 // that took the stored manifests of three installed addons for stale files.
-var addonPolicySuffixes = []string{AddonManifestSuffix, ".json", ".conf", ".needs", ".start", FullWalkSuffix}
+var addonPolicySuffixes = []string{AddonManifestSuffix, ".json", ".conf", ".needs", ".start", FullWalkSuffix,
+	AddonImageInfix + addonimage.KindIcon, AddonImageInfix + addonimage.KindIconDark,
+	AddonImageInfix + addonimage.KindLogo, AddonImageInfix + addonimage.KindLogoDark}
 
 // removeAddonPolicyFiles removes every file of the addon under AddonPolicyDir (openccu-lite
 // B-283) and returns their paths on the box, in the order removed; a file that was not there is

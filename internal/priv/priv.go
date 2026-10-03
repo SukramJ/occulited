@@ -185,6 +185,10 @@ type Ops interface {
 	// every LED of the frame to trigger none, then each one's trigger and attributes. The LEDs are
 	// Policy.LEDNames, the triggers LEDTriggers, the numbers bounded (ValidLEDFrame).
 	WriteLEDs(dir string, frame []LEDWrite) error
+	// LoadLEDModule loads one of LEDModules (openccu-lite B-299, led.go): the pattern trigger,
+	// which the daemon cannot see in /lib/modules nor load itself (ProtectKernelModules=). The
+	// helper admits the names of that list and nothing else.
+	LoadLEDModule(ctx context.Context, name string) error
 	// ListLogFiles lists the log files under dir for the storage hint (B-113, loglist.go): each
 	// regular file's path, length and modification time, never a byte of it; only the files named
 	// like logs unless allFiles; no symlink followed. The helper admits a directory of
@@ -226,6 +230,11 @@ type Ops interface {
 	// most AddonFragmentMax bytes. Confined addons' files are 0640 since openccu-lite B-252, so the
 	// drop-in sync reads them through the helper.
 	ReadAddonFragment(path string) ([]byte, error)
+	// ReadAddonImage reads one of an addon's declared images (openccu-lite task 100,
+	// addonimage.go): manifestPath is the stored manifest, tree the addon's directory, kind one of
+	// addonimage.Kinds. The helper resolves the kind to the path the manifest declares, opens it
+	// through os.Root on the tree, and answers it only when its content is an image.
+	ReadAddonImage(manifestPath, tree, kind string) ([]byte, error)
 }
 
 // SmartDeviceRe is the one device shape the SMART read admits: a whole SCSI/SATA/USB disk

@@ -42,6 +42,13 @@ type LEDWrite struct {
 	Pattern string `json:"pattern,omitempty"`
 	// StartAfterMS waits this long before the entry's trigger is set (0 to LEDStartAfterMax).
 	StartAfterMS int `json:"start_after_ms,omitempty"`
+	// Brightness is the level written after the trigger (task 315, an LED with max_brightness
+	// above 1): with none the LED's steady level (0 = dark, as before), with timer the level the
+	// blink lights to; 0 to LEDBrightnessMax, nothing written for 0 but with none.
+	Brightness int `json:"brightness,omitempty"`
+	// Fade is a one-shot pattern ("from 300 to 0") the helper runs on the LED before the frame
+	// (task 315): the pattern trigger with repeat 1, waited for, then the entry's own trigger.
+	Fade string `json:"fade,omitempty"`
 }
 
 // LEDTriggers are the triggers a frame may set: the controller's own (none, default-on, timer,
@@ -55,6 +62,8 @@ const (
 	LEDDelayMin      = 10
 	LEDDelayMax      = 10000
 	LEDStartAfterMax = 1000
+	LEDBrightnessMax = 255
+	LEDFadeMaxMS     = 2000 // a fade's whole length; the helper waits for it
 )
 
 var (
@@ -99,12 +108,37 @@ func ValidLEDFrame(frame []LEDWrite) error {
 		if w.StartAfterMS < 0 || w.StartAfterMS > LEDStartAfterMax {
 			return fmt.Errorf("led %s: start_after_ms must be 0 to %d", w.LED, LEDStartAfterMax)
 		}
+		if w.Brightness < 0 || w.Brightness > LEDBrightnessMax {
+			return fmt.Errorf("led %s: brightness must be 0 to %d", w.LED, LEDBrightnessMax)
+		}
+		if w.Brightness != 0 && w.Trigger != "none" && w.Trigger != "timer" {
+			return fmt.Errorf("led %s: a brightness belongs to the none or timer trigger", w.LED)
+		}
+		if w.Fade != "" {
+			if !ledPatternRe.MatchString(w.Fade) {
+				return fmt.Errorf("led %s: fade %q", w.LED, w.Fade)
+			}
+			if ms := patternMS(w.Fade); ms > LEDFadeMaxMS {
+				return fmt.Errorf("led %s: a fade lasts %d ms at most", w.LED, LEDFadeMaxMS)
+			}
+		}
 		wait += w.StartAfterMS
 	}
 	if wait > LEDStartAfterMax {
 		return fmt.Errorf("a frame waits %d ms at most", LEDStartAfterMax)
 	}
 	return nil
+}
+
+// patternMS is how long one run of a pattern string takes: the sum of its durations.
+func patternMS(pattern string) int {
+	f := strings.Fields(pattern)
+	ms := 0
+	for i := 1; i < len(f); i += 2 {
+		n, _ := strconv.Atoi(f[i])
+		ms += n
+	}
+	return ms
 }
 
 // ledAllowed: the directory is exactly the policy's LED class directory and every LED of a valid
@@ -144,9 +178,17 @@ func (p Policy) ledUnderSys(dir string, frame []LEDWrite) error {
 	return nil
 }
 
-// loadLEDPattern loads the pattern trigger's module, which the images build as a module and nothing
-// loads at boot. A variable so a test can count the calls.
-var loadLEDPattern = func() error {
+// LEDModules are the kernel modules the status LED may ask for (openccu-lite B-299): the pattern
+// trigger, which the older images build as a module nothing loads at boot. A closed list.
+var LEDModules = []string{"ledtrig-pattern"}
+
+// opLEDModule loads one of LEDModules (openccu-lite B-299). The daemon's unit has
+// ProtectKernelModules=, so neither /lib/modules nor modprobe is its to see or run: whether the
+// pattern trigger can be had is answered on this side, by loading it.
+const opLEDModule = "led-module"
+
+// modprobe loads a kernel module by name. A variable so a test can count the calls.
+var modprobe = func(name string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	prog := "/sbin/modprobe"
@@ -155,11 +197,25 @@ var loadLEDPattern = func() error {
 			prog = p
 		}
 	}
-	out, err := exec.CommandContext(ctx, prog, "ledtrig-pattern").CombinedOutput()
+	out, err := exec.CommandContext(ctx, prog, name).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("modprobe ledtrig-pattern: %w: %s", err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("modprobe %s: %w: %s", name, err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// LoadLEDModule loads one of LEDModules; any other name is refused before anything runs.
+func (Local) LoadLEDModule(_ context.Context, name string) error {
+	if !slices.Contains(LEDModules, name) {
+		return fmt.Errorf("module %q is not on the LED list", name)
+	}
+	return modprobe(name)
+}
+
+// LoadLEDModule asks the helper to load one of LEDModules.
+func (c Client) LoadLEDModule(ctx context.Context, name string) error {
+	_, err := c.call(ctx, request{Op: opLEDModule, Name: name})
+	return err
 }
 
 // ErrLEDPattern is WriteLEDs' answer when the pattern trigger cannot be had; the controller then
@@ -180,8 +236,27 @@ var writeLEDAttr = func(path, value string) error {
 	return werr
 }
 
+// activeLEDTrigger is the bracketed one of a trigger attribute's text.
+func activeLEDTrigger(list string) string {
+	if a := strings.Index(list, "["); a >= 0 {
+		if b := strings.Index(list[a:], "]"); b > 0 {
+			return list[a+1 : a+b]
+		}
+	}
+	return ""
+}
+
+// ledSleep waits inside a frame; a variable so a test does not.
+var ledSleep = time.Sleep
+
 // WriteLEDs applies a frame under dir, the LED class directory: every entry's trigger to none, then
 // each entry's trigger and its attributes.
+//
+// Task 315: an entry whose trigger is pattern and whose LED already runs the pattern trigger is
+// not reset - its new string replaces the running one at once, with no dark instant between; the
+// string goes to hr_pattern (the hrtimer, exact milliseconds and no drift between channels) where
+// the kernel has it, else to pattern. A Fade runs first on every entry that has one, as a one-shot
+// (repeat 1), and the frame follows once the longest fade is over.
 func (Local) WriteLEDs(dir string, frame []LEDWrite) error {
 	if err := ValidLEDFrame(frame); err != nil {
 		return err
@@ -192,18 +267,67 @@ func (Local) WriteLEDs(dir string, frame []LEDWrite) error {
 		}
 		return nil
 	}
+	current := func(led string) string {
+		b, _ := os.ReadFile(filepath.Join(dir, led, "trigger"))
+		return activeLEDTrigger(string(b))
+	}
+	// the pattern trigger: set it, loading the module once when the kernel does not know it
+	toPattern := func(led string) error {
+		if current(led) == "pattern" {
+			return nil
+		}
+		if err := write(led, "trigger", "pattern"); err != nil {
+			if lerr := modprobe("ledtrig-pattern"); lerr != nil {
+				return fmt.Errorf("%w: %v", ErrLEDPattern, lerr)
+			}
+			if err := write(led, "trigger", "pattern"); err != nil {
+				return fmt.Errorf("%w: %v", ErrLEDPattern, err)
+			}
+		}
+		return nil
+	}
+	patternAttr := func(led string) string {
+		if _, err := os.Stat(filepath.Join(dir, led, "hr_pattern")); err == nil {
+			return "hr_pattern"
+		}
+		return "pattern"
+	}
+	faded := false
+	wait := 0
 	for _, w := range frame {
+		if w.Fade == "" {
+			continue
+		}
+		if err := toPattern(w.LED); err != nil {
+			return err
+		}
+		if err := write(w.LED, "repeat", "1"); err != nil {
+			return err
+		}
+		if err := write(w.LED, patternAttr(w.LED), w.Fade); err != nil {
+			return err
+		}
+		faded = true
+		wait = max(wait, patternMS(w.Fade))
+	}
+	if faded {
+		ledSleep(time.Duration(wait+50) * time.Millisecond)
+	}
+	for _, w := range frame {
+		if w.Trigger == "pattern" && current(w.LED) == "pattern" {
+			continue
+		}
 		if err := write(w.LED, "trigger", "none"); err != nil {
 			return err
 		}
 	}
 	for _, w := range frame {
 		if w.StartAfterMS > 0 {
-			time.Sleep(time.Duration(w.StartAfterMS) * time.Millisecond)
+			ledSleep(time.Duration(w.StartAfterMS) * time.Millisecond)
 		}
 		switch w.Trigger {
 		case "none":
-			if err := write(w.LED, "brightness", "0"); err != nil {
+			if err := write(w.LED, "brightness", strconv.Itoa(w.Brightness)); err != nil {
 				return err
 			}
 		case "timer":
@@ -216,17 +340,21 @@ func (Local) WriteLEDs(dir string, frame []LEDWrite) error {
 			if err := write(w.LED, "delay_off", strconv.Itoa(w.DelayOff)); err != nil {
 				return err
 			}
-		case "pattern":
-			if err := write(w.LED, "trigger", "pattern"); err != nil {
-				// the kernel refuses a trigger it does not know: load the module once and try again
-				if lerr := loadLEDPattern(); lerr != nil {
-					return fmt.Errorf("%w: %v", ErrLEDPattern, lerr)
-				}
-				if err := write(w.LED, "trigger", "pattern"); err != nil {
-					return fmt.Errorf("%w: %v", ErrLEDPattern, err)
+			if w.Brightness > 0 {
+				if err := write(w.LED, "brightness", strconv.Itoa(w.Brightness)); err != nil {
+					return err
 				}
 			}
-			if err := write(w.LED, "pattern", w.Pattern); err != nil {
+		case "pattern":
+			if err := toPattern(w.LED); err != nil {
+				return err
+			}
+			if w.Fade != "" {
+				if err := write(w.LED, "repeat", "-1"); err != nil {
+					return err
+				}
+			}
+			if err := write(w.LED, patternAttr(w.LED), w.Pattern); err != nil {
 				return err
 			}
 		default:

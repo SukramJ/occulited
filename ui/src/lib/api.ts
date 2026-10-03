@@ -1,4 +1,6 @@
 // The API client: JSON in, JSON out, errors as {error, message}. Nothing clever.
+import type {AddonImages} from './addonimages';
+
 export class ApiError extends Error {
     constructor(
         public status: number,
@@ -130,8 +132,11 @@ export interface Version {
 export interface Status {
     hostname: string;
     version: Version;
-    /** occulited's own build (task 133): the commit it was built from, `-hot` for a hot deploy */
+    /** occulited's own version (tasks 133, 9): the image version its commit is tagged with
+     *  (`1.0.0-dev.38`), `git describe` between build rounds; the commit's hash on older builds */
     occulited_version?: string;
+    /** the commit occulited was built from, the full hash (task 9) */
+    occulited_commit?: string;
     uptime_s: number;
     load: number[];
     mem_total_kb: number;
@@ -358,6 +363,8 @@ export interface Service {
     ended?: boolean;
     ended_at?: string;
     ended_log?: string[];
+    /** openccu-lite task 100: a generated addon unit's addon images, kind → URL (lib/addonimages.ts) */
+    images?: AddonImages;
     /** systemd's MainPID, or (task 49) the leader of the unit's cgroup for a unit without one;
      *  for a stray addon the leader of the processes found outside the unit */
     pid?: number;
@@ -420,6 +427,8 @@ export interface Addon {
     reinstall_dismissed?: boolean;
     /** B-267: the unit did not start - its program check (ExecCondition=) found the program missing */
     skipped?: boolean;
+    /** openccu-lite task 100: the icon and logo the manifest declares, kind → URL on this origin (lib/addonimages.ts) */
+    images?: AddonImages;
     /** 30.1: ran once and ended */
     oneshot?: boolean;
     result?: string;

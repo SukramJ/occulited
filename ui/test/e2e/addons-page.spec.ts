@@ -23,11 +23,14 @@ test('the cards: installed first with the update on top, then by stars; logos on
     await expect(red.locator('[data-addon-dot]')).toHaveClass(/\bok\b/);
     await expect(red.locator('[data-addon-state]')).toHaveText('· Running');
     await expect(card(page, 'jp-hb-devices-addon').locator('[data-addon-dot]')).toHaveAttribute('data-addon-dot', 'completed');
-    // the logos: RedMatic's and Mosquitto's from their Info lines, a letter for the rest
+    // the logos (task 100): the manifest's where it declares one - Mosquitto's from the box, TM
+    // Devices' (not installed) the catalogue's copy of its icon - else the Info: line's, as RedMatic's;
+    // hm2mqtt and Homematic-Manager declare none and their Info: lines carry no image: the letter
     await expect(red.locator('.ad-logo img')).toHaveAttribute('src', '/addons/redmatic/redmatic5-wide.png');
-    await expect(card(page, 'mosquitto').locator('.ad-logo img')).toHaveAttribute('src', '/addons/mosquitto/mosquitto-text-side-28.png');
+    await expect(card(page, 'mosquitto').locator('.ad-logo img')).toHaveAttribute('src', /^\/api\/system\/v1\/addons\/mosquitto\/images\/logo\?v=/);
+    await expect(card(page, 'tm-devices').locator('.ad-logo img')).toHaveAttribute('src', /^\/api\/system\/v1\/catalog\/tm-devices\/images\/icon\?v=/);
     await expect(card(page, 'mh').locator('.ad-letter')).toHaveText('H');
-    await expect(card(page, 'tm-devices').locator('.ad-letter')).toHaveText('T');
+    await expect(card(page, 'hm2mqtt').locator('.ad-letter')).toHaveText('H');
     // the stars link the repository; a card without a count says Repository
     await expect(red.locator('a.cat-stars')).toHaveAttribute('href', 'https://github.com/rdmtc/RedMatic');
     await expect(card(page, 'tm-devices').locator('a.cat-stars')).toHaveText(/^Repository/);

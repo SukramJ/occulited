@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"os"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -45,6 +46,12 @@ func TestRuntimeFromManifest(t *testing.T) {
 // the root.
 func packageWith(t *testing.T, body string) *bytes.Reader {
 	t.Helper()
+	return packageWithFiles(t, body, nil)
+}
+
+// packageWithFiles is packageWith plus more files at the given archive paths.
+func packageWithFiles(t *testing.T, body string, files map[string]string) *bytes.Reader {
+	t.Helper()
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
@@ -58,6 +65,14 @@ func packageWith(t *testing.T, body string) *bytes.Reader {
 	}
 	add("update_script", "#!/bin/sh\nexit 0\n")
 	add("mosq/bin/x", "x")
+	names := make([]string, 0, len(files))
+	for n := range files {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		add(n, files[n])
+	}
 	if body != "" {
 		add(manifest.FileName, body)
 	}

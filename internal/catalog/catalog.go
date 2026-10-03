@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"math"
 	"math/rand/v2"
 	"net/http"
@@ -84,6 +85,11 @@ type Item struct {
 	Latest *Latest `json:"latest,omitempty"`
 	// UpdateAvailable is set by the API when the addon is installed and Latest is newer.
 	UpdateAvailable bool `json:"update_available,omitempty"`
+	// ImageHashes are the images the check fetched with the manifest (openccu-lite task 100):
+	// kind → the content's sha256, the name of the file in ImagesDir. Images is set by the API:
+	// kind → the URL the shell loads it from.
+	ImageHashes map[string]string `json:"-"`
+	Images      map[string]string `json:"images,omitempty"`
 }
 
 // View is what Fetch answers: the catalogue joined with the cache.
@@ -168,6 +174,10 @@ type cached struct {
 	ETag     string             `json:"etag,omitempty"`
 	Fetched  time.Time          `json:"fetched"`
 	Error    string             `json:"error,omitempty"`
+	// Images are the manifest's declared images as fetched at Tag (openccu-lite task 100): kind →
+	// the content's sha256, which names the file in Service.ImagesDir. A kind the fetch could not
+	// take (not there, too large, no image) is left out.
+	Images map[string]string `json:"images,omitempty"`
 }
 
 // cacheFile is the disk cache's shape.
@@ -199,6 +209,9 @@ type Service struct {
 	BundledManifests string
 	// Daily says whether Run's daily release refresh goes out (task 244); nil = always.
 	Daily func() bool
+	// ImagesDir keeps the images fetched with the manifests (openccu-lite task 100), one file per
+	// content hash; "" fetches none.
+	ImagesDir string
 	// CacheFile keeps the fetched manifests, the star counts and the latest releases across
 	// restarts; "" = this process only.
 	CacheFile string
@@ -300,6 +313,7 @@ func (s *Service) saveLocked() {
 	if err := os.WriteFile(s.CacheFile, b, 0o644); err != nil {
 		slog.Warn("catalog: the cache could not be written", "file", s.CacheFile, "err", err)
 	}
+	s.pruneImagesLocked()
 }
 
 // Fetch merges the configured catalogue files and answers the view: the entries joined with the
@@ -508,6 +522,9 @@ func (s *Service) view() *View {
 		it := Item{Git: e.Git, ManifestPath: e.Manifest, Untested: e.Untested, Adapter: e.Adapter()}
 		if c, ok := s.cache.Entries[entryKey(e.Git)]; ok {
 			it.Manifest, it.Tag, it.Error = c.Manifest, c.Tag, c.Error
+			if len(c.Images) > 0 {
+				it.ImageHashes = maps.Clone(c.Images)
+			}
 			if !c.Fetched.IsZero() {
 				f := c.Fetched
 				it.Fetched = &f
@@ -659,7 +676,8 @@ func (s *Service) fetchManifest(ctx context.Context, e Entry, source string) cac
 	switch {
 	case errors.Is(err, errNotModified):
 		out.Error = ""
-		return out // the manifest we have is the current one
+		out.Images = s.fetchImages(ctx, e, out, prev) // the manifest we have is the current one; its images may be missing
+		return out
 	case err != nil:
 		return fail(err)
 	}
@@ -671,6 +689,7 @@ func (s *Service) fetchManifest(ctx context.Context, e Entry, source string) cac
 		return fail(fmt.Errorf("the adapter manifest names %s, not its file", m.ID))
 	}
 	out.Manifest, out.ETag, out.Error = m, etag, ""
+	out.Images = s.fetchImages(ctx, e, out, prev)
 	return out
 }
 

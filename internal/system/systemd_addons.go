@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/hobbyquaker/occulited/internal/addonimage"
 	"github.com/hobbyquaker/occulited/internal/journald"
 	"github.com/hobbyquaker/occulited/internal/manifest"
 	"github.com/hobbyquaker/occulited/internal/priv"
@@ -193,6 +194,12 @@ func (a *SystemdAddons) Install(ctx context.Context, archive io.Reader) (*Instal
 	if merr != nil && !errors.Is(merr, manifest.ErrNoManifest) {
 		slog.Warn("addon manifest: the package's manifest is not usable", "addon", addonIDFrom(ctx), "err", merr)
 	}
+	// occulited task 11: the images the manifest declares, out of the same archive and before any
+	// of the package's code runs
+	var imgs PackageImages
+	if m != nil {
+		imgs.Images, imgs.Missing, imgs.Err = addonimage.FromArchiveFile(staged.Path, m.UI)
+	}
 	archive = staged
 	before := a.rcdSnapshot()
 	// B-98: what ran before the installer did. An update script stops its addon, and when its own
@@ -250,7 +257,7 @@ func (a *SystemdAddons) Install(ctx context.Context, archive io.Reader) (*Instal
 	if merr != nil && !errors.Is(merr, manifest.ErrNoManifest) {
 		res.Output += fmt.Sprintf("\n[manifest] the package's %s is not usable and was ignored: %v", manifest.FileName, merr)
 	}
-	a.applyInstalledManifest(ctx, m, fresh, touched, res)
+	a.applyInstalledManifest(ctx, m, imgs, fresh, touched, res)
 	start := !res.RebootRequired && res.Exit == 0
 	// B-186 (maintainer, 2026-09-23): a new addon is started after an installer that succeeded,
 	// also one that asks for a reboot - a CCU starts it at that reboot, and nearly every CCU addon's

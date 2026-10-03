@@ -36,6 +36,7 @@
     import NavFrame from './pages/NavFrame.svelte';
     import FrameHost from './lib/FrameHost.svelte';
     import {dropAll, leaveFrames, noteAddons, recheck} from './lib/frames.svelte';
+    import {watchAddons} from './lib/addonsync';
     import {frontendKey, settingsKey} from './lib/framekeep';
     import {FRAMED_BACK} from './lib/framed';
     import {tick, untrack, type Component} from 'svelte';
@@ -252,6 +253,43 @@
             // task 39: after a logout no kept addon page survives
             untrack(dropAll);
         }
+    });
+
+    // openccu-lite B-297: the menu follows the addons while the shell is open - an uninstall or an
+    // install here (the Addons page says so when its work is done), in another tab, on another
+    // device or on the console (the system's addon revision, lib/addonsync.ts). Both lists are
+    // read again; a pinned tab of an addon that is gone goes with its row, and its kept page with
+    // it (noteAddons). A read already on its way when the next change comes is followed by one more.
+    let menuRun: Promise<void> | null = null;
+    let menuAgain = false;
+    function refreshMenu() {
+        if (!auth.authenticated) return;
+        if (menuRun) {
+            menuAgain = true;
+            return;
+        }
+        const user = auth.user ?? '';
+        menuRun = (async () => {
+            do {
+                menuAgain = false;
+                const [n, a] = await Promise.allSettled([
+                    api.get<{entries: NavEntry[]}>('/api/system/v1/nav'),
+                    api.get<{addons: Addon[]}>('/api/system/v1/addons'),
+                ]);
+                if (!auth.authenticated || (auth.user ?? '') !== user) break;
+                if (n.status === 'fulfilled') extra = n.value.entries;
+                if (a.status === 'fulfilled') {
+                    installed = a.value.addons;
+                    noteAddons(a.value.addons);
+                }
+                if (n.status === 'fulfilled' || a.status === 'fulfilled') writeMenuCache(user);
+            } while (menuAgain);
+            menuRun = null;
+        })();
+    }
+    $effect(() => {
+        if (!auth.authenticated || auth.public || auth.mustChangePassword) return;
+        return untrack(() => watchAddons(refreshMenu));
     });
 
     // ---- the menu (task 26) ------------------------------------------------------------------
@@ -650,6 +688,9 @@
             <NavFrame entry={navEntry} />
         {:else if navId !== '' && !navLoaded}
             <div class="ol-muted" style="padding:14px">…</div>
+        {:else if navId !== ''}
+            <!-- openccu-lite B-297: the addon this page belonged to was uninstalled (here or elsewhere) -->
+            <div class="ol-notice" style="margin:14px" data-nav-gone>{t('This addon is no longer installed.')} <a href="/addons" use:link>{t('Addons')}</a></div>
         {:else if onPage(router.path, '/welcome')}
             <WelcomePage />
         {/if}

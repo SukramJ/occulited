@@ -15,6 +15,22 @@ function initial(): Theme {
 
 export const theme = $state({value: initial()});
 
+// openccu-lite task 100: what `system` resolves to, live - the browser's prefers-color-scheme as it
+// is now, and again when it changes. The addon images choose their variant by it (isDark()).
+export const scheme = $state({dark: false});
+try {
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    scheme.dark = mq.matches;
+    mq.addEventListener('change', (e) => (scheme.dark = e.matches));
+} catch {
+    /* no matchMedia (a test runtime): light */
+}
+
+/** Whether the shell is dark right now: the explicit choice, else the browser's. Reactive. */
+export function isDark(): boolean {
+    return theme.value === 'dark' || (theme.value === 'system' && scheme.dark);
+}
+
 // 28.5: besides the frame URL and postMessage, the choice is a cookie on the origin, for addon
 // pages that are rendered on the server and never see either (the embedding contract in
 // docs/system-api.md). 'system' is resolved for them: a CGI cannot ask prefers-color-scheme.

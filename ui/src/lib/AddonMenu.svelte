@@ -39,6 +39,9 @@
     import {addonHref, ensureLegacySid} from './auth.svelte';
     import {frames, closeAddon} from './frames.svelte';
     import {browserFaviconDeps, resolveFavicon} from './favicon';
+    import {imageCandidates, type AddonImages} from './addonimages';
+    import AddonImage from './AddonImage.svelte';
+    import {isDark} from './theme.svelte';
     import {prefs, setAddonPreferences} from './prefs.svelte';
     import {arrange, withPin, PHONE_BELOW_PX, type AddonPref} from './addonorder';
     import {moved} from './sortable';
@@ -95,6 +98,8 @@
         hasSettings: boolean;
         /** where ⚙ leads: that settings page, or the addon's row on *Installed addons* */
         settingsHref: string;
+        /** openccu-lite task 100: the icon and logo the addon's manifest declares, kind → URL */
+        images?: AddonImages;
     };
     const rows = $derived.by((): AddonRow[] => {
         // task 88: a frontend belongs to its addon by `addon`; its route id may be another name (/nav/red)
@@ -113,6 +118,7 @@
                 offReason: a.rega_reason || a.binary_reason || t('The rc.d script is not executable; nothing starts it.'),
                 hasSettings,
                 settingsHref: hasSettings ? settingsPath(a.id) : `/addons?addon=${encodeURIComponent(a.id)}`,
+                images: a.images,
             };
         });
         // a frontend the addon list does not name: it has not answered yet, or failed
@@ -382,20 +388,28 @@
     function letter(r: AddonRow): string {
         return r.name.slice(0, 1).toUpperCase();
     }
+    // openccu-lite task 100: a row's and a tab's icon candidates - the manifest's icon in the
+    // theme's variant (lib/addonimages.ts), then the frontend's favicon (task 55); the letter when
+    // none of them loads. isDark() is reactive: a theme switch puts the other variant first.
+    function icons(r: AddonRow): string[] {
+        const out = imageCandidates(r.images, 'icon', isDark());
+        if (favicons[r.id]) out.push(favicons[r.id]!);
+        return out;
+    }
     function pinLabel(r: AddonRow, pinned: boolean): string {
         return pinned ? t('Unpin {name}', {name: r.name}) : t('Pin {name} to the tab bar', {name: r.name});
     }
 </script>
 
-<!-- task 55: a row's icon and name, the same in a live row (inside its button) and an inert one -->
+<!-- task 55: a row's icon and name, the same in a live row (inside its button) and an inert one.
+     Task 100: the manifest's icon first, the favicon behind it; an image that does not load (a
+     cached favicon the frontend has since dropped, a declared file that is not there) gives way to
+     the next and at last to the letter, never a broken image -->
 {#snippet addonLabel(r: AddonRow)}
     <span class="ol-addonicon">
-        {#if favicons[r.id]}
-            <!-- a cached icon the frontend has since dropped is the letter again, not a broken image -->
-            <img src={favicons[r.id]} alt="" width="18" height="18" onerror={() => (favicons[r.id] = '')} />
-        {:else}
-            <span class="ol-addonmono" aria-hidden="true">{letter(r)}</span>
-        {/if}
+        <AddonImage candidates={icons(r)} size={18}>
+            {#snippet fallback()}<span class="ol-addonmono" aria-hidden="true">{letter(r)}</span>{/snippet}
+        </AddonImage>
     </span>
     <span class="ol-addonname">{r.name}</span>
     {#if r.off}<span class="ol-addonnote">· {t('switched off')}</span>{/if}
@@ -449,9 +463,9 @@
     {@const e = r.nav!}
     {@const folded = i >= shown}
     {#if e.target === 'blank'}
-        <a class="ol-pintab" class:ol-pintab-folded={folded} aria-hidden={folded} tabindex={folded ? -1 : undefined} href={e.href} target="_blank" rel="noopener" data-addon={r.id} bind:this={tabEls[r.id]}>{#if favicons[r.id]}<span class="ol-pintab-icon"><img src={favicons[r.id]} alt="" width="14" height="14" onerror={() => (favicons[r.id] = '')} /></span>{/if}<span class="ol-pintab-name">{r.name}</span> ↗</a>
+        <a class="ol-pintab" class:ol-pintab-folded={folded} aria-hidden={folded} tabindex={folded ? -1 : undefined} href={e.href} target="_blank" rel="noopener" data-addon={r.id} bind:this={tabEls[r.id]}><AddonImage candidates={icons(r)} size={14} class="ol-pintab-icon" /><span class="ol-pintab-name">{r.name}</span> ↗</a>
     {:else}
-        <a class="ol-pintab" class:ol-pintab-folded={folded} class:active={!folded && navId === e.id} aria-hidden={folded} tabindex={folded ? -1 : undefined} href={`/nav/${encodeURIComponent(e.id)}`} use:link data-addon={r.id} bind:this={tabEls[r.id]}>{#if favicons[r.id]}<span class="ol-pintab-icon"><img src={favicons[r.id]} alt="" width="14" height="14" onerror={() => (favicons[r.id] = '')} /></span>{/if}<span class="ol-pintab-name">{r.name}</span></a>
+        <a class="ol-pintab" class:ol-pintab-folded={folded} class:active={!folded && navId === e.id} aria-hidden={folded} tabindex={folded ? -1 : undefined} href={`/nav/${encodeURIComponent(e.id)}`} use:link data-addon={r.id} bind:this={tabEls[r.id]}><AddonImage candidates={icons(r)} size={14} class="ol-pintab-icon" /><span class="ol-pintab-name">{r.name}</span></a>
     {/if}
 {/each}
 <div class="ol-menu" bind:this={menuEl}>
@@ -638,8 +652,7 @@
     :global(.ol-nav a.ol-pintab) { display: inline-flex; align-items: center; gap: 6px; max-width: 200px; }
     /* a folded tab: laid out for its width, out of the flow, unseen and unreachable */
     :global(.ol-nav a.ol-pintab-folded) { position: absolute; visibility: hidden; pointer-events: none; }
-    .ol-pintab-icon { flex: 0 0 auto; display: flex; align-items: center; justify-content: center; width: 14px; height: 14px; }
-    .ol-pintab-icon img { width: 14px; height: 14px; object-fit: contain; }
+    :global(.ol-nav a.ol-pintab img.ol-pintab-icon) { flex: 0 0 auto; display: block; width: 14px; height: 14px; object-fit: contain; }
     .ol-pintab-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
     @media (prefers-reduced-motion: no-preference) {
         .ol-menurow-front { transition: box-shadow 80ms linear; }

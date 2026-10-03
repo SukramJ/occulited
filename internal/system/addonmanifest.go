@@ -13,7 +13,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hobbyquaker/occulited/internal/addonimage"
 	"github.com/hobbyquaker/occulited/internal/manifest"
+	"github.com/hobbyquaker/occulited/internal/priv"
 )
 
 // The addon manifest on the box (D-119, docs/manifest-format.md). An addon's openccu-lite.json is
@@ -27,7 +29,7 @@ import (
 // scopes, as for an addon installed before D-119.
 
 // AddonManifestSuffix names the stored copy beside the policy, AddonPolicyDir/<id>.manifest.json.
-const AddonManifestSuffix = ".manifest.json"
+const AddonManifestSuffix = priv.AddonManifestSuffix
 
 // Policy sources a manifest writes: the package's own, and the catalogue's (an adapter manifest
 // or the manifest fetched for the page, standing in for a package without one).
@@ -79,6 +81,7 @@ func (r Root) removeAddonManifest(id string) {
 	if err := remove(r.join(AddonPolicyDir + "/" + id + AddonManifestSuffix)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		slog.Warn("addon manifest: the stored copy could not be removed", "addon", id, "err", err)
 	}
+	r.removeAddonImages(id)
 }
 
 // DeclaredRuntime is what an addon declares now: its stored manifest's runtime block, nil without
@@ -225,7 +228,7 @@ func (a *SystemdAddons) forgetManifest(id string) bool {
 // otherwise loses the stored copy an earlier install left (B-27: "rewritten by every install and
 // update" - a package without a manifest declares nothing). What was applied is noted in the
 // result. Returns the ids that got a policy.
-func (a *SystemdAddons) applyInstalledManifest(ctx context.Context, m *manifest.Manifest, fresh, touched []string, res *InstallResult) []string {
+func (a *SystemdAddons) applyInstalledManifest(ctx context.Context, m *manifest.Manifest, imgs PackageImages, fresh, touched []string, res *InstallResult) []string {
 	var applied []string
 	candidates := append(append([]string{}, fresh...), touched...)
 	if m != nil {
@@ -238,6 +241,7 @@ func (a *SystemdAddons) applyInstalledManifest(ctx context.Context, m *manifest.
 		} else {
 			res.Output += fmt.Sprintf("\n[manifest] %s: the package's %s applied", m.ID, manifest.FileName)
 			applied = append(applied, m.ID)
+			a.keepPackageImages(m, imgs, res)
 		}
 	}
 	root := a.Scripts.Root
@@ -264,6 +268,8 @@ func (a *SystemdAddons) applyInstalledManifest(ctx context.Context, m *manifest.
 			slog.Warn("addon manifest: the catalogue's manifest not applied", "addon", id, "err", err)
 			continue
 		}
+		// the catalogue's images are its own copies (task 100), not the package's: none are kept
+		root.removeAddonImages(id)
 		res.Output += fmt.Sprintf("\n[manifest] %s: the package carries no %s; the catalogue's declaration applied", id, manifest.FileName)
 		applied = append(applied, id)
 	}
@@ -316,4 +322,37 @@ func (a *SystemdAddons) RefreshManifestRuntimes() []string {
 	}
 	sort.Strings(changed)
 	return changed
+}
+
+// PackageImages are the images a package's manifest declares, read out of the archive before the
+// installer runs (occulited task 11): the image of each kind found, and why each other declared
+// kind was not taken.
+type PackageImages struct {
+	Images  map[string][]byte
+	Missing map[string]string
+	Err     error // the archive could not be read for them
+}
+
+// keepPackageImages keeps the package's images beside the manifest just stored and says in the
+// install log what was kept and what was not; a declared image the package does not carry is
+// shown as the shell's fallback, and the install goes on either way.
+func (a *SystemdAddons) keepPackageImages(m *manifest.Manifest, imgs PackageImages, res *InstallResult) {
+	root := a.Scripts.Root
+	if imgs.Err != nil {
+		res.Output += fmt.Sprintf("\n[manifest] %s: the package's images could not be read: %v", m.ID, imgs.Err)
+		slog.Warn("addon images: the package could not be read for its images", "addon", m.ID, "err", imgs.Err)
+	}
+	kept, err := root.keepAddonImages(m.ID, imgs.Images)
+	if err != nil {
+		res.Output += fmt.Sprintf("\n[manifest] %s: the package's images could not all be kept: %v", m.ID, err)
+		slog.Warn("addon images: not all kept", "addon", m.ID, "err", err)
+	}
+	if len(kept) > 0 {
+		res.Output += fmt.Sprintf("\n[manifest] %s: images kept from the package: %s", m.ID, strings.Join(kept, ", "))
+	}
+	for _, kind := range addonimage.Kinds {
+		if why, ok := imgs.Missing[kind]; ok {
+			res.Output += fmt.Sprintf("\n[manifest] %s: %s %s: %s; the system shows its fallback", m.ID, kind, addonimage.Declared(m.UI, kind), why)
+		}
+	}
 }
