@@ -2,11 +2,11 @@
     import {onMount} from 'svelte';
     import {pageLife} from '../lib/pagelife.svelte';
     import {api, type Status, type CertStatus, type CertInfo, type HTTPSView, type StorageDevice, type StorageReason, type StorageReport} from '../lib/api';
-    import {occulitedVersion} from '../lib/version';
+    import {shortVersion} from '../lib/version';
     import {formatBytes} from '../lib/netpanels';
     import {barWidth, emmcRange, hostMonitored, identity, madeMonth, rowsFor, verdictClass, wearLevel} from '../lib/storage';
     import {ask} from '../lib/dialog.svelte';
-    import {t} from '../lib/i18n.svelte';
+    import {i18n, t} from '../lib/i18n.svelte';
     import Loading from '../lib/Loading.svelte';
     import Gauge from '../lib/Gauge.svelte';
     import HistoryChart from '../lib/HistoryChart.svelte';
@@ -17,7 +17,7 @@
     import {PERIODS, periodLabel, silencedLine, silencePath, splitSilenced, warningLink, warningText, type WarnAddon, type WarnDevice, type Warning, type WarningsView} from '../lib/warnings';
     import Help from '../lib/Help.svelte';
     import {CLOSE_MS, reveal} from '../lib/reveal';
-    import {DUTY_LEVELS, levelOf, mergeMax, type HealthSample, CARRIER_BAD, carrierLevel, spanMax} from '../lib/history';
+    import {DUTY_LEVELS, levelOf, mergeMax, type HealthSample, CARRIER_BAD, carrierLevel, spanMax, RATE_STEPS, rateSeries, formatRate, type RateSample} from '../lib/history';
     import {pendingUpdates} from '../lib/catalog';
     import {span} from '../lib/units';
     import {anyStarting, startingSeconds, unitOf, type InterfaceUnit} from '../lib/starting';
@@ -26,9 +26,15 @@
     import {auth} from '../lib/auth.svelte';
     import {warnEdge, warnFor} from '../lib/systemmenu.svelte';
 
-    interface RadioIf { interface: string; address: string; connected: boolean; duty_cycle: number; carrier_sense?: number; carrier_sense_source?: 'interface' | 'device'; radio?: string; radio_name?: string }
-    // task 94: `units` are the radio stack's units, so a starting interface says so instead of "not answering"
-    interface Health { interfaces: RadioIf[]; answering?: string[]; busy: boolean; errors: Record<string, string>; history?: Record<string, HealthSample[]>; units?: InterfaceUnit[] }
+    // occulited task 13: `module`, `adapter`, `path` - the radio behind the entry, from the radio plan
+    interface RadioIf { interface: string; address: string; connected: boolean; duty_cycle: number; carrier_sense?: number; carrier_sense_source?: 'interface' | 'device'; radio?: string; radio_name?: string; module?: string; adapter?: string; path?: string }
+    // occulited task 13: who is subscribed to an interface process - internal is a callback on this system (loopback or its own address)
+    // occulited B-45: `stream` - a client subscribed through lite-rpc's event stream (a token's, an account's)
+    interface SubClient { id: string; url: string; internal: boolean; own?: boolean; stream?: {id: string; kind: string; transport: string; remote?: string} }
+    interface SubSummary { total: number; internal: number; external: number; clients: SubClient[] }
+    // task 94: `units` are the radio stack's units, so a starting interface says so instead of "not answering";
+    // occulited task 13: `rates` the events per minute of each interface process (task 17), `subscribers` its callbacks and lite-rpc streams (B-45)
+    interface Health { interfaces: RadioIf[]; answering?: string[]; busy: boolean; errors: Record<string, string>; history?: Record<string, HealthSample[]>; units?: InterfaceUnit[]; rates?: Record<string, RateSample[]>; subscribers?: Record<string, SubSummary> }
     interface FwState { enabled: boolean; devices: {update_available: boolean}[]; last_error?: string }
     let status = $state<Status | null>(null);
     let health = $state<Health | null>(null);
@@ -323,6 +329,65 @@
         }];
     }));
 
+    /*
+     * occulited task 13: the interface process cards under Components carry, beside up or down, the
+     * radio as their subtitle (module, HB-RF board, the way to it - a link to the Interfaces page's
+     * connections), the events per minute (task 17) with their history as the duty cycle's is
+     * drawn, and the number of subscribers, split and named on hover or tap. One card per interface:
+     * rfd's LAN gateways beside its module are lines of the same card, since the rates and the
+     * subscribers are the process's.
+     */
+    interface IfCard { name: string; entries: RadioIf[] }
+    const ifCards = $derived.by<IfCard[]>(() => {
+        const out: IfCard[] = [];
+        for (const e of health?.interfaces ?? []) {
+            const c = out.find((x) => x.name === e.interface);
+            if (c) c.entries.push(e);
+            else out.push({name: e.interface, entries: [e]});
+        }
+        return out;
+    });
+    const pathText = (p?: string) => (p === 'multimacd' ? t('via multimacd') : p === 'direct' ? t('direct') : p === 'usb' ? 'USB' : p === 'lan' ? 'LAN' : '');
+    const linkText = (e: RadioIf) => [e.module, e.adapter, pathText(e.path)].filter(Boolean).join(' · ');
+    const upText = (c: IfCard) => {
+        const up = c.entries.filter((e) => e.connected).length;
+        return up === c.entries.length ? t('up') : up === 0 ? t('down') : t('{n} of {m} up', {n: up, m: c.entries.length});
+    };
+    const fmtRate = (v: number) => formatRate(v, i18n.language);
+    const rateNow = (name: string) => {
+        const rs = health?.rates?.[name];
+        return rs?.length ? rs[rs.length - 1]! : null;
+    };
+    const subsCount = (s: SubSummary) => (s.total === 1 ? t('1 subscriber') : t('{n} subscribers', {n: s.total}));
+    const subsSplit = (s: SubSummary) => t('{x} external, {y} internal', {x: s.external, y: s.internal});
+    // occulited B-45: a lite-rpc stream is named by its holder and marked "via occulited"; the streams
+    // follow occulited's own registration in the list, as they come through it
+    const streamName = (c: SubClient) => {
+        const k = c.stream!.kind;
+        const who = k === 'token' ? c.id : k === 'session' ? t('session of {name}', {name: c.id}) : t('public browser {name}', {name: c.id});
+        return t('{name} (stream via occulited)', {name: who});
+    };
+    const clientName = (c: SubClient) => (c.stream ? streamName(c) : c.own ? t('{id} (this system)', {id: c.id}) : c.id);
+    const clientKey = (c: SubClient) => (c.stream ? `stream:${c.stream.id}` : `${c.id} ${c.url}`);
+    const clientList = (s: SubSummary): {c: SubClient; via: boolean}[] => {
+        const streams = s.clients.filter((c) => c.stream);
+        const out: {c: SubClient; via: boolean}[] = [];
+        let placed = false;
+        for (const c of s.clients) {
+            if (c.stream) continue;
+            out.push({c, via: false});
+            if (c.own && !placed) {
+                out.push(...streams.map((x) => ({c: x, via: true})));
+                placed = true;
+            }
+        }
+        if (!placed) out.push(...streams.map((x) => ({c: x, via: false})));
+        return out;
+    };
+    const subsTitle = (s: SubSummary) => [subsSplit(s), ...clientList(s).map(({c, via}) => `${via ? '  ↳ ' : ''}${clientName(c)} - ${c.internal ? t('internal') : t('external')}`)].join('\n');
+    // the cards whose subscriber list is open (a tap on the phone, where there is no hover)
+    let subsOpen = $state<Record<string, boolean>>({});
+
     // task 53: the certificate's warning as a sentence, for the notice above the page; the card
     // below carries the same state as its coloured edge
     // the issuer as the Certificate page names it: common name and organisation, the DN the tooltip
@@ -431,7 +496,7 @@
             <div>
                 <div class="host">{status.hostname}</div>
                 <div class="ol-muted ver">
-                    {#if status.version.lite}openccu-lite {status.version.lite}{' · '}{/if}{#if status.occulited_version}<span title={status.occulited_commit || status.occulited_version}>occulited {occulitedVersion(status.occulited_version, status.occulited_commit)}</span>{' · '}{/if}{status.version.lite ? `OpenCCU ${status.version.version}` : status.version.version || '–'} · {status.version.product}
+                    {#if status.version.lite}openccu-lite {status.version.lite}{' · '}{/if}{#if status.occulited_version}<span title={status.occulited_version}>occulited {shortVersion(status.occulited_version)}</span>{' · '}{/if}{status.version.lite ? `OpenCCU ${status.version.version}` : status.version.version || '–'} · {status.version.product}
                 </div>
             </div>
         </div>
@@ -590,7 +655,7 @@
          interface's name, never beside it, so a 24-character code cannot wrap through the name.
          The cards that lead somewhere are links as a whole. -->
     <h2>{t('Components')}</h2>
-    <div class="ol-cards ol-components">
+    <div class="ol-cards ol-components ol-if-cards">
         {#if health}
             <!-- task 94: an interface process systemd is still starting - hmipserver's JVM for about
                  40 s after the web UI is up at boot - is starting, with its seconds, never "not answering" -->
@@ -607,16 +672,58 @@
                     <div class="ol-card-body" title={startingTitle(u)}><span class="ol-dot starting"></span>{secs === undefined ? t('starting') : t('starting · {span}', {span: span(secs)})}</div>
                 </div>
             {/snippet}
-            {#each health.interfaces as ri (ri.interface + ri.address)}
-                <div class="ol-card" data-component={ri.interface}>
+            <!-- occulited task 13: the process's events per minute (task 17) with their history, and its
+                 subscribers - the same for a card with a radio list and one without -->
+            {#snippet traffic(name: string)}
+                {@const cur = rateNow(name)}
+                {@const subs = health?.subscribers?.[name]}
+                {#if cur || subs}
+                    <div class="ol-if-figs">
+                        {#if cur}
+                            <span class="ol-if-rate" data-rate="in" title={t('Events per minute the interface process delivered: a device sends the datapoints of a channel in one telegram, which arrives as one event however many values it carries.')}><span class="ol-if-k">{t('Events')}</span> {cur.up ? fmtRate(cur.in) : '–'}/min</span>
+                        {/if}
+                        {#if subs}
+                            <button type="button" class="ol-if-subs" data-subscribers={subs.total} title={subsTitle(subs)} aria-expanded={!!subsOpen[name]} onclick={() => (subsOpen[name] = !subsOpen[name])}>{subsCount(subs)}</button>
+                        {/if}
+                    </div>
+                    {#if subs && subsOpen[name]}
+                        <div class="ol-if-clients">
+                            <div class="ol-muted">{subsSplit(subs)}</div>
+                            {#if subs.clients.length}
+                                <ul>
+                                    {#each clientList(subs) as {c, via} (clientKey(c))}
+                                        <li class:via data-stream={c.stream ? c.stream.id : undefined} title={c.stream ? [c.stream.transport === 'websocket' ? 'WebSocket' : 'SSE', c.stream.remote].filter(Boolean).join(' · ') : c.url}><span class="hmm-mono">{clientName(c)}</span> <span class="ol-badge">{c.internal ? t('internal') : t('external')}</span></li>
+                                    {/each}
+                                </ul>
+                            {/if}
+                        </div>
+                    {/if}
+                    {#if health?.rates?.[name]?.length}
+                        {@const k = `ev:${name}`}
+                        <div class="ol-card-foot">
+                            <HistoryChart samples={rateSeries(health.rates[name])} label={t('event rate history')} unit="/min" steps={RATE_STEPS} format={fmtRate} bind:span={() => spanOf(k), (v) => (spans[k] = v)} />
+                        </div>
+                    {/if}
+                {/if}
+            {/snippet}
+            {#each ifCards as c (c.name)}
+                {@const links = c.entries.map(linkText).filter(Boolean)}
+                <div class="ol-card" data-component={c.name}>
                     <div class="ol-card-head">
                         <span class="ol-card-icon"><Icon name="radio" size={14} /></span>
                         <div class="ol-card-titles">
-                            <div class="ol-card-title">{ri.interface}</div>
-                            <div class="ol-card-sub">{ri.address}</div>
+                            <div class="ol-card-title">{c.name}</div>
+                            <!-- occulited task 13: the radio as the subtitle, the address without a plan (an older system) -->
+                            {#if links.length}
+                                <div class="ol-card-sub ol-if-module">{#each links as l, i (i)}<a href="/system/interfaces#connections" use:link>{l}</a>{/each}</div>
+                            {:else}
+                                <div class="ol-card-sub">{c.entries.map((e) => e.address).join(' · ')}</div>
+                            {/if}
                         </div>
                     </div>
-                    <div class="ol-card-body"><span class="ol-dot" class:ok={ri.connected}></span>{ri.connected ? t('up') : t('down')}</div>
+                    <div class="ol-card-body"><span class="ol-dot" class:ok={c.entries.some((e) => e.connected)} class:warn={c.entries.some((e) => !e.connected) && c.entries.some((e) => e.connected)}></span>{upText(c)}</div>
+                    {#if links.length}<div class="ol-card-detail hmm-mono">{c.entries.map((e) => e.address).join(' · ')}</div>{/if}
+                    {@render traffic(c.name)}
                 </div>
             {/each}
             <!-- an interface process without a radio list (hs485d, CUxD): it answered, so it is up -->
@@ -627,6 +734,7 @@
                         <div class="ol-card-titles"><div class="ol-card-title">{name}</div></div>
                     </div>
                     <div class="ol-card-body"><span class="ol-dot ok"></span>{t('up')}</div>
+                    {@render traffic(name)}
                 </div>
             {/each}
             {#each Object.entries(health.errors) as [name, err] (name)}
@@ -674,6 +782,10 @@
                 {/if}
             {/each}
         {/if}
+    </div>
+    <!-- occulited task 13: the interface process cards carry a history and are taller than the
+         rest, so they have a grid of their own and the short cards keep their height -->
+    <div class="ol-cards ol-components">
         {#if fw}
             <a class="ol-card" href="/system/updates" use:link data-component="firmware">
                 <div class="ol-card-head">
@@ -871,6 +983,23 @@
        and a badge have room; the tiles of a row are stretched to the tallest (app.css) */
     .ol-components { grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr)); }
     .head-badge { margin-left: auto; }
+    /* occulited task 13: the interface process cards - the radio line under the name links to the
+       connections, the figures wrap on a phone */
+    .ol-if-cards:not(:empty) { margin-bottom: 12px; }
+    .ol-if-module { display: flex; flex-direction: column; gap: 2px; }
+    .ol-if-module a { color: var(--hmm-link); text-decoration: none; }
+    .ol-if-module a:hover { text-decoration: underline; }
+    .ol-if-figs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin-top: 8px; font-size: var(--hmm-font-size-small); color: var(--hmm-fg-muted); }
+    .ol-if-k { color: var(--hmm-fg); }
+    .ol-if-rate { display: inline-flex; align-items: center; gap: 5px; font-variant-numeric: tabular-nums; }
+    .ol-if-subs { margin-left: auto; border: 0; padding: 1px 6px; border-radius: var(--hmm-radius); background: none; color: var(--hmm-link); font: inherit; cursor: pointer; }
+    .ol-if-subs:hover, .ol-if-subs[aria-expanded='true'] { background: var(--hmm-accent-bg); }
+    .ol-if-clients { margin-top: 6px; font-size: var(--hmm-font-size-small); }
+    .ol-if-clients ul { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+    .ol-if-clients li { overflow-wrap: anywhere; }
+    /* occulited B-45: the lite-rpc streams under occulited's own registration */
+    .ol-if-clients li.via { padding-left: 14px; }
+    .ol-if-clients li.via::before { content: '↳'; margin-left: -14px; width: 14px; display: inline-block; color: var(--hmm-fg-muted); }
     .ol-cert .small { font-size: var(--hmm-font-size-small); margin-top: 4px; }
     .ol-cert .ol-clamp { margin-top: 4px; }
 

@@ -234,3 +234,21 @@ test('in German the declined pairing is translated', async ({page, baseURL}, inf
     await expect(notice.locator('.ol-notice-text')).toContainText(`Das Anlernen von ${sgtin} wurde abgelehnt`);
     await expect(notice.getByRole('link', {name: 'Geräteschlüssel', exact: true})).toBeVisible();
 });
+
+// occulited task 14: `occulited admin reset-auth` on the console leaves a notice for a week -
+// which account, when, and what to do when nobody with root did it; the button goes to Users
+test('a console reset of an account is a notice on the Status page, in English and German', async ({page, baseURL}, info) => {
+    await plant(page, baseURL!, info, {'stub-console-reset': 'admin'});
+    await page.goto('/');
+    const notice = page.locator('[data-warnings] [data-notice="console-reset"]');
+    await expect(notice).toBeVisible();
+    await expect(notice).toHaveAttribute('data-severity', 'warning');
+    await expect(notice.locator('.ol-notice-text')).toContainText('Access reset on the console: admin');
+    await expect(notice.locator('.ol-notice-text')).toContainText('one-time password');
+    await notice.getByRole('link', {name: 'Users', exact: true}).click();
+    await expect(page).toHaveURL(/\/system\/users/);
+    await page.evaluate(() => localStorage.setItem('ol.language', 'de'));
+    await page.goto('/');
+    await expect(page.locator('[data-notice="console-reset"] .ol-notice-text')).toContainText('Zugang per Konsole zurückgesetzt: admin');
+    await expect(page.locator('[data-notice="console-reset"]').getByRole('link', {name: 'Benutzer', exact: true})).toBeVisible();
+});

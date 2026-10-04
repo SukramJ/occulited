@@ -45,7 +45,7 @@ export interface Warning {
     id: string;
     variant: string;
     severity: Severity;
-    params?: {addons?: WarnAddon[]; account?: string; at?: string; path?: string; days?: number; verdict?: string; reasons?: StorageReason[]; devices?: WarnDevice[]; mode?: string; reason?: string; adapter?: string; cause?: string; line?: string; families?: string[]; unreachable?: number; total?: number; port?: number; addresses?: string; sgtin?: string; address?: string; name?: string; detail?: string; label?: string; dir?: string; target?: string; share?: string; reconnecting?: boolean; interface?: string; kind?: string; since?: string; checked?: boolean; listeners?: StallListener[]; folder?: string; device?: string; running?: string; newest?: string; node?: string; drops_off?: boolean; hosts?: string[]; issuer?: string; store?: string; candidate?: boolean; from?: string; module?: string; version?: string; minimum?: string; count?: number; units?: WarnLoopUnit[]; fails?: number; restarts?: number; result?: string; first?: string; last?: string; written?: number; calc?: number; current?: number; offset?: number; wraps_at?: string; clock_state?: string; behind?: boolean; source?: string; duty_cycle?: number; carrier_sense?: number; purpose?: string; host?: string; subject?: string; fingerprint?: string; spki?: string};
+    params?: {addons?: WarnAddon[]; account?: string; at?: string; path?: string; days?: number; verdict?: string; reasons?: StorageReason[]; devices?: WarnDevice[]; mode?: string; reason?: string; adapter?: string; cause?: string; line?: string; families?: string[]; unreachable?: number; total?: number; port?: number; addresses?: string; sgtin?: string; address?: string; name?: string; detail?: string; label?: string; dir?: string; target?: string; share?: string; reconnecting?: boolean; interface?: string; kind?: string; since?: string; checked?: boolean; listeners?: StallListener[]; folder?: string; device?: string; running?: string; newest?: string; node?: string; drops_off?: boolean; hosts?: string[]; issuer?: string; store?: string; candidate?: boolean; from?: string; module?: string; version?: string; minimum?: string; count?: number; units?: WarnLoopUnit[]; fails?: number; restarts?: number; result?: string; first?: string; last?: string; written?: number; calc?: number; current?: number; offset?: number; wraps_at?: string; clock_state?: string; behind?: boolean; source?: string; duty_cycle?: number; carrier_sense?: number; purpose?: string; host?: string; subject?: string; fingerprint?: string; spki?: string; accounts?: {user: string; at: string}[]};
     href?: string;
     /** this administrator's own silence (D-64) */
     silenced?: Silence;
@@ -233,7 +233,7 @@ export function warningText(w: Warning, words: Words): string {
         case 'hmip-key-declined':
             // task 201: the device's key in the system's key list is not the device's, so hmipserver
             // declines its pairing and the device never appears
-            return t('Pairing {sgtin} was declined: the key stored for that device does not match it, so the system cannot let it in. Scan or type the key from its sticker again, apply it, and pair the device once more.', {sgtin: p.sgtin ?? ''});
+            return t("Pairing {sgtin} was declined: the device's key given to the system (stored here, or entered for the pairing) does not match the device. Scan or type the key from its sticker again, apply it, and put the device into pairing mode once more; if it no longer tries, reset it to its factory settings first.", {sgtin: p.sgtin ?? ''});
         case 'hmip-security-counter': {
             // openccu-lite task 299 (eq-3/occu#134): the HmIP security counter near, past or below its wrap
             const sgtin = p.sgtin ?? '';
@@ -290,6 +290,14 @@ export function warningText(w: Warning, words: Words): string {
                     : t('{n} addons receive your session in their URLs (?sid=, the legacy CCU convention): {list}.', {n: addons.length, list: names(addons)}),
                 t('What is in the URL is an alias that only addon pages accept, not the session itself, and it ends with your session. The way out: update the addon once a release reads the session header, or switch the legacy session off for it on the Addons page.'),
             ].join(' ');
+        case 'console-reset': {
+            // occulited task 14: `occulited admin reset-auth` on the system's console
+            const list = (p.accounts ?? []).map((a) => t('{user} ({when})', {user: a.user, when: words.when(a.at)})).join(', ');
+            return [
+                t('Access reset on the console: {list}.', {list}),
+                t('The account\'s passkeys were removed and a one-time password was set, which has to be changed at the next login. If nobody with root access to the system did this, change the passwords and check who can log in to the system.'),
+            ].join(' ');
+        }
     }
     // a warning newer than this page: at least its name
     return `${w.id}: ${w.variant}`;
@@ -334,6 +342,7 @@ const LINK_LABELS: Record<string, string> = {
     'journal-sync': 'Journal settings',
     'store-target': 'History settings',
     'legacy-session': 'Installed addons',
+    'console-reset': 'Users',
 };
 
 /** the button to where the matter is handled (task 53): the page's name, or what it does there */

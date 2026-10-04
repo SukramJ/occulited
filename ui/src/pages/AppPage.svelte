@@ -174,7 +174,17 @@
 
     // ---- the drawer: every enum but the favorites, as a foldable tree; Favoriten is this account's node
     // every enum but the favorites, and only those with nodes (the maintainer, 2026-09-22: empty ones are hidden)
-    const sections = $derived(Object.entries(snap?.enums ?? {}).filter(([id, e]) => id !== FAVORITE_ENUM && e.tree.length > 0));
+    // occulited task 18 (the maintainer, 2026-10-04): rooms always first, functions second, whatever the
+    // language and the order the snapshot's object brings them in (Go writes a map's keys sorted, so
+    // "function" came before "room"); any other enum after them, in the snapshot's order
+    const sectionRank = (id: string) => (id === 'room' || id === 'rooms' ? 0 : id === 'function' || id === 'functions' ? 1 : 2);
+    const sections = $derived(
+        Object.entries(snap?.enums ?? {})
+            .filter(([id, e]) => id !== FAVORITE_ENUM && e.tree.length > 0)
+            .map((x, i) => ({x, i}))
+            .sort((a, b) => sectionRank(a.x[0]) - sectionRank(b.x[0]) || a.i - b.i)
+            .map(({x}) => x),
+    );
     const favoritesPath = $derived(auth.accountId ? `${FAVORITE_ENUM}/${auth.accountId}` : '');
     const canConfigure = $derived(auth.level === 'configure' || auth.level === 'administer');
     // which sections and nodes are open: remembered per browser

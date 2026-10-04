@@ -1,5 +1,5 @@
-// Security keys and passkeys (openccu-lite task 262): the browser half of the WebAuthn
-// ceremonies. The API hands out the options as the library renders them (base64url strings where
+// Passkeys (openccu-lite task 262, occulited task 14): the browser half of the WebAuthn
+// ceremonies. A passkey is a login of its own - no name, no password - and never a second factor. The API hands out the options as the library renders them (base64url strings where
 // the browser wants ArrayBuffers) and takes the credential back as PublicKeyCredential.toJSON()
 // renders it; the two conversions live here, with the three ceremonies the pages run.
 import {api} from './api';
@@ -9,7 +9,8 @@ export interface KeyView {
     name: string;
     created: string;
     last_used?: string;
-    /** signs in alone (a discoverable credential with user verification) */
+    /** signs in (a discoverable credential with user verification); false: a second-factor key from
+     *  before occulited task 14, which cannot be used to sign in any more */
     passkey: boolean;
     transports?: string[];
 }
@@ -99,7 +100,7 @@ export function credentialJSON(cred: PublicKeyCredential): unknown {
     return {id: cred.id, rawId: b64url.encode(cred.rawId), type: cred.type, response, clientExtensionResults: cred.getClientExtensionResults(), authenticatorAttachment: (cred as PublicKeyCredential & {authenticatorAttachment?: string}).authenticatorAttachment};
 }
 
-/** The answer of a login: the same shape from the password, the key step and the passkey. */
+/** The answer of a login: the same shape from the password and the passkey. */
 export interface LoginAnswer {
     sid: string;
     user: string;
@@ -109,26 +110,8 @@ export interface LoginAnswer {
     must_change_password: boolean;
 }
 
-/** POST /login's answer for an account with a key: no session yet, the key step follows. */
-export interface SecondFactor {
-    second_factor: 'webauthn';
-    login: string;
-    options: JSONRequest;
-}
-
-export function isSecondFactor(r: unknown): r is SecondFactor {
-    return !!r && typeof r === 'object' && (r as SecondFactor).second_factor === 'webauthn';
-}
-
-/** The key step after the password: the browser signs the challenge, the API opens the session. */
-export async function keyStep(sf: SecondFactor, signal?: AbortSignal): Promise<LoginAnswer> {
-    const cred = (await navigator.credentials.get({publicKey: requestOptions(sf.options), signal})) as PublicKeyCredential | null;
-    if (!cred) throw new Error('no credential');
-    return api.post<LoginAnswer>('/api/auth/v1/login/webauthn', {login: sf.login, response: credentialJSON(cred)});
-}
-
 /**
- * A passkey signs in alone. mediation 'conditional' is the autofill offer in the name field (it
+ * A passkey signs in, without name and password. mediation 'conditional' is the autofill offer in the name field (it
  * waits until the user picks one, or until signal aborts it); 'required' is the button.
  */
 export async function passkeyLogin(mediation: 'conditional' | 'required' = 'required', signal?: AbortSignal): Promise<LoginAnswer> {

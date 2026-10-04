@@ -560,3 +560,26 @@ test('public mode: the App without a login, the Control tab alone, the login pag
     await page.goto('/system/users');
     await expect(page.getByRole('heading', {level: 1, name: 'Login'})).toBeVisible();
 });
+
+// occulited task 18 (the maintainer, 2026-10-04): rooms always come first in the drawer, functions
+// second, in either language and whatever order the snapshot brings the enums in - the box's own
+// ids are "room" and "function", which Go's sorted map keys put the other way round; another
+// enum follows them
+for (const lang of ['en', 'de'] as const) {
+    test(`the drawer lists rooms before functions (${lang})`, async ({page, isMobile}) => {
+        test.skip(!!isMobile, 'the drawer is behind the button on a phone');
+        await page.addInitScript((l) => localStorage.setItem('ol.language', l), lang);
+        await page.route('**/api/meta/v1/snapshot', async (route) => {
+            const r = await route.fetch();
+            const snap = await r.json();
+            const {rooms, functions} = snap.enums;
+            snap.enums = {etagen: {name: {de: 'Etagen', en: 'Floors'}, tree: [{id: 'eg', name: 'EG'}]}, function: functions, room: rooms};
+            await route.fulfill({response: r, json: snap});
+        });
+        await page.goto('/app');
+        const sections = page.locator('[data-app-drawer] [data-app-section]');
+        await expect(sections).toHaveText(lang === 'de' ? [/Räume/, /Gewerke/, /Etagen/] : [/Rooms/, /Functions/, /Floors/]);
+        await expect(sections.nth(0)).toHaveAttribute('data-app-section', 'room');
+        await expect(sections.nth(1)).toHaveAttribute('data-app-section', 'function');
+    });
+}

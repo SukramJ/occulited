@@ -132,10 +132,10 @@ export interface Version {
 export interface Status {
     hostname: string;
     version: Version;
-    /** occulited's own version (tasks 133, 9): the image version its commit is tagged with
-     *  (`1.0.0-dev.38`), `git describe` between build rounds; the commit's hash on older builds */
+    /** occulited's own version (task 133): the commit it was built from, `-hot` for a hot deploy
+     *  (occulited task 16; `1.0.0-dev.38` to `1.0.0-dev.40` reported the image version here) */
     occulited_version?: string;
-    /** the commit occulited was built from, the full hash (task 9) */
+    /** the commit occulited was built from, the bare hash */
     occulited_commit?: string;
     uptime_s: number;
     load: number[];

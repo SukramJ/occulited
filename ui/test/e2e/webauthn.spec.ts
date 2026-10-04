@@ -2,19 +2,20 @@ import {expect, test, type Page} from '@playwright/test';
 import fs from 'node:fs';
 import {Box, buildBinary, removeBinary} from './realbox';
 
-// openccu-lite task 262: security keys and passkeys, end to end against the real occulited with
-// Chromium's virtual authenticator (CDP WebAuthn.addVirtualAuthenticator: a CTAP2 key with resident
-// keys and user verification). The page is opened on http://localhost:<port> - the RP ID must be a
-// name, and localhost is the one a development daemon accepts - through the real login page: a
-// key is added behind the password confirmation, the next login asks for the key after the
-// password, the passkey signs in alone, the key is removed, the password alone signs in again. On
-// an address (127.0.0.1) the account page says a key cannot be made there.
+// openccu-lite task 262, occulited task 14: passkeys, end to end against the real occulited with
+// Chromium's virtual authenticator (CDP WebAuthn.addVirtualAuthenticator: a CTAP2 authenticator with
+// resident keys and user verification). The page is opened on http://localhost:<port> - the RP ID
+// must be a name, and localhost is the one a development daemon accepts - through the real login
+// page: a passkey is added behind the password confirmation, it signs in without name and password,
+// the password alone still signs in (a passkey is never a second factor), and it is removed. A key
+// that cannot make a passkey (no resident credential, no PIN) is not registered; one stored as a
+// second factor before task 14 is marked as unable to sign in. On an address (127.0.0.1) the
+// account page says a key cannot be made there.
 //
 // The virtual authenticator answers every ceremony at once - the login page's conditional passkey
 // offer included, which a real browser completes only when the user picks a credential. So the
-// password-then-key flow runs with a plain second-factor key (no resident credential: the offer
-// finds nothing and the form stays), and the passkey flows with a passkey-capable authenticator
-// that is attached only for them (detached, its credentials are kept through CDP and restored).
+// passkey authenticator is detached (its credentials kept through CDP) while a page should stay on
+// the login form, and attached again for the button.
 
 test.beforeAll(async ({}, workerInfo) => buildBinary(workerInfo));
 test.afterAll(removeBinary);
@@ -48,7 +49,7 @@ interface Authenticator {
     attach(): Promise<void>;
 }
 
-/** passkey: a platform authenticator with resident credentials and user verification; else a plain second-factor key */
+/** passkey: a platform authenticator with resident credentials and user verification; else a plain U2F-style key without either */
 function options(passkey: boolean) {
     return passkey
         ? {protocol: 'ctap2', transport: 'internal', hasResidentKey: true, hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true}
@@ -120,67 +121,101 @@ async function removeKey(page: Page, name: string) {
     await expect(card.locator('tbody tr', {hasText: name})).toHaveCount(0);
 }
 
-test('a key is added, asked for after the password, signs in alone as a passkey, and is removed', async ({page}) => {
-    // a plain second-factor key first (a USB key without a PIN): the password stays the first step
-    const usb = await virtualAuthenticator(page, false);
+test('a passkey is added, signs in without name and password, leaves the password login alone, and is removed', async ({page}) => {
+    const phone = await virtualAuthenticator(page, true);
     await loginWithPassword(page, byName());
     await expectLoggedIn(page);
-    await addKey(page, 'blue key');
+    await addKey(page, 'phone');
     const card = page.locator('[data-section="security-keys"]');
-    await expect(card.locator('tbody tr').first()).toContainText(/second factor|zweiter Faktor/);
-    await expect(card, 'one key: the hint to add a second').toContainText(/second one|zweiten/);
-    // and no passkey exists yet: the login page has no passkey button
-    await logoutByFetch(page);
-    await page.goto(`${byName()}/login`);
-    await expect(page.locator('form.ol-card')).toBeVisible();
-    await expect(page.locator('[data-passkey]')).toHaveCount(0);
+    await expect(card.locator('tbody tr', {hasText: 'phone'}).locator('[data-key-kind]')).toHaveText(/^(passkey|Passkey)$/);
+    await expect(card, 'one passkey: the hint to add a second').toContainText(/second one|zweiten/);
+    await expect(card.locator('[data-keys-recovery]')).toContainText('occulited admin reset-auth');
 
-    // the password alone opens nothing now: the key step follows and the key answers it
-    await page.locator('input:not([type=password])').first().fill('admin');
-    await page.locator('input[type=password]').fill(PASSWORD);
-    // the virtual key answers within milliseconds, so the step's page is not waited for by eye:
-    // the key step's request is, and the password's answer must have been the second factor
-    const [passwordAnswer, keyStep] = await Promise.all([
-        page.waitForResponse((r) => r.url().endsWith('/api/auth/v1/login') && r.request().method() === 'POST'),
-        page.waitForResponse((r) => r.url().endsWith('/api/auth/v1/login/webauthn')),
-        page.getByRole('button', {name: /^(Login|Anmelden)$/}).click(),
-    ]);
-    expect((await passwordAnswer.json()).second_factor).toBe('webauthn');
-    expect(keyStep.status()).toBe(200);
-    await expectLoggedIn(page);
-    expect((await page.evaluate(() => fetch('/api/auth/v1/state').then((r) => r.json()))).method).toBe('password');
-    // the key's last use is on the card
-    await page.goto(`${byName()}/account`);
-    await expect(card.locator('tbody tr').first()).not.toContainText(/never|nie/);
-
-    // a passkey (the phone) as the second key; the USB key goes away for the passkey flows
-    await usb.detach();
-    const phone = await virtualAuthenticator(page, true);
-    await addKey(page, 'phone', 2);
-    await expect(card.locator('tbody tr', {hasText: 'phone'})).toContainText(/passkey/i);
-    await expect(card).not.toContainText(/second one|zweiten/);
-
-    // the passkey signs in alone, through the button: the login page is opened without the
-    // authenticator (its offer in the name field would sign in by itself with one), then the
-    // phone comes and the button is pressed
+    // the password alone signs in as before: no key step, the session at once
     await logoutByFetch(page);
     await phone.detach();
+    await page.goto(`${byName()}/login`);
+    await expect(page.locator('[data-passkey]')).toBeVisible();
+    await page.locator('input:not([type=password])').first().fill('admin');
+    await page.locator('input[type=password]').fill(PASSWORD);
+    const [passwordAnswer] = await Promise.all([
+        page.waitForResponse((r) => r.url().endsWith('/api/auth/v1/login') && r.request().method() === 'POST'),
+        page.getByRole('button', {name: /^(Login|Anmelden)$/}).click(),
+    ]);
+    expect(passwordAnswer.status()).toBe(200);
+    expect(await passwordAnswer.json()).toHaveProperty('sid');
+    await expectLoggedIn(page);
+    expect((await page.evaluate(() => fetch('/api/auth/v1/state').then((r) => r.json()))).method).toBe('password');
+
+    // the passkey signs in without name and password, through the button: the login page is
+    // opened without the authenticator (its offer in the name field would sign in by itself with
+    // one), then the phone comes and the button is pressed
+    await logoutByFetch(page);
     await page.goto(`${byName()}/login`);
     await expect(page.locator('[data-passkey]')).toBeVisible();
     await phone.attach();
     if (await page.locator('[data-passkey]').isVisible()) await page.locator('[data-passkey]').click();
     await expectLoggedIn(page);
     expect((await page.evaluate(() => fetch('/api/auth/v1/state').then((r) => r.json()))).method).toBe('passkey');
-
-    // removal asks for the password again; without keys the password alone signs in
+    // its last use is on the card
     await page.goto(`${byName()}/account`);
+    await expect(card.locator('tbody tr').first()).not.toContainText(/never|nie/);
+
+    // removal asks for the password again; without a passkey the login page has no button
     await removeKey(page, 'phone');
-    await removeKey(page, 'blue key');
-    await expect(card).toContainText(/No security key yet|Noch kein Sicherheitsschlüssel/);
+    await expect(card).toContainText(/No passkey yet|Noch kein Passkey/);
     await logoutByFetch(page);
+    await phone.detach();
+    await page.goto(`${byName()}/login`);
+    await expect(page.locator('form.ol-card')).toBeVisible();
+    await expect(page.locator('[data-passkey]')).toHaveCount(0);
+});
+
+test('a key that cannot make a passkey is not registered', async ({page}) => {
+    // a U2F-style key: no resident credential, no PIN - the browser cannot meet "required"
+    await virtualAuthenticator(page, false);
     await loginWithPassword(page, byName());
     await expectLoggedIn(page);
-    await expect(page.locator('[data-key-step]')).toHaveCount(0);
+    await page.goto(`${byName()}/account`);
+    const card = page.locator('[data-section="security-keys"]');
+    await card.locator('[data-add-key]').click();
+    const dialog = page.locator('[role=dialog]');
+    await dialog.locator('input').fill('blue key');
+    await dialog.getByRole('button', {name: /Continue|Weiter/}).click();
+    await dialog.locator('input[type=password]').fill(PASSWORD);
+    await dialog.getByRole('button', {name: /Confirm|Bestätigen/}).click();
+    await expect(card.locator('.ol-notice.error')).toBeVisible();
+    await expect(card.locator('tbody tr')).toHaveCount(0);
+    expect((await page.evaluate(() => fetch('/api/auth/v1/me/webauthn').then((r) => r.json()))).keys).toEqual([]);
+});
+
+test('a key stored as a second factor before is marked, and the password signs in alone', async ({page}) => {
+    const phone = await virtualAuthenticator(page, true);
+    await loginWithPassword(page, byName());
+    await expectLoggedIn(page);
+    await addKey(page, 'old key');
+    await phone.detach();
+    // what an upgrade finds: a key users.json holds as a non-resident credential (a second
+    // factor of task 262) - the daemon reads the changed file at the next request
+    const file = `${box.state}/users.json`;
+    const doc = JSON.parse(fs.readFileSync(file, 'utf8'));
+    for (const u of doc.users) for (const k of u.webauthn ?? []) k.key.extensions = {rk: false};
+    fs.writeFileSync(file, JSON.stringify(doc, null, 2));
+    await page.goto(`${byName()}/account`);
+    const card = page.locator('[data-section="security-keys"]');
+    await expect(card.locator('tbody tr', {hasText: 'old key'}).locator('[data-key-kind]')).toHaveText(/cannot be used to sign in|kann nicht zur Anmeldung genutzt werden/);
+    await expect(card.locator('[data-keys-unusable]')).toBeVisible();
+    // no passkey anywhere: no button; and the password alone opens the session
+    await logoutByFetch(page);
+    await page.goto(`${byName()}/login`);
+    await expect(page.locator('form.ol-card')).toBeVisible();
+    await expect(page.locator('[data-passkey]')).toHaveCount(0);
+    await loginWithPassword(page, byName());
+    await expectLoggedIn(page);
+    // and it is removed with the same offer
+    await page.goto(`${byName()}/account`);
+    await removeKey(page, 'old key');
+    await expect(card.locator('[data-keys-unusable]')).toHaveCount(0);
 });
 
 test('the passkey signs in through the browser\'s offer in the name field', async ({page}) => {
@@ -194,21 +229,6 @@ test('the passkey signs in through the browser\'s offer in the name field', asyn
     await page.goto(`${byName()}/login`);
     await expectLoggedIn(page);
     expect((await page.evaluate(() => fetch('/api/auth/v1/state').then((r) => r.json()))).method).toBe('passkey');
-});
-
-test('a wrong password does not reach the key step', async ({page}) => {
-    const key = await virtualAuthenticator(page);
-    await loginWithPassword(page, byName());
-    await expectLoggedIn(page);
-    await addKey(page, 'blue');
-    await logoutByFetch(page);
-    await key.detach();
-    await page.goto(`${byName()}/login`);
-    await page.locator('input:not([type=password])').first().fill('admin');
-    await page.locator('input[type=password]').fill('not-the-password');
-    await page.getByRole('button', {name: /^(Login|Anmelden)$/}).click();
-    await expect(page.locator('.ol-notice.error')).toBeVisible();
-    await expect(page.locator('[data-key-step]')).toHaveCount(0);
 });
 
 test('on an address the account page says a key cannot be made there', async ({page}) => {

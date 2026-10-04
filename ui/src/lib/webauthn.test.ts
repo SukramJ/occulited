@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import {b64url, bareName, ceremonyError, creationOptions, isSecondFactor, onAddress, requestOptions} from './webauthn';
+import {b64url, bareName, ceremonyError, creationOptions, onAddress, requestOptions} from './webauthn';
 
 // openccu-lite task 262: the conversions between the API's JSON and the browser's structures.
 describe('webauthn helpers', () => {
@@ -29,9 +29,7 @@ describe('webauthn helpers', () => {
         expect(bareName('ccu.lan')).toBe(false);
         expect(bareName('192.0.2.10')).toBe(false);
     });
-    it('tells the login answers apart and names the browser errors', () => {
-        expect(isSecondFactor({second_factor: 'webauthn', login: 'x', options: {challenge: 'AQID'}})).toBe(true);
-        expect(isSecondFactor({sid: 'ABC'})).toBe(false);
+    it('names the browser errors', () => {
         expect(ceremonyError({name: 'NotAllowedError'})).toBe('not-allowed');
         expect(ceremonyError({name: 'SecurityError'})).toBe('security');
         expect(ceremonyError({name: 'AbortError'})).toBe('cancelled');

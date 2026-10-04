@@ -122,7 +122,7 @@ const routes = {
     'GET /api/auth/v1/state': {setup_required: false, authenticated: true, user: 'admin', role: 'admin', must_change_password: false, sid: 'A1b2C3d4E5', method: 'password'},
     'GET /api/auth/v1/users': {
         users: [
-            {name: 'admin', role: 'admin', level: 'administer', created: '2026-08-14T09:12:00Z', password_set: true, webauthn_keys: 2},
+            {name: 'admin', role: 'admin', level: 'administer', created: '2026-08-14T09:12:00Z', password_set: true, webauthn_keys: 2, webauthn_unusable: 1},
             {name: 'sebastian', role: 'admin', level: 'administer', created: '2026-08-20T18:41:00Z', password_set: true, last_provider_login: '2026-09-14T21:12:00Z', webauthn_keys: 0},
             {name: 'monitor', role: 'user', level: 'operate', created: '2026-09-01T07:03:00Z', must_change_password: true, password_set: true},
         ],
@@ -158,8 +158,8 @@ const routes = {
     'GET /api/system/v1/status': {
         hostname: 'openccu',
         version: {version: '3.89.8.20260719', product: 'ova', platform: 'ova', variant: 'lite', lite: '0-beta.2'},
-        occulited_version: '1.0.0-dev.38',
-        occulited_commit: 'fa42dfde1e31fb074df53220dd573ceb92642ff0',
+        occulited_version: '1df08bb0101038ac6eb7c08c3f3144a8a91840a1-hot',
+        occulited_commit: '1df08bb0101038ac6eb7c08c3f3144a8a91840a1',
         uptime_s: 268431,
         load: [0.14, 0.21, 0.18],
         mem_total_kb: 2033120,
@@ -255,10 +255,37 @@ const routes = {
         feed: {connected: true, boot_id: 'stub', received: 42, interfaces: [{name: 'BidCos-RF', state: 'up', registered: true, last_activity: new Date(Date.parse(now) - 12000).toISOString(), events: 30}, {name: 'HmIP-RF', state: 'up', registered: true, last_activity: new Date(Date.parse(now) - 95000).toISOString(), events: 12}, {name: 'VirtualDevices', state: 'up', registered: true, last_activity: '0001-01-01T00:00:00Z', events: 0}]},
         interfaces: [
             // task 156: the box names the radio of each entry; both stacks share the HmIP-RFUSB through multimacd
-            {interface: 'BidCos-RF', address: 'FF0A05', type: 'HM-MOD-UART', connected: true, default: true, firmware: '4.4.18', duty_cycle: 3, radio: 'module:0000000A02', radio_name: 'HMIP-RFUSB 0000000A02'},
+            // occulited task 13: the module and the way to it, for the Components cards' subtitle
+            {interface: 'BidCos-RF', address: 'FF0A05', type: 'HM-MOD-UART', connected: true, default: true, firmware: '4.4.18', duty_cycle: 3, radio: 'module:0000000A02', radio_name: 'HMIP-RFUSB 0000000A02', module: 'HmIP-RFUSB', path: 'multimacd'},
             // task 68: the level read from channel 0 of the module's device, as on the HmIP-RFUSB
-            {interface: 'HmIP-RF', address: 'BC0A08', type: 'HmIP-RFUSB', connected: true, default: false, firmware: '4.4.18', duty_cycle: 11, carrier_sense: 2, carrier_sense_source: 'device', radio: 'module:0000000A02', radio_name: 'HMIP-RFUSB 0000000A02'},
+            {interface: 'HmIP-RF', address: 'BC0A08', type: 'HmIP-RFUSB', connected: true, default: false, firmware: '4.4.18', duty_cycle: 11, carrier_sense: 2, carrier_sense_source: 'device', radio: 'module:0000000A02', radio_name: 'HMIP-RFUSB 0000000A02', module: 'HmIP-RFUSB', path: 'multimacd'},
         ],
+        // occulited task 13: the events per minute of each interface process (task 17), a sample a
+        // minute like the duty cycle's, the same two polls down; HmIP-RF peaks at 72/min 30 minutes ago
+        rates: (() => {
+            const down = (i) => i === 70 || i === 71;
+            const series = (inn) => Array.from({length: 90}, (_, i) => ({t: new Date(Date.parse(now) - (89 - i) * 60000).toISOString(), in: down(i) ? 0 : inn(i), up: !down(i)}));
+            return {
+                'BidCos-RF': series((i) => 3 + (i % 4) * 1.2),
+                'HmIP-RF': series((i) => (i === 59 ? 72 : 12 + (i % 5) * 0.5)),
+            };
+        })(),
+        // occulited task 13: who is subscribed - internal on the loopback, external from the LAN;
+        // B-45: lite-rpc's streams after the callbacks, an addon's on the loopback, a browser's from the LAN
+        subscribers: {
+            'BidCos-RF': {total: 4, internal: 2, external: 2, clients: [
+                {id: 'BidCos-RF_java', url: 'http://127.0.0.1:39292/bidcos', internal: true},
+                {id: 'mb_BidCos_RF', url: 'http://198.51.100.9:2049', internal: false},
+                {id: 'occulited_BidCos-RF', url: 'http://127.0.0.1:8184/cb/BidCos-RF', internal: true, own: true},
+                {id: 'admin', url: '', internal: false, stream: {id: '4', kind: 'session', transport: 'websocket', remote: '198.51.100.20'}},
+            ]},
+            'HmIP-RF': {total: 3, internal: 2, external: 1, clients: [
+                {id: 'mb_HmIP_RF', url: 'http://198.51.100.9:2049', internal: false},
+                {id: 'occulited_HmIP-RF', url: 'http://127.0.0.1:8184/cb/HmIP-RF', internal: true, own: true},
+                {id: 'addon:openccu-loom', url: '', internal: true, stream: {id: '3', kind: 'token', transport: 'sse', remote: '127.0.0.1'}},
+            ]},
+            VirtualDevices: {total: 1, internal: 1, external: 0, clients: [{id: 'occulited_VirtualDevices', url: 'http://127.0.0.1:8184/cb/VirtualDevices', internal: true, own: true}]},
+        },
         errors: {},
         // tasks 53/54: an hour and a half of polls a minute apart up to now, as the sampler keeps
         // them, and both stacks down for two polls (a restart of the radio stack) - the graph
@@ -1676,7 +1703,7 @@ const OWN_CHECK = {
 // browser (stub-warnings=<id>), so the three projects never see each other's; the period and the
 // clearing rule are applied as occulited applies them.
 const UNCLEAN_AT = Date.now() - 3 * 3600 * 1000;
-const WARNING_ORDER = ['rega', 'arch', 'meta', 'unclean', 'backup-target', 'backup-userfs', 'journal-target', 'journal-sync', 'certificate', 'storage', 'addon-ownership', 'security-key', 'classic-rpc-open', 'hmip-local-key', 'hmip-key-declined', 'legacy-session'];
+const WARNING_ORDER = ['rega', 'arch', 'meta', 'unclean', 'backup-target', 'backup-userfs', 'journal-target', 'journal-sync', 'certificate', 'storage', 'addon-ownership', 'security-key', 'classic-rpc-open', 'hmip-local-key', 'hmip-key-declined', 'legacy-session', 'console-reset'];
 
 // task 125: the legacy session's switches per browser (stub-legacy=<id>; the default state is shared
 // and left as it is), the alias the shell asks for, and which addon gets it: one without the header
@@ -1794,6 +1821,12 @@ function activeWarnings(jar, warn, st) {
     if (jar['stub-declined']) {
         const sgtin = jar['stub-declined'];
         list.push({id: 'hmip-key-declined', variant: `${sgtin}@2026-09-22T19:30:00Z`, severity: 'warning', href: '/system/keys#device-keys', params: {sgtin, address: sgtin.slice(10), at: '2026-09-22T19:30:00Z'}});
+    }
+    // occulited task 14: `occulited admin reset-auth` reset an account on the console
+    // (stub-console-reset=<user>)
+    if (jar['stub-console-reset']) {
+        const user = jar['stub-console-reset'];
+        list.push({id: 'console-reset', variant: `${user}@1790000000`, severity: 'warning', href: '/system/users', params: {accounts: [{user, at: '2026-09-21T14:13:20Z'}]}});
     }
     // task 85: stub-journal=fallback (ram-sync could not be set up at boot) or copy-failed
     if (jar['stub-journal'] === 'fallback') {
@@ -2783,7 +2816,7 @@ function variant(req, u, res) {
         const h = structuredClone(routes[key]);
         const unit = (name) => h.units.find((x) => x.unit === name);
         if (starting === 'boot') {
-            Object.assign(h, {interfaces: [], errors: {}, history: {}});
+            Object.assign(h, {interfaces: [], errors: {}, history: {}, rates: {}});
             Object.assign(unit('occu-init-rf-hardware'), {active_state: 'activating', sub_state: 'start', starting: true, starting_s: 4});
             for (const n of ['multimacd', 'rfd', 'hmipserver']) Object.assign(unit(n), {active_state: 'inactive', sub_state: 'dead', starting: true, queued: true});
         } else {

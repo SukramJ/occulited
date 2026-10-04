@@ -1,6 +1,6 @@
 import {describe, expect, it} from 'vitest';
 
-import {CARRIER_BAD, DUTY_LEVELS, carrierLevel, levelOf, mergeMax, niceTop, segments, sliceSpan, spanMax, timeLabels} from './history';
+import {CARRIER_BAD, DUTY_LEVELS, RATE_STEPS, carrierLevel, formatRate, levelOf, mergeMax, niceTop, rateSeries, segments, sliceSpan, spanMax, timeLabels} from './history';
 
 // task 53: the chart's arithmetic - the top tick, the time labels, the gaps, the merge of a
 // dual-stack radio's two histories - and the levels the two pages share (task 54)
@@ -153,5 +153,33 @@ describe('levelOf', () => {
         expect(levelOf(70, DUTY_LEVELS.warn, DUTY_LEVELS.err)).toBe('warn');
         expect(levelOf(75, DUTY_LEVELS.warn, DUTY_LEVELS.err)).toBe('warn');
         expect(levelOf(90, DUTY_LEVELS.warn, DUTY_LEVELS.err)).toBe('error');
+    });
+});
+
+// occulited task 13: the event rates - per minute (task 17), their own steps from half an event
+// per minute, a gap where the subscriber was not registered, and the figure as the panel writes it
+describe('rates', () => {
+    it('scales a quiet rate to its own steps with room above it', () => {
+        expect(niceTop(0.3, RATE_STEPS)).toBe(0.5);
+        expect(niceTop(1, RATE_STEPS)).toBe(2);
+        expect(niceTop(6, RATE_STEPS)).toBe(10);
+        expect(niceTop(0, RATE_STEPS)).toBe(0.5);
+        expect(niceTop(250, RATE_STEPS)).toBe(500);
+        expect(niceTop(90, RATE_STEPS)).toBe(200);
+        // the duty cycle keeps its own steps
+        expect(niceTop(0.03)).toBe(1);
+    });
+    it('makes the chart series, with the gaps', () => {
+        const rs = [{t: '2026-10-03T12:00:00Z', in: 30, up: true}, {t: '2026-10-03T12:01:00Z', in: 0, up: false}];
+        expect(rateSeries(rs)).toEqual([{t: rs[0]!.t, v: 30, up: true}, {t: rs[1]!.t, v: 0, up: false}]);
+        expect(rateSeries(undefined)).toEqual([]);
+    });
+    it('writes a rate with the decimals it needs, in the language', () => {
+        expect(formatRate(0, 'en')).toBe('0');
+        expect(formatRate(0.017, 'en')).toBe('0.02');
+        expect(formatRate(0.42, 'de')).toBe('0,42');
+        expect(formatRate(2.345, 'en')).toBe('2.3');
+        expect(formatRate(12.6, 'en')).toBe('13');
+        expect(formatRate(2, 'en')).toBe('2');
     });
 });

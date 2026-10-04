@@ -37,8 +37,12 @@
         height?: number;
         /** a threshold drawn as a dashed line in the error colour (task 151: carrier sense is bad above 10 %); the band always reaches it */
         mark?: number;
+        /** the readable steps of the top tick (history.ts STEPS for per cent, RATE_STEPS for a rate) */
+        steps?: number[];
+        /** how a value is written in the tick and under the pointer; the number as it is by default */
+        format?: (v: number) => string;
     }
-    let {samples, label, unit = '%', spans = [60, 360, 1440], span = $bindable(60), height = 64, mark}: Props = $props();
+    let {samples, label, unit = '%', spans = [60, 360, 1440], span = $bindable(60), height = 64, mark, steps, format = (v: number) => String(v)}: Props = $props();
 
     let width = $state(0);
     // room above the top gridline for the stroke, and a pixel above the baseline for it too
@@ -46,7 +50,7 @@
 
     const shown = $derived(sliceSpan(samples, span));
     // with a mark, the band reaches it, so a quiet line is read against the threshold
-    const top = $derived(niceTop(Math.max(0, ...shown.map((s) => s.v))));
+    const top = $derived(niceTop(Math.max(0, ...shown.map((s) => s.v)), steps));
     const topShown = $derived(mark !== undefined && mark > top ? mark : top);
     const t0 = $derived(shown.length ? Date.parse(shown[0]!.t) : 0);
     const t1 = $derived(shown.length ? Date.parse(shown[shown.length - 1]!.t) : 0);
@@ -87,7 +91,7 @@
         // the marked sample may not be in the new span
         hover = null;
     }
-    const hoverText = $derived(hover ? `${clock(new Date(hover.t), i18n.language)} · ${hover.v} ${unit}` : '');
+    const hoverText = $derived(hover ? `${clock(new Date(hover.t), i18n.language)} · ${format(hover.v)} ${unit}` : '');
 </script>
 
 <div class="chart" bind:clientWidth={width}>
@@ -108,8 +112,8 @@
             {/each}
             <!-- after the line, with a halo in the card's colour, so a curve at its peak does
                  not run through the label -->
-            <text class="tick" x="2" y={y(topShown) + 12}>{topShown} {unit}</text>
-            {#if mark !== undefined && mark < topShown}<text class="tick marktick" x={width - 2} y={y(mark) - 3} text-anchor="end">{mark} {unit}</text>{/if}
+            <text class="tick" x="2" y={y(topShown) + 12}>{format(topShown)} {unit}</text>
+            {#if mark !== undefined && mark < topShown}<text class="tick marktick" x={width - 2} y={y(mark) - 3} text-anchor="end">{format(mark)} {unit}</text>{/if}
             {#if hover}
                 {@const hx = x(hover)}
                 {@const left = hx < width / 2}

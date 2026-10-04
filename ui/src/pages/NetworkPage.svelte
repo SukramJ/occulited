@@ -317,7 +317,7 @@
         if (s.hostname !== net?.settings.hostname) {
             let registered = false;
             try { registered = (await api.get<{registered: boolean}>('/api/auth/v1/webauthn')).registered; } catch { /* an older daemon */ }
-            if (registered && !(await ask({title: t('Rename the system?'), message: t('Security keys and passkeys are bound to the system\'s name. After the rename no registered key works any more: every account signs in with its password alone until new keys are added, and a passkey-only sign-in is gone. Rename anyway?'), confirm: t('Rename'), danger: true}))) return;
+            if (registered && !(await ask({title: t('Rename the system?'), message: t('Passkeys are bound to the system\'s name. After the rename no registered passkey works any more: accounts sign in with their password until new passkeys are added. Rename anyway?'), confirm: t('Rename'), danger: true}))) return;
         }
         if (changesAddress && !(await ask(t('Apply the new network settings? They are reverted automatically unless you confirm within 90 seconds from the new address.')))) return;
         busy = 'net';

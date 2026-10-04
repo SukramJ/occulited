@@ -1,4 +1,5 @@
-import {expect, test, type Page, type TestInfo} from '@playwright/test';
+import {type Page, type TestInfo} from '@playwright/test';
+import {expect, test} from './fixtures';
 import {fitsWindow} from './scroll';
 
 // task 95: System → Status LED against the stub (test/stub/led.mjs). The simple view: what the LED
@@ -390,6 +391,37 @@ test('an on/off LED offers neither a picker nor breathe nor the levels', async (
     await expect(panel.locator('[data-led-picker]')).toHaveCount(0);
     await expect(panel.getByLabel('Pattern of Status page warnings').locator('option[value="breathe"]')).toHaveCount(0);
 });
+
+// openccu-lite task 326: the RPI-RF-MOD on a radio adapter - its LED is on/off whatever the image,
+// said so on the page, with the HB-RF-ETH's own brightness setting; no picker, no breathe, no levels
+for (const kind of ['hb-rf-usb-2', 'hb-rf-eth'] as const) {
+    test(`an LED on the radio adapter (${kind}) is on/off, and the page says so`, async ({page, baseURL}, info) => {
+        await plant(page, baseURL!, info);
+        await page.route('**/api/system/v1/led', async (route) => {
+            if (route.request().method() !== 'GET') return route.fallback();
+            const r = await route.fetch();
+            const body = await r.json();
+            body.hardware = {...body.hardware, kind, brightness: false, max_brightness: 1, patterns: (body.hardware.patterns as string[]).filter((p) => p !== 'breathe' && p !== 'double')};
+            await route.fulfill({response: r, json: body});
+        });
+        await page.goto('/system/led');
+        const line = page.locator('[data-led-capability]');
+        await expect(line).toHaveAttribute('data-led-capability', 'adapter');
+        await expect(line).toContainText('on/off LED on the radio adapter');
+        await expect(page.locator('[data-led-eth-hint]')).toHaveCount(kind === 'hb-rf-eth' ? 1 : 0);
+        await expect(page.locator('[data-led="brightness"]')).toHaveCount(0);
+        await page.locator('[data-led-advanced] summary').click();
+        await page.locator('[data-led-row="status-warning"]').getByRole('button', {name: 'Change…'}).click();
+        const panel = page.locator('[data-led-panel="status-warning"]');
+        await expect(panel.locator('[data-led-picker]')).toHaveCount(0);
+        await expect(panel.getByLabel('Pattern of Status page warnings').locator('option[value="breathe"]')).toHaveCount(0);
+        // in German
+        await page.addInitScript(() => localStorage.setItem('ol.language', 'de'));
+        await page.goto('/system/led');
+        await expect(line).toContainText('auf dem Funkadapter');
+        if (kind === 'hb-rf-eth') await expect(page.locator('[data-led-eth-hint]')).toContainText('Weboberfläche des HB-RF-ETH');
+    });
+}
 
 test('a user reads the page and changes nothing', async ({page, baseURL}, info) => {
     await plant(page, baseURL!, info);

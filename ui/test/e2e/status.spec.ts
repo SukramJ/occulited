@@ -124,13 +124,13 @@ for (const w of WARNINGS) {
     });
 }
 
-// task 133: occulited's own version stands between openccu-lite's and OpenCCU's; task 9: the image
-// version its commit is tagged with, the commit shortened beside it and in full as the tooltip
+// task 133: occulited's own version stands between openccu-lite's and OpenCCU's, shortened, the full one as
+// tooltip; occulited task 16: the version is the commit again, not the image version
 test('the system card names openccu-lite, occulited and OpenCCU in that order', async ({page}) => {
     await page.goto('/');
     const ver = page.locator('.ol-hero .ver');
-    await expect(ver).toHaveText('openccu-lite 0-beta.2 · occulited 1.0.0-dev.38 (fa42dfde1) · OpenCCU 3.89.8.20260719 · ova');
-    await expect(ver.locator('span[title]')).toHaveAttribute('title', 'fa42dfde1e31fb074df53220dd573ceb92642ff0');
+    await expect(ver).toHaveText('openccu-lite 0-beta.2 · occulited 1df08bb01-hot · OpenCCU 3.89.8.20260719 · ova');
+    await expect(ver.locator('span[title]')).toHaveAttribute('title', '1df08bb0101038ac6eb7c08c3f3144a8a91840a1-hot');
 });
 
 // task 203 (the maintainer, 2026-09-22): a warning is a panel like the rest of the UI, its severity

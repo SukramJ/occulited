@@ -83,7 +83,14 @@ export function spanMax(samples: Sample[], minutes: number): number | null {
 }
 
 /** the readable steps a graph's top tick can be (per cent of the budget) */
-const STEPS = [1, 2, 5, 10, 20, 50, 100];
+export const STEPS = [1, 2, 5, 10, 20, 50, 100];
+
+/**
+ * The steps of an event rate's top tick (occulited task 13; per minute since task 17). A quiet house
+ * delivers a few events a minute, and a poll a minute apart sees no less than one, so the steps
+ * start at half an event per minute.
+ */
+export const RATE_STEPS = [0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000];
 
 /** the most of the band the peak may take: a fifth of it stays above the line */
 const HEADROOM = 0.8;
@@ -102,9 +109,9 @@ const HEADROOM = 0.8;
  * (which the budget does not allow, but a chart owes its data the truth) goes to the next hundred
  * with the same room.
  */
-export function niceTop(peak: number): number {
-    if (!Number.isFinite(peak) || peak <= 0) return STEPS[0]!;
-    const step = STEPS.find((s) => peak <= s * HEADROOM);
+export function niceTop(peak: number, steps: number[] = STEPS): number {
+    if (!Number.isFinite(peak) || peak <= 0) return steps[0]!;
+    const step = steps.find((s) => peak <= s * HEADROOM);
     if (step !== undefined) return step;
     if (peak <= 100) return 100;
     return Math.ceil(peak / HEADROOM / 100) * 100;
@@ -160,4 +167,26 @@ export function timeLabels(start: Date, end: Date, lang?: string): {start: strin
     if (sameDay) return {start: time(start), end: time(end)};
     const day = (d: Date) => d.toLocaleDateString(lang, {day: '2-digit', month: '2-digit'});
     return {start: `${day(start)} ${time(start)}`, end: `${day(end)} ${time(end)}`};
+}
+
+/** a rate sample as /radio/health delivers it (occulited task 13) */
+export interface RateSample {
+    t: string;
+    /** the events per minute the interface process delivered (occulited task 17) */
+    in: number;
+    up: boolean;
+}
+
+/** a rate series as the chart draws it */
+export function rateSeries(rs: RateSample[] | undefined): Sample[] {
+    return (rs ?? []).map((r) => ({t: r.t, v: r.up ? r.in : 0, up: r.up}));
+}
+
+/**
+ * A rate as the panel writes it: whole numbers as they are and from 10 on, one decimal from 1, two below - in the
+ * UI language's decimal mark. 0 is "0".
+ */
+export function formatRate(v: number, lang?: string): string {
+    const d = Number.isInteger(v) || v >= 10 ? 0 : v >= 1 ? 1 : 2;
+    return v.toLocaleString(lang, {minimumFractionDigits: d, maximumFractionDigits: d});
 }

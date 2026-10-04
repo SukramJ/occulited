@@ -3,7 +3,7 @@
 // (task 125). What an addon that lives by the CCU convention gets in its URL is the session's
 // legacy alias (?sid=@..@, ten characters), which the box makes on request (POST /legacy-sid) and
 // which only lighttpd's gate and the tclrega shim accept, for /addons/ alone.
-import {isSecondFactor, type LoginAnswer, type SecondFactor} from './webauthn';
+import type {LoginAnswer} from './webauthn';
 import {api} from './api';
 import {addonUrl} from './addonurl';
 
@@ -78,18 +78,12 @@ export async function refresh(): Promise<void> {
     }
 }
 
-/**
- * The password login. An account with a security key (task 262) gets no session from the
- * password alone: the answer is the key step, which the login page runs and hands to finishLogin.
- */
-export async function login(username: string, password: string, setup = false): Promise<SecondFactor | undefined> {
-    const r = await api.post<LoginAnswer | SecondFactor>(setup ? '/api/auth/v1/setup' : '/api/auth/v1/login', {username, password});
-    if (isSecondFactor(r)) return r;
-    finishLogin(r, setup);
-    return undefined;
+/** The password login (an account's passkeys do not touch it: occulited task 14). */
+export async function login(username: string, password: string, setup = false): Promise<void> {
+    finishLogin(await api.post<LoginAnswer>(setup ? '/api/auth/v1/setup' : '/api/auth/v1/login', {username, password}), setup);
 }
 
-/** A login's answer - from the password, the key step or a passkey - becomes the shell's session. */
+/** A login's answer - from the password or a passkey - becomes the shell's session. */
 export function finishLogin(r: LoginAnswer, setup = false): void {
     remember(r.sid);
     auth.legacySid = '';

@@ -46,14 +46,19 @@
     }
     const changePw = () => run(async () => { await api.post('/api/auth/v1/password', {current: curPw, password: chgPw}); curPw = ''; chgPw = ''; }, t('Password changed'));
 
-    // task 262: the account's security keys and passkeys. Adding and removing ask for the
-    // password again (the confirmed ticket of task 154, or the provider). A key is bound to the
-    // system's name: the card says so when the page is on an address or a bare host name.
+    // task 262, occulited task 14: the account's passkeys - each a login of its own, without name
+    // and password; never a second factor. A key registered as a second factor before task 14 is
+    // listed as one that cannot sign in, with the offer to remove it and add a passkey instead.
+    // Adding and removing ask for the password again (the confirmed ticket of task 154, or the
+    // provider). A passkey is bound to the system's name: the card says so when the page is on an
+    // address or a bare host name.
     let keys = $state<KeyView[] | null>(null);
     let keysName = $state('');
     let keysError = $state('');
     let keyBusy = $state(false);
     const canWebAuthn = webauthnSupported();
+    const unusable = $derived((keys ?? []).filter((k) => !k.passkey).length);
+    const passkeys = $derived((keys ?? []).length - unusable);
     const wrongPlace = $derived(onAddress() || bareName() || (keysName !== '' && location.hostname.toLowerCase() !== keysName && location.hostname !== 'localhost'));
     async function loadKeys() {
         try {
@@ -69,12 +74,12 @@
     onMount(loadKeys);
     const confirmTexts = {
         title: t('Confirm with your password'),
-        message: t('Adding or removing a security key asks for your password every time.'),
-        provider: t('Adding or removing a security key asks for a fresh login at the identity provider.'),
+        message: t('Adding or removing a passkey asks for your password every time.'),
+        provider: t('Adding or removing a passkey asks for a fresh login at the identity provider.'),
         impossible: t('This account has no password and no identity provider is configured, so it cannot confirm.'),
     };
     async function addKey() {
-        const name = await askText({title: t('Add security key or passkey'), message: t('A name for the key, so you can tell them apart later (for example the make, or the device the passkey lives on).'), input: {placeholder: t('Name of the key')}, confirm: t('Continue')});
+        const name = await askText({title: t('Add passkey'), message: t('A name for the passkey, so you can tell them apart later (for example the device it lives on, or the make of the security key).'), input: {placeholder: t('Name of the passkey')}, confirm: t('Continue')});
         if (!name || !name.trim()) return;
         keyBusy = true;
         keysError = '';
@@ -82,16 +87,16 @@
             const ticket = await confirmTicket('/api/auth/v1/me/webauthn', confirmTexts);
             if (!ticket) return;
             await registerKey(name.trim(), ticket);
-            notice = t('Security key added');
+            notice = t('Passkey added');
             await loadKeys();
         } catch (e) {
             const status = (e as {status?: number}).status;
             if (status) keysError = (e as Error).message;
             else switch (ceremonyError(e)) {
                 case 'cancelled': break;
-                case 'not-allowed': keysError = t('No key was added: the browser cancelled or timed out, or this key is registered already.'); break;
-                case 'security': keysError = t('The browser refused: a security key can only be added on the system\'s name over a trusted certificate (System → Certificate).'); break;
-                case 'unsupported': keysError = t('This browser or device cannot register a security key here.'); break;
+                case 'not-allowed': keysError = t('No passkey was added: the browser cancelled or timed out, the key is registered already, or it cannot make a passkey (a security key needs a PIN for one).'); break;
+                case 'security': keysError = t('The browser refused: a passkey can only be added on the system\'s name over a trusted certificate (System → Certificate).'); break;
+                case 'unsupported': keysError = t('This browser or device cannot make a passkey here.'); break;
                 default: keysError = (e as Error).message;
             }
         } finally {
@@ -99,14 +104,14 @@
         }
     }
     async function removeKey(k: KeyView) {
-        if (!(await ask({title: t('Remove security key'), message: t('Remove the key {name}? Signing in will not ask for it any more.', {name: k.name}), confirm: t('Remove'), danger: true}))) return;
+        if (!(await ask({title: t('Remove passkey'), message: k.passkey ? t('Remove the passkey {name}? It cannot sign in any more.', {name: k.name}) : t('Remove the key {name}? It cannot be used to sign in anyway.', {name: k.name}), confirm: t('Remove'), danger: true}))) return;
         keyBusy = true;
         keysError = '';
         try {
             const ticket = await confirmTicket('/api/auth/v1/me/webauthn', confirmTexts);
             if (!ticket) return;
             await api.delWith(`/api/auth/v1/me/webauthn/${encodeURIComponent(k.id)}`, {'X-Occulite-Confirm': ticket});
-            notice = t('Security key removed');
+            notice = t('Passkey removed');
             await loadKeys();
         } catch (e) {
             keysError = (e as Error).message;
@@ -147,9 +152,10 @@
     </div>
 
     {#if !auth.authOff && passwordLogin}
-        <!-- task 262: the account's keys; each user manages their own here, where the password is changed -->
+        <!-- task 262, occulited task 14: the account's passkeys; each user manages their own here,
+             where the password is changed -->
         <section class="ol-card ol-keys" data-section="security-keys">
-            <div class="k">{t('Security keys and passkeys')}<Help>{t('A security key (FIDO2, for example a YubiKey) or a passkey (the device\'s own, with PIN or biometrics) is a second factor: with one registered, signing in asks for the password and then the key. A passkey made with user verification also signs in alone. Register a second key and keep it somewhere safe: without a key, an administrator or the console (occulited webauthn) removes the lost one.')}</Help></div>
+            <div class="k">{t('Passkeys')}<Help>{t('A passkey signs you in without name and password: the one on your phone or computer, or a security key with a PIN (FIDO2, for example a YubiKey), unlocked with PIN or biometrics. The password keeps working beside it. Register a second passkey and keep it somewhere safe.')}</Help></div>
             {#if keysError}<div class="ol-notice error">{keysError}</div>{/if}
             {#if !keys}
                 <Loading />
@@ -160,9 +166,9 @@
                         <thead><tr><th>{t('Name')}</th><th>{t('Kind')}</th><th>{t('Added')}</th><th>{t('Last used')}</th><th></th></tr></thead>
                         <tbody>
                             {#each keys as k (k.id)}
-                                <tr data-key={k.id}>
+                                <tr data-key={k.id} class:ol-key-unusable={!k.passkey}>
                                     <td>{k.name}</td>
-                                    <td>{k.passkey ? t('passkey (signs in alone)') : t('second factor')}</td>
+                                    <td data-key-kind>{k.passkey ? t('passkey') : t('cannot be used to sign in')}</td>
                                     <td class="ol-stack-line" data-label={t('Added')}>{new Date(k.created).toLocaleDateString()}</td>
                                     <td class="ol-muted ol-stack-line" data-label={t('Last used')}>{k.last_used ? new Date(k.last_used).toLocaleString() : t('never')}</td>
                                     <td class="ol-actions ol-stack-line"><button class="hmm-button" onclick={() => removeKey(k)} disabled={keyBusy}>{t('Remove')}</button></td>
@@ -170,17 +176,23 @@
                             {/each}
                         </tbody>
                     </table>
-                    {#if keys.length === 1}<p class="ol-muted ol-keys-hint">{t('One key only: add a second one as the way in should this one be lost.')}</p>{/if}
+                    {#if unusable}
+                        <!-- occulited task 14: keys made as a second factor before; the offer to replace them -->
+                        <div class="ol-notice ol-keys-unusable" data-keys-unusable>{unusable === 1 ? t('One key was registered as a second factor, which this system no longer has: it cannot be used to sign in. Remove it and add a passkey instead.') : t('{n} keys were registered as a second factor, which this system no longer has: they cannot be used to sign in. Remove them and add a passkey instead.', {n: unusable})}</div>
+                    {/if}
+                    {#if passkeys === 1}<p class="ol-muted ol-keys-hint">{t('One passkey only: add a second one as the way in should this one be lost.')}</p>{/if}
                 {:else}
-                    <p class="ol-muted ol-keys-hint">{t('No security key yet: the password alone signs in.')}</p>
+                    <p class="ol-muted ol-keys-hint">{t('No passkey yet: sign in with the password.')}</p>
                 {/if}
                 {#if !canWebAuthn}
-                    <p class="ol-muted ol-keys-hint" data-keys-unsupported>{t('This browser cannot register a security key here: it needs a secure context (HTTPS) and WebAuthn support.')}</p>
+                    <p class="ol-muted ol-keys-hint" data-keys-unsupported>{t('This browser cannot register a passkey here: it needs a secure context (HTTPS) and WebAuthn support.')}</p>
                 {:else if wrongPlace}
-                    <p class="ol-muted ol-keys-hint" data-keys-wrong-place>{t('A security key is bound to the system\'s name: to add one, open the system as {name} over a trusted certificate (System → Certificate: ACME or an own certificate, and the redirect from the bare name).', {name: keysName ? `https://${keysName}/` : t('its full name (host and domain)')})} <a href="/system/certificates" use:link>{t('Certificate')}</a></p>
+                    <p class="ol-muted ol-keys-hint" data-keys-wrong-place>{t('A passkey is bound to the system\'s name: to add one, open the system as {name} over a trusted certificate (System → Certificate: ACME or an own certificate, and the redirect from the bare name).', {name: keysName ? `https://${keysName}/` : t('its full name (host and domain)')})} <a href="/system/certificates" use:link>{t('Certificate')}</a></p>
                 {:else}
-                    <div style="margin-top:8px"><button class="hmm-button" onclick={addKey} disabled={keyBusy} data-add-key>{t('Add security key or passkey')}</button></div>
+                    <div style="margin-top:8px"><button class="hmm-button" onclick={addKey} disabled={keyBusy} data-add-key>{t('Add passkey')}</button></div>
                 {/if}
+                <!-- occulited task 14: the way back in -->
+                <p class="ol-muted ol-keys-hint" data-keys-recovery>{t('Passkey lost? The password still signs in, and an administrator can remove the passkey on the Users page. Locked out entirely: as root on the system (ssh, or keyboard and display), {command} removes the account\'s passkeys and sets a one-time password.', {command: 'occulited admin reset-auth <user>'})}</p>
             {/if}
         </section>
     {/if}
@@ -205,4 +217,6 @@
     .ol-keys { margin-top: 12px; }
     .ol-keys-table { margin-top: 8px; }
     .ol-keys-hint { margin: 8px 0 0; font-size: var(--hmm-font-size-small); }
+    .ol-keys-unusable { margin: 8px 0 0; }
+    .ol-key-unusable td[data-key-kind] { color: var(--hmm-warn); }
 </style>
