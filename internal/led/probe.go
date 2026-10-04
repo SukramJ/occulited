@@ -81,9 +81,18 @@ func Probe(root system.Root, load func(name string) error) Hardware {
 		leds = leds && exists("sys/class/leds", l, "trigger")
 	}
 	if module && leds {
-		hw.Available, hw.Kind, hw.LEDs = true, "rpi-rf-mod", []string{Red, Green, Blue}
-		hw.PatternTrigger = patternTrigger(root, load)
-		hw.MaxBrightness = maxBrightness(root)
+		hw.Available, hw.Kind, hw.LEDs = true, moduleKind(kv), []string{Red, Green, Blue}
+		// openccu-lite task 326: levels, patterns and fades only for the header's PWM LED (task
+		// 315's leds_pwm); the adapter's own LED (rpi_rf_mod_led, no parent device) is on or off
+		// per channel, whatever max_brightness it reports (255, the LED class default), and gets
+		// the timer path: each step of a pattern would be a USB control transfer or a UDP packet
+		drv := ledDriver(root, ChannelLEDs[0])
+		adapter := hw.Kind != KindHeader || drv == ""
+		hw.PatternTrigger = !adapter && patternTrigger(root, load)
+		hw.MaxBrightness = 1
+		if !adapter && drv == "leds_pwm" {
+			hw.MaxBrightness = maxBrightness(root)
+		}
 		hw.Brightness = hw.MaxBrightness > 1
 		hw.Patterns = slices.DeleteFunc(slices.Clone(Patterns), func(p string) bool {
 			return (p == Double && !hw.PatternTrigger) || (p == Breathe && !hw.Brightness)
@@ -102,6 +111,42 @@ func Probe(root system.Root, load func(name string) error) Hardware {
 		hw.Reason = ReasonNoModule
 	}
 	return hw
+}
+
+// The LED's kinds (GET /led's hardware.kind): the RPI-RF-MOD on the Pi's header, or on one of the
+// radio adapters (openccu-lite task 326), from /var/hm_mode's DEVTYPE of the RPI-RF-MOD.
+const (
+	KindHeader = "rpi-rf-mod"
+	KindUSB    = "hb-rf-usb"
+	KindUSB2   = "hb-rf-usb-2"
+	KindETH    = "hb-rf-eth"
+)
+
+// moduleKind is where the RPI-RF-MOD sits: its DEVTYPE ("HB-RF-USB-2@usb-1-1.3", "HB-RF-ETH@…",
+// "GPIO@3f201000") names the adapter, anything else is the header.
+func moduleKind(kv map[string]string) string {
+	for _, role := range []string{"HMIP", "HMRF"} {
+		if kv["HM_"+role+"_DEV"] != "RPI-RF-MOD" {
+			continue
+		}
+		t, _, _ := strings.Cut(strings.ToLower(kv["HM_"+role+"_DEVTYPE"]), "@")
+		switch t {
+		case KindUSB, KindUSB2, KindETH:
+			return t
+		}
+	}
+	return KindHeader
+}
+
+// ledDriver is the name of the driver behind an LED class device: leds_pwm for the header's PWM
+// LED (task 315), leds-gpio for an older image's; "" for rpi_rf_mod_led's adapter LEDs, which have
+// no parent device.
+func ledDriver(root system.Root, led string) string {
+	drv, err := filepath.EvalSymlinks(filepath.Join(string(root), "sys/class/leds", led, "device", "driver"))
+	if err != nil {
+		return ""
+	}
+	return filepath.Base(drv)
 }
 
 // maxBrightness is the three channels' max_brightness - the smallest of them, 1 when it cannot be

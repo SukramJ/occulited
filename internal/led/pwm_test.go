@@ -214,13 +214,76 @@ func TestProbeBrightness(t *testing.T) {
 	for _, l := range ChannelLEDs {
 		b["sys/class/leds/"+l+"/max_brightness"] = "255\n"
 	}
+	// openccu-lite task 326: 255 is not enough - gpio-leds' LED stays on/off
+	if hw := Probe(b.root(t), nil); hw.Brightness || hw.MaxBrightness != 1 || !hw.PatternTrigger {
+		t.Errorf("gpio-leds with 255: %+v", hw)
+	}
+	b = ledDevice(b, "leds_pwm", "rpi_rf_mod_leds")
 	hw = Probe(b.root(t), nil)
-	if !hw.Brightness || hw.MaxBrightness != 255 || !slices.Contains(hw.Patterns, Breathe) || !slices.Contains(hw.Patterns, Double) {
+	if !hw.Brightness || hw.MaxBrightness != 255 || !hw.PatternTrigger || hw.Kind != KindHeader || !slices.Contains(hw.Patterns, Breathe) || !slices.Contains(hw.Patterns, Double) {
 		t.Errorf("PWM: %+v", hw)
 	}
 	// one channel on/off: the LED counts as on/off
 	b["sys/class/leds/"+ChannelLEDs[2]+"/max_brightness"] = "1\n"
 	if hw := Probe(b.root(t), nil); hw.Brightness || hw.MaxBrightness != 1 {
 		t.Errorf("mixed: %+v", hw)
+	}
+}
+
+// openccu-lite task 326: an RPI-RF-MOD on a radio adapter - its LED is rpi_rf_mod_led's (no parent
+// device, max_brightness 255 as the LED class default), on or off per channel; no levels, no
+// pattern trigger, so no breathe and no double, and the kind names the adapter. The same LED names
+// held by the header's leds_pwm while the module sits on an adapter (dev.39/40 before fix A) are no
+// better: the header pins lead nowhere.
+func TestProbeAdapterLED(t *testing.T) {
+	for _, tc := range []struct{ devtype, kind string }{
+		{"HB-RF-USB@usb-1-1.3", KindUSB},
+		{"HB-RF-USB-2@usb-1-1.2", KindUSB2},
+		{"HB-RF-ETH@192.0.2.9", KindETH},
+	} {
+		b := charly()
+		for k := range b {
+			if strings.HasSuffix(k, "/device") || strings.HasPrefix(k, "sys/devices/") || strings.HasPrefix(k, "sys/bus/") {
+				delete(b, k)
+			}
+		}
+		b["var/hm_mode"] = "HM_HOST='ova'\nHM_MODE='NORMAL'\nHM_HMIP_DEV='RPI-RF-MOD'\nHM_HMIP_DEVTYPE='" + tc.devtype + "'\nHM_HMRF_DEV='RPI-RF-MOD'\nHM_HMRF_DEVTYPE='" + tc.devtype + "'\n"
+		for _, l := range ChannelLEDs {
+			b["sys/class/leds/"+l+"/max_brightness"] = "255\n"
+			b["sys/class/leds/"+l+"/trigger"] = "[none] default-on timer heartbeat pattern"
+		}
+		hw := Probe(b.root(t), nil)
+		if !hw.Available || hw.Kind != tc.kind || hw.Brightness || hw.MaxBrightness != 1 || hw.PatternTrigger || slices.Contains(hw.Patterns, Breathe) || slices.Contains(hw.Patterns, Double) {
+			t.Errorf("%s: %+v", tc.devtype, hw)
+		}
+		// the names still held by the header's leds_pwm: on/off all the same
+		b = ledDevice(b, "leds_pwm", "rpi_rf_mod_leds")
+		if hw := Probe(b.root(t), nil); hw.Kind != tc.kind || hw.Brightness || hw.PatternTrigger {
+			t.Errorf("%s with leds_pwm: %+v", tc.devtype, hw)
+		}
+	}
+}
+
+// openccu-lite task 326: what the controller writes to an adapter LED - only none, default-on and
+// timer: no hr_pattern, no levels, no fade, whatever the look asks for.
+func TestAdapterLEDGetsTheTimerPath(t *testing.T) {
+	r := Render{PatternTrigger: false, MaxBrightness: 1}
+	for _, l := range []Look{
+		{Color: "#ff8000", Pattern: Breathe},
+		{Color: Blue, Pattern: Double},
+		{Color: Cyan, Pattern: Fast},
+		{Color: Magenta, Pattern: Solid},
+		{Color: Red, Pattern: Alternate, Color2: Blue},
+	} {
+		prev := FrameFor(Look{Color: Green, Pattern: Solid}, "", r)
+		fr := WithFade(FrameFor(l, "", r), prev, r)
+		for i, c := range fr {
+			if c.Trigger != "none" && c.Trigger != "default-on" && c.Trigger != "timer" {
+				t.Errorf("%+v channel %d: trigger %q", l, i, c.Trigger)
+			}
+			if c.Fade != "" || c.Pattern != "" || (c.Brightness != 0 && c.Brightness != 1) {
+				t.Errorf("%+v channel %d: %+v", l, i, c)
+			}
+		}
 	}
 }

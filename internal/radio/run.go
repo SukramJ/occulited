@@ -415,25 +415,41 @@ func (w *writer) firmwareDirs(logf func(string, ...any)) {
 }
 
 // hbrfLED loads the LED driver of an RPI-RF-MOD on an HB-RF-USB/-ETH with the adapter's pins
-// (S47): the gpio-leds driver unbound first, the module loaded, the driver bound again so the
-// module's LEDs keep their numbers.
+// (S47): whatever driver holds the rpi_rf_mod:* names is unbound first, the module loaded, and that
+// driver bound again, so the module's LEDs get the names and the header's come back as "…_1".
+// openccu-lite task 326: since task 315 the names belong to leds_pwm's rpi_rf_mod_leds (the
+// header overlay), not to leds-gpio's "leds" - unbinding leds-gpio by name freed nothing, and
+// rpi_rf_mod_led's LEDs were renamed "…_1" instead, so everything drove the empty header pins.
 func (w *writer) hbrfLED(ctx context.Context, led *HBRFLED, logf func(string, ...any)) {
 	d := w.d
-	gpioLEDs := ""
-	if exists(d.path("/sys/class/leds/rpi_rf_mod:blue")) {
-		gpioLEDs = "leds"
-		if exists(d.path("/sys/bus/platform/drivers/leds-gpio/gpio-leds")) {
-			gpioLEDs = "gpio-leds"
-		}
-		_ = os.WriteFile(d.path("/sys/bus/platform/drivers/leds-gpio/unbind"), []byte(gpioLEDs), 0)
+	drv, dev := ledOwner(d.path("/sys/class/leds/rpi_rf_mod:blue"))
+	if drv != "" {
+		logf("run: freeing the rpi_rf_mod LED names from %s's %s", filepath.Base(drv), dev)
+		_ = os.WriteFile(filepath.Join(drv, "unbind"), []byte(dev), 0)
 	}
 	if !d.moduleLoaded("rpi_rf_mod_led") {
 		logf("run: loading rpi_rf_mod_led for the module on %s (pins %s %s %s)", led.Node, led.Red, led.Green, led.Blue)
 		_, _ = d.run()(ctx, d.tool("/sbin/modprobe"), "-q", "rpi_rf_mod_led", "red_gpio_pin="+led.Red, "green_gpio_pin="+led.Green, "blue_gpio_pin="+led.Blue)
 	}
-	if gpioLEDs != "" && !exists(d.path("/sys/bus/platform/drivers/leds-gpio/"+gpioLEDs)) {
-		_ = os.WriteFile(d.path("/sys/bus/platform/drivers/leds-gpio/bind"), []byte(gpioLEDs), 0)
+	if drv != "" && !exists(filepath.Join(drv, dev)) {
+		_ = os.WriteFile(filepath.Join(drv, "bind"), []byte(dev), 0)
 	}
+}
+
+// ledOwner is the driver directory and the device name behind an LED class device (its "device"
+// link, the device's "driver" link): leds_pwm and rpi_rf_mod_leds on a Pi image since task 315,
+// leds-gpio and leds (or gpio-leds) before. Empty when the LED has no parent device - the
+// adapter's own rpi_rf_mod_led LEDs, which registered without one - or is not there.
+func ledOwner(class string) (driver, device string) {
+	devPath, err := filepath.EvalSymlinks(filepath.Join(class, "device"))
+	if err != nil {
+		return "", ""
+	}
+	drv, err := filepath.EvalSymlinks(filepath.Join(devPath, "driver"))
+	if err != nil {
+		return "", ""
+	}
+	return drv, filepath.Base(devPath)
 }
 
 // isNode says whether the path is a character device; in a sandbox (a root that is not /) a

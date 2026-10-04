@@ -304,11 +304,30 @@ func (b box) root(t *testing.T) system.Root {
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 			t.Fatal(err)
 		}
+		// "-> target": a symbolic link, as sysfs has them (an LED's device, a device's driver)
+		if target, ok := strings.CutPrefix(v, "-> "); ok {
+			if err := os.Symlink(target, full); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
 		if err := os.WriteFile(full, []byte(v), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
 	return system.Root(dir)
+}
+
+// ledDevice gives the three channel LEDs a parent device bound by driver (openccu-lite task 326):
+// leds_pwm's rpi_rf_mod_leds on the header since task 315, leds-gpio's leds before. Without it the
+// LEDs are the adapter's (rpi_rf_mod_led registers them without a parent).
+func ledDevice(b box, driver, device string) box {
+	b["sys/bus/platform/drivers/"+driver+"/"] = ""
+	b["sys/devices/platform/"+device+"/driver"] = "-> ../../../bus/platform/drivers/" + driver
+	for _, l := range ChannelLEDs {
+		b["sys/class/leds/"+l+"/device"] = "-> ../../../devices/platform/" + device
+	}
+	return b
 }
 
 func withLEDs(b box, names ...string) box {
@@ -325,13 +344,13 @@ func withLEDs(b box, names ...string) box {
 }
 
 func charly() box {
-	return withLEDs(box{
+	return ledDevice(withLEDs(box{
 		"var/hm_mode":               "HM_HOST='rpi3'\nHM_MODE='NORMAL'\nHM_HMIP_DEV='RPI-RF-MOD'\nHM_HMIP_DEVTYPE='GPIO@3f201000'\nHM_HMRF_DEV='RPI-RF-MOD'\nHM_LED_RED='/sys/class/leds/PWR'\nHM_LED_RED_MODE2='mmc0'\n",
 		"proc/sys/kernel/osrelease": "6.18.34\n",
 		"lib/modules/6.18.34/kernel/drivers/leds/trigger/ledtrig-pattern.ko.xz": "",
 		"var/status/hasLink": "",
 		"var/status/hasIP":   "",
-	}, ChannelLEDs[0], ChannelLEDs[1], ChannelLEDs[2], PWRLED)
+	}, ChannelLEDs[0], ChannelLEDs[1], ChannelLEDs[2], PWRLED), "leds-gpio", "leds")
 }
 
 func pi4() box {

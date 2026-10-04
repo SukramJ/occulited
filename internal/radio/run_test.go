@@ -562,3 +562,77 @@ func TestLog4j2ConfigAndEnvFiles(t *testing.T) {
 		t.Fatalf("HMServer-only env: %v", env)
 	}
 }
+
+// openccu-lite task 326: the LED names are freed from whichever driver owns them - leds_pwm's
+// rpi_rf_mod_leds since task 315, leds-gpio's leds before - unbound before rpi_rf_mod_led loads and
+// bound again after it, and only that driver is touched.
+func TestHBRFLEDFreesTheNamesFromTheirDriver(t *testing.T) {
+	for _, tc := range []struct{ name, driver, device string }{
+		{"the header's PWM LEDs (task 315)", "leds_pwm", "rpi_rf_mod_leds"},
+		{"gpio-leds (before task 315)", "leds-gpio", "leds"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			mk := func(p string) string {
+				full := filepath.Join(root, p)
+				if err := os.MkdirAll(full, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				return full
+			}
+			drivers := mk("sys/bus/platform/drivers")
+			for _, drv := range []string{"leds_pwm", "leds-gpio"} {
+				mk("sys/bus/platform/drivers/" + drv)
+				for _, f := range []string{"bind", "unbind"} {
+					_ = os.WriteFile(filepath.Join(drivers, drv, f), nil, 0o644)
+				}
+			}
+			dev := mk("sys/devices/platform/" + tc.device)
+			if err := os.Symlink("../../../bus/platform/drivers/"+tc.driver, filepath.Join(dev, "driver")); err != nil {
+				t.Fatal(err)
+			}
+			// the bound device as the driver directory lists it
+			_ = os.Symlink("../../../../devices/platform/"+tc.device, filepath.Join(drivers, tc.driver, tc.device))
+			blue := mk("sys/class/leds/rpi_rf_mod:blue")
+			if err := os.Symlink("../../../devices/platform/"+tc.device, filepath.Join(blue, "device")); err != nil {
+				t.Fatal(err)
+			}
+			read := func(drv, f string) string {
+				b, _ := os.ReadFile(filepath.Join(drivers, drv, f))
+				return string(b)
+			}
+			var order []string
+			run := func(_ context.Context, name string, args ...string) ([]byte, error) {
+				// the module loads while the names are free: unbound already, not bound yet
+				order = append(order, filepath.Base(name)+" unbind="+read(tc.driver, "unbind")+" bind="+read(tc.driver, "bind"))
+				// the driver's unbind removes the device from its directory
+				_ = os.Remove(filepath.Join(drivers, tc.driver, tc.device))
+				return nil, nil
+			}
+			w := &writer{d: Detector{Root: root, Run: run}}
+			w.hbrfLED(context.Background(), &HBRFLED{Node: "/dev/raw-uart", Red: "2", Green: "1", Blue: "0"}, func(string, ...any) {})
+			if len(order) != 1 || order[0] != "modprobe unbind="+tc.device+" bind=" {
+				t.Fatalf("modprobe saw %v", order)
+			}
+			if read(tc.driver, "bind") != tc.device {
+				t.Errorf("%s bound again with %q", tc.driver, read(tc.driver, "bind"))
+			}
+			other := map[string]string{"leds_pwm": "leds-gpio", "leds-gpio": "leds_pwm"}[tc.driver]
+			if read(other, "unbind") != "" || read(other, "bind") != "" {
+				t.Errorf("%s touched", other)
+			}
+		})
+	}
+	// the adapter's own LEDs (no parent device), or none at all: nothing to unbind, the module loads
+	root := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(root, "sys/class/leds/rpi_rf_mod:blue"), 0o755)
+	var calls []string
+	w := &writer{d: Detector{Root: root, Run: func(_ context.Context, name string, args ...string) ([]byte, error) {
+		calls = append(calls, filepath.Base(name))
+		return nil, nil
+	}}}
+	w.hbrfLED(context.Background(), &HBRFLED{Node: "/dev/raw-uart", Red: "2", Green: "1", Blue: "0"}, func(string, ...any) {})
+	if len(calls) != 1 || calls[0] != "modprobe" {
+		t.Errorf("calls %v", calls)
+	}
+}

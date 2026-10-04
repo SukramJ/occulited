@@ -19,10 +19,13 @@ import (
 )
 
 // The colours: seven names - RedMatic-LED's payloads, which users already know from their flows -
-// and, since task 315, any "#rrggbb". On an RPI-RF-MOD driven over PWM (max_brightness 255) a colour
-// is mixed from its three channels through a gamma curve; where the LED is on or off per channel
-// (max_brightness 1: an HB-RF-USB, an older image) a channel at 128 or more lights, so the names and
-// their shades come out as themselves and a free colour as the nearest of the seven.
+// and, since task 315, any "#rrggbb". On an RPI-RF-MOD on the Pi's header driven over PWM (leds_pwm,
+// max_brightness 255) a colour is mixed from its three channels through a gamma curve; where the LED
+// is on or off per channel (an older image's gpio-leds, or the radio adapter's own LED - HB-RF-USB,
+// HB-RF-USB-2, HB-RF-ETH: rpi_rf_mod_led, which reports max_brightness 255 too, the LED class
+// default, but lights any level above 0 fully; the probe treats it as 1, openccu-lite task 326) a
+// channel at 128 or more lights, so the names and their shades come out as themselves and a free
+// colour as the nearest of the seven.
 const (
 	Off     = "off"
 	Red     = "red"
