@@ -233,3 +233,86 @@ func TestInterfacePorts(t *testing.T) {
 		t.Fatalf("ports %s", got)
 	}
 }
+
+// occulited task 13: the Status page's subscriber count - internal is a callback on this system,
+// the loopback and the system's own addresses, as the Interfaces page's "local" (the maintainer,
+// 2026-10-03), external every other address; an interface without a handlers file has no count.
+func TestSubscriberSummary(t *testing.T) {
+	// the system's own addresses, as ownAddresses would read them, with 192.0.2.8 its LAN address
+	ownAddrCache.Lock()
+	ownAddrCache.set, ownAddrCache.at = map[string]bool{"127.0.0.1": true, "192.0.2.8": true}, time.Now()
+	ownAddrCache.Unlock()
+	t.Cleanup(func() {
+		ownAddrCache.Lock()
+		ownAddrCache.set = nil
+		ownAddrCache.Unlock()
+	})
+	r := rootWith(t, map[string]string{
+		"var/RFD.handlers": rfdHandlers + "http://[::1]:2050\tipv6_client\nhttp://localhost:2051/x\tby_name\nhttp://192.0.2.7:2052\tlan_client\nhttp://192.0.2.8:2053\taddon_on_lan\n" +
+			"http://127.0.0.1:8184/cb/BidCos-RF\tocculited_BidCos-RF\n",
+		"var/HMSERVER.handlers": "",
+	})
+	s, ok := r.SubscriberSummary("BidCos-RF")
+	if !ok || s.Total != 9 || s.Internal != 7 || s.External != 2 || len(s.Clients) != 9 {
+		t.Fatalf("summary %+v", s)
+	}
+	by := map[string]SubscriberClient{}
+	for _, c := range s.Clients {
+		by[c.ID] = c
+	}
+	if !by["ipv6_client"].Internal || !by["by_name"].Internal || !by["1007"].Internal || by["mb_BidCos_RF"].Internal || by["lan_client"].Internal || !by["addon_on_lan"].Internal {
+		t.Errorf("internal/external %+v", by)
+	}
+	if !by["occulited_BidCos-RF"].Own || by["nr_Ab1Cd2_BidCos-RF"].Own {
+		t.Errorf("own %+v", by)
+	}
+	// a running process nobody subscribed to: zero, and a list, not null
+	if s, ok := r.SubscriberSummary("VirtualDevices"); !ok || s.Total != 0 || s.Clients == nil {
+		t.Errorf("empty file %+v %v", s, ok)
+	}
+	// CUxD has no handlers file: unknowable, not zero
+	if _, ok := r.SubscriberSummary("CUxD"); ok {
+		t.Error("CUxD has a count")
+	}
+
+	// occulited B-45: lite-rpc's streams are subscribers of their own beside the callbacks -
+	// internal from the loopback or the system's own address, external from elsewhere, and a
+	// stream that arrived without an address (none recorded) is external
+	s.AddStreams([]SubscriberClient{
+		{ID: "addon:openccu-loom", Stream: &SubscriberStream{ID: "1", Kind: "token", Transport: "sse", Remote: "127.0.0.1"}},
+		{ID: "admin", Stream: &SubscriberStream{ID: "2", Kind: "session", Transport: "websocket", Remote: "192.0.2.8"}},
+		{ID: "ha", Stream: &SubscriberStream{ID: "3", Kind: "token", Transport: "sse", Remote: "198.51.100.4"}},
+		{ID: "anon", Stream: &SubscriberStream{ID: "4", Kind: "public"}},
+	})
+	if s.Total != 13 || s.Internal != 9 || s.External != 4 || len(s.Clients) != 13 {
+		t.Fatalf("with streams %+v", s)
+	}
+	if c := s.Clients[9]; c.ID != "addon:openccu-loom" || !c.Internal || c.Stream == nil || c.Own {
+		t.Errorf("the addon's stream %+v", c)
+	}
+	if !s.Clients[10].Internal || s.Clients[11].Internal || s.Clients[12].Internal {
+		t.Errorf("the streams' split %+v", s.Clients[9:])
+	}
+}
+
+// occulited B-45: the address rule of a stream's client - the loopback names, IPv4 and IPv6, and
+// the system's own addresses are this system
+func TestIsLocalHost(t *testing.T) {
+	ownAddrCache.Lock()
+	ownAddrCache.set, ownAddrCache.at = map[string]bool{"127.0.0.1": true, "192.0.2.8": true, "2001:db8::8": true}, time.Now()
+	ownAddrCache.Unlock()
+	t.Cleanup(func() {
+		ownAddrCache.Lock()
+		ownAddrCache.set = nil
+		ownAddrCache.Unlock()
+	})
+	for host, want := range map[string]bool{
+		"127.0.0.1": true, "127.0.0.2": true, "::1": true, "[::1]": true, "localhost": true, "::ffff:127.0.0.1": true,
+		"192.0.2.8": true, "2001:db8:0::8": true,
+		"192.0.2.9": false, "198.51.100.4": false, "": false, "not-an-address": false,
+	} {
+		if got := IsLocalHost(host); got != want {
+			t.Errorf("IsLocalHost(%q) = %v", host, got)
+		}
+	}
+}

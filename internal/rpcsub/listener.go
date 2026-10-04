@@ -154,8 +154,9 @@ func (s *Subscriber) handlerFor(i *iface) *xmlrpc.Handler {
 		s.bus.publish(Message{Type: "devices", Interface: i.name, Op: "replaced", Addresses: []string{old, nw}, Old: old, New: nw})
 		return empty(), nil
 	})
-	// event(id, address, key, value)
-	event := func(args *xmlrpc.Value, batch uint64) {
+	// event(id, address, key, value); says whether it is a device's event - every one but the
+	// PONG of a ping, which is RPC traffic and no radio telegram (occulited task 13)
+	event := func(args *xmlrpc.Value, batch uint64) bool {
 		q := xmlrpc.Q(args)
 		addr, key := q.Idx(1).String(), q.Idx(2).String()
 		val := anyValue(q.Idx(3))
@@ -163,10 +164,21 @@ func (s *Subscriber) handlerFor(i *iface) *xmlrpc.Handler {
 		i.events++
 		s.mu.Unlock()
 		s.bus.publish(Message{Type: "event", Interface: i.name, Address: addr, Key: key, Value: val, Batch: batch})
+		return key != "PONG"
+	}
+	// telegram counts one call that carried a device's events (occulited task 13): a device sends
+	// a channel's datapoints in one telegram, which reaches a subscriber as one system.multicall of
+	// several events - the Status page's rate is of telegrams, not of datapoints (maintainer)
+	telegram := func() {
+		s.mu.Lock()
+		i.telegrams++
+		s.mu.Unlock()
 	}
 	d.HandleFunc("event", func(args *xmlrpc.Value) (*xmlrpc.Value, error) {
 		seen()
-		event(args, 0)
+		if event(args, 0) {
+			telegram()
+		}
 		return empty(), nil
 	})
 	// system.multicall: rfd sends every event this way, hmipserver the batches of one device.
@@ -177,13 +189,14 @@ func (s *Subscriber) handlerFor(i *iface) *xmlrpc.Handler {
 		calls := xmlrpc.Q(args).Idx(0).Slice()
 		batch := s.bus.seq() + 1
 		results := []*xmlrpc.Value{}
+		device := false
 		for _, c := range calls {
 			method := c.TryKey("methodName").String()
 			params := c.TryKey("params").Value()
 			switch method {
 			case "event":
-				if params != nil {
-					event(params, batch)
+				if params != nil && event(params, batch) {
+					device = true
 				}
 			case "":
 			default:
@@ -194,6 +207,9 @@ func (s *Subscriber) handlerFor(i *iface) *xmlrpc.Handler {
 				}
 			}
 			results = append(results, &xmlrpc.Value{Array: &xmlrpc.Array{Data: []*xmlrpc.Value{empty()}}})
+		}
+		if device {
+			telegram()
 		}
 		return &xmlrpc.Value{Array: &xmlrpc.Array{Data: results}}, nil
 	})

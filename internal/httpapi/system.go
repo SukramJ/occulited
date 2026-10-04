@@ -106,10 +106,10 @@ type AddonManager interface {
 // SystemAPI serves /api/system/v1: status, radio, services, addons, log.
 type SystemAPI struct {
 	Root system.Root
-	// Version is occulited's own main.version, answered on /status (task 133): the image version
-	// its commit is tagged with, or `git describe` between build rounds (task 9)
+	// Version is occulited's own main.version, answered on /status (task 133): the commit it was
+	// built from, -dirty or -hot after it (occulited task 16)
 	Version string
-	// Commit is the commit occulited was built from (main.commit), answered beside it (task 9)
+	// Commit is the commit occulited was built from (main.commit), the bare hash, answered beside it
 	Commit   string
 	Services system.ServiceManager
 	Log      system.LogReader
@@ -181,6 +181,10 @@ type SystemAPI struct {
 	// Revalidate re-checks a request's credential while its stream is open (every heartbeat);
 	// nil = never re-checked. main gives it the auth API's session lookup.
 	Revalidate func(r *http.Request) *auth.Session
+	// ConsoleResets lists the accounts whose access `occulited admin reset-auth` reset after a
+	// time (occulited task 14), for the Status page's notice; nil = none. main gives it the
+	// auth store's.
+	ConsoleResets func(since time.Time) []auth.ConsoleReset
 	// RPCTrace is the RPC trace's switch (task 79); nil = the routes say it is not available.
 	RPCTrace *rpctrace.Tracer
 	// Names looks a device up in the metadata store for the service-message list: its name and
@@ -2252,14 +2256,54 @@ func (a *SystemAPI) radioHealth(w http.ResponseWriter, r *http.Request) {
 		for i := range st.Interfaces {
 			ri := &st.Interfaces[i]
 			ri.Radio, ri.RadioName = p.Transmitter(ri.Interface, ri.Address, ri.Type, hmip)
+			// occulited task 13: the module and the way to it, for the interface card's subtitle
+			if l, ok := p.Link(ri.Interface, ri.Address, ri.Type, hmip); ok {
+				ri.Module, ri.Adapter, ri.Path = l.Module, l.Adapter, l.Path
+			}
 		}
 	}
 	body["polled"], body["interfaces"], body["errors"], body["history"] = st.Polled, st.Interfaces, st.Errors, st.History
 	body["answering"] = st.Answering // up, without a radio list: BidCos-Wired's hs485d, CUxD
+	// occulited task 13: the telegram rates per interface process, and who is subscribed to each
+	body["rates"] = st.Rates
+	names := map[string]bool{}
+	for _, ri := range st.Interfaces {
+		names[ri.Interface] = true
+	}
+	for _, n := range st.Answering {
+		names[n] = true
+	}
+	for n := range st.Errors {
+		names[n] = true
+	}
 	// task 75: the subscriber's view - when each interface last spoke
 	if a.RPC != nil {
-		body["feed"] = a.RPC.View()
+		view := a.RPC.View()
+		body["feed"] = view
+		for _, f := range view.Interfaces {
+			names[f.Name] = true
+		}
 	}
+	// occulited B-45: and lite-rpc's open event streams, each one subscriber of every interface
+	// its filter takes
+	var streams []literpc.Stream
+	if a.LiteRPC != nil {
+		streams = a.LiteRPC.Streams()
+	}
+	subs := map[string]system.SubscriberSummary{}
+	for n := range names {
+		if s, ok := a.Root.SubscriberSummary(n); ok {
+			var cs []system.SubscriberClient
+			for _, st := range streams {
+				if st.Carries(n) {
+					cs = append(cs, system.SubscriberClient{ID: st.Subject.Name, Stream: &system.SubscriberStream{ID: st.ID, Kind: st.Subject.Kind, Transport: st.Transport, Remote: st.Remote}})
+				}
+			}
+			s.AddStreams(cs)
+			subs[n] = s
+		}
+	}
+	body["subscribers"] = subs
 	writeJSON(w, 200, body)
 }
 

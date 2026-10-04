@@ -1407,6 +1407,10 @@
           "state": {
             "type": "string"
           },
+          "telegrams": {
+            "minimum": 0,
+            "type": "integer"
+          },
           "url": {
             "type": "string"
           }
@@ -1417,6 +1421,7 @@
           "name",
           "registered",
           "state",
+          "telegrams",
           "url"
         ],
         "type": "object"

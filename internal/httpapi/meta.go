@@ -28,12 +28,12 @@ import (
 	"github.com/hobbyquaker/occulited/internal/meta"
 )
 
-// Implementation names the server in /version, e.g. "occulited 1.0.0-dev.38" (task 9: the image
-// version occulited's commit is tagged with, `git describe` between build rounds).
+// Implementation names the server in /version: "occulited <version>", the version being the commit
+// occulited was built from (occulited task 16).
 var Implementation = "occulited dev"
 
-// Commit is the commit the server was built from, answered beside Implementation; empty for a
-// build that carries none.
+// Commit is the commit the server was built from, the bare hash, answered beside Implementation;
+// empty for a build that carries none.
 var Commit = ""
 
 const maxBody = 1 << 20 // 1 MiB; an import of a large house is well under 200 KB

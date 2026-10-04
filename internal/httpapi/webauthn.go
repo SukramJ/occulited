@@ -14,7 +14,7 @@ import (
 	"github.com/hobbyquaker/occulited/internal/auth"
 )
 
-// Security keys and passkeys (openccu-lite task 262, D-78's neighbour in ASVS V6.5): the WebAuthn
+// Passkeys (openccu-lite task 262, D-78's neighbour in ASVS V6.5; occulited task 14): the WebAuthn
 // ceremonies of the login page and the Account page, with github.com/go-webauthn/webauthn.
 //
 // The relying party is the system's name. A WebAuthn credential is bound to an RP ID, which must
@@ -32,15 +32,15 @@ import (
 // id the client sends back, and bound to the client's address. A ceremony is spent by its second
 // half whatever the outcome.
 //
-// The login has two shapes. Password first: POST /login verifies the password; an account with a
-// key gets no session but {second_factor: "webauthn", login, options}, and POST /login/webauthn
-// with the assertion opens the session (method password). Passkey alone: POST /login/passkey
+// A passkey is a login of its own, never a second factor (occulited task 14): POST /login/passkey
 // answers a challenge for a discoverable credential with user verification required, and
 // POST /login/passkey/finish opens the session (method passkey) for the account the credential
-// names. A refused assertion counts towards the lockout like a wrong password. Adding and
-// removing a key needs the confirmed ticket of task 154 (X-Occulite-Confirm: the password again,
-// or a fresh login at the provider); an administrator removes another account's keys with
-// auth:admin, which ends that account's sessions like a password reset.
+// names - no name, no password. POST /login with the password is not touched by an account's keys.
+// A registration asks for a resident key and user verification, both required, and refuses a
+// credential that is not a passkey. A refused assertion counts towards the lockout like a wrong
+// password. Adding and removing a key needs the confirmed ticket of task 154 (X-Occulite-Confirm:
+// the password again, or a fresh login at the provider); an administrator removes another
+// account's keys with auth:admin, which ends that account's sessions like a password reset.
 
 // RPDisplayName is what an authenticator shows as the relying party.
 const RPDisplayName = "openccu-lite"
@@ -51,7 +51,6 @@ const ceremonyTimeout = 90 * time.Second
 
 func (a *AuthAPI) registerWebAuthn(mux *http.ServeMux, p string) {
 	route(mux, scopeOpen, "GET "+p+"/webauthn", a.webauthnInfo)
-	route(mux, scopeOpen, "POST "+p+"/login/webauthn", a.loginWebAuthn)
 	route(mux, scopeOpen, "POST "+p+"/login/passkey", a.loginPasskeyBegin)
 	route(mux, scopeOpen, "POST "+p+"/login/passkey/finish", a.loginPasskeyFinish)
 	route(mux, auth.ScopeSelf, "GET "+p+"/me/webauthn", a.myKeys)
@@ -65,7 +64,6 @@ func (a *AuthAPI) registerWebAuthn(mux *http.ServeMux, p string) {
 // webauthnOpen are the routes without a session (open() names them too).
 var webauthnOpen = map[string]bool{
 	"/api/auth/v1/webauthn":             true,
-	"/api/auth/v1/login/webauthn":       true,
 	"/api/auth/v1/login/passkey":        true,
 	"/api/auth/v1/login/passkey/finish": true,
 }
@@ -113,8 +111,8 @@ func (a *AuthAPI) relyingParty(w http.ResponseWriter, r *http.Request, registeri
 		RPOrigins:             []string{scheme + "://" + strings.ToLower(r.Host)},
 		AttestationPreference: protocol.PreferNoAttestation,
 		AuthenticatorSelection: protocol.AuthenticatorSelection{
-			ResidentKey:      protocol.ResidentKeyRequirementPreferred,
-			UserVerification: protocol.VerificationPreferred,
+			ResidentKey:      protocol.ResidentKeyRequirementRequired,
+			UserVerification: protocol.VerificationRequired,
 		},
 		Timeouts: webauthn.TimeoutsConfig{
 			Login:        webauthn.TimeoutConfig{Enforce: true, Timeout: ceremonyTimeout, TimeoutUVD: ceremonyTimeout},
@@ -143,75 +141,6 @@ type pendingBody struct {
 	Login        string          `json:"login,omitempty"`
 	Registration string          `json:"registration,omitempty"`
 	Response     json.RawMessage `json:"response"`
-}
-
-// secondFactor is what POST /login answers for an account with a key: no session yet.
-func (a *AuthAPI) secondFactor(w http.ResponseWriter, r *http.Request, user *auth.WebAuthnUser) {
-	rp := a.relyingParty(w, r, false)
-	if rp == nil {
-		return
-	}
-	options, data, err := rp.BeginLogin(user, webauthn.WithUserVerification(protocol.VerificationPreferred))
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, apiError{Error: "internal", Message: err.Error()})
-		return
-	}
-	id, err := a.Store.StorePending(user.Name, remote(r), data)
-	if err != nil {
-		authErr(w, err)
-		return
-	}
-	writeJSON(w, 200, map[string]any{"second_factor": "webauthn", "login": id, "options": options.Response})
-}
-
-// loginWebAuthn is POST /login/webauthn: the key step after the password.
-func (a *AuthAPI) loginWebAuthn(w http.ResponseWriter, r *http.Request) {
-	var b pendingBody
-	if err := readJSON(r, &b); err != nil {
-		badBody(w, err)
-		return
-	}
-	if !a.passwordLoginOn() {
-		passwordLoginDisabled(w)
-		return
-	}
-	name, data, err := a.Store.TakePending(b.Login, remote(r))
-	if err != nil || name == "" {
-		writeJSON(w, http.StatusUnauthorized, apiError{Error: "invalid-credentials", Message: auth.ErrPendingLogin.Error()})
-		return
-	}
-	session, ok := data.(*webauthn.SessionData)
-	user := a.Store.WebAuthnUser(name)
-	if !ok || user == nil {
-		writeJSON(w, http.StatusUnauthorized, apiError{Error: "invalid-credentials", Message: auth.ErrPendingLogin.Error()})
-		return
-	}
-	rp := a.relyingParty(w, r, false)
-	if rp == nil {
-		return
-	}
-	parsed, err := protocol.ParseCredentialRequestResponseBytes(b.Response)
-	if err == nil {
-		var cred *webauthn.Credential
-		cred, err = rp.ValidateLogin(user, *session, parsed)
-		if err == nil {
-			sess, cerr := a.Store.CompleteLogin(name, cred, auth.MethodPassword, remote(r), r.UserAgent())
-			if cerr != nil {
-				a.logRefused(r, name, "webauthn", cerr.Error())
-				authErr(w, cerr)
-				return
-			}
-			a.logLogin(sess, auth.MethodPassword+"+webauthn")
-			a.clearStale(w, r, a.cookieName(r))
-			a.setCookie(w, r, sess.ID)
-			writeJSON(w, 200, map[string]any{"sid": sess.ID, "user": sess.User, "role": sess.Role, "level": sess.Level, "account_id": sess.AccountID, "must_change_password": a.Store.MustChangePassword(sess.User)})
-			return
-		}
-	}
-	why := a.Store.FailKeyStep(name, remote(r))
-	a.logRefused(r, name, "webauthn", "key refused: "+webauthnReason(err))
-	a.logLockout(r, name, why)
-	writeJSON(w, http.StatusUnauthorized, apiError{Error: "invalid-credentials", Message: "the security key was not accepted"})
 }
 
 // loginPasskeyBegin is POST /login/passkey: a challenge for a discoverable credential, user
@@ -282,7 +211,7 @@ func (a *AuthAPI) loginPasskeyFinish(w http.ResponseWriter, r *http.Request) {
 		}, *session, parsed)
 		if err == nil {
 			// user verification is what makes a key a passkey: the library asked for it and
-			// checked the flag; a key that did not verify the user is a second factor only
+			// checked the flag; a key that did not verify the user signs nobody in
 			if !parsed.Response.AuthenticatorData.Flags.HasUserVerified() {
 				err = errors.New("the key did not verify the user")
 			} else {
@@ -392,9 +321,11 @@ func (a *AuthAPI) registerBegin(w http.ResponseWriter, r *http.Request) {
 	if rp == nil {
 		return
 	}
+	// occulited task 14: a key is a passkey or nothing - a discoverable credential, the user
+	// verified by PIN or biometrics (the configuration's selection: both required)
 	options, data, err := rp.BeginRegistration(user,
 		webauthn.WithExclusions(webauthn.Credentials(user.Credentials).CredentialDescriptors()),
-		webauthn.WithResidentKeyRequirement(protocol.ResidentKeyRequirementPreferred),
+		webauthn.WithResidentKeyRequirement(protocol.ResidentKeyRequirementRequired),
 		webauthn.WithExtensions(webauthn.WithExtensionCredProps()))
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, apiError{Error: "internal", Message: err.Error()})
@@ -453,12 +384,24 @@ func (a *AuthAPI) registerFinish(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnprocessableEntity, apiError{Error: "webauthn-refused", Message: "the key was not accepted: " + webauthnReason(err)})
 		return
 	}
+	// the library checked the user verification (required); a resident credential is what the
+	// browser was asked for - one that reports it made none is refused, one that does not report
+	// (no credProps) made one, or the ceremony would have failed
+	if cred.Extensions.RK == nil {
+		rk := true
+		cred.Extensions.RK = &rk
+	}
+	if !*cred.Extensions.RK || !cred.Flags.UserVerified {
+		withCaller(r, a.logger()).Warn("auth: a security key was refused", "user", sess.User, "reason", "not a passkey")
+		writeJSON(w, http.StatusUnprocessableEntity, apiError{Error: "webauthn-not-passkey", Message: auth.ErrNotPasskey.Error()})
+		return
+	}
 	v, err := a.Store.AddWebAuthn(sess.User, *cred, reg.name)
 	if err != nil {
 		authErr(w, err)
 		return
 	}
-	withCaller(r, a.logger()).Info("auth: security key added", "user", sess.User, "key", v.Name, "passkey", v.Passkey)
+	withCaller(r, a.logger()).Info("auth: passkey added", "user", sess.User, "key", v.Name)
 	writeJSON(w, http.StatusCreated, map[string]any{"key": v})
 }
 

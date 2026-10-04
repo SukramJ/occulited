@@ -125,9 +125,12 @@ type User struct {
 	Preferences *Preferences `json:"preferences,omitempty"`
 	// LastProviderLogin is when the identity provider last signed this account in.
 	LastProviderLogin *time.Time `json:"last_provider_login,omitempty"`
-	// WebAuthn are the account's security keys and passkeys (openccu-lite task 262, webauthn.go);
-	// nil when it has none. With one or more, the password alone does not sign in.
+	// WebAuthn are the account's passkeys (openccu-lite task 262, occulited task 14, webauthn.go);
+	// nil when it has none. Each signs in on its own; the password stays a login of its own too.
 	WebAuthn []*WebAuthnCredential `json:"webauthn,omitempty"`
+	// ConsoleReset is when `occulited admin reset-auth` last reset the account's access on the
+	// console (occulited task 14, consolereset.go): the Status page shows it for a while.
+	ConsoleReset *time.Time `json:"console_reset,omitempty"`
 }
 
 // assignIDs gives every account without a stable id one, unique among the accounts. The id is
@@ -193,6 +196,9 @@ type Account struct {
 	User
 	PasswordSet  bool `json:"password_set"`
 	WebAuthnKeys int  `json:"webauthn_keys"`
+	// WebAuthnUnusable counts the keys among them that cannot sign in: second-factor keys from
+	// before occulited task 14.
+	WebAuthnUnusable int `json:"webauthn_unusable,omitempty"`
 }
 
 // Session is one live login as the store hands it out. ID is the session id for the caller that
@@ -1008,6 +1014,20 @@ func (s *Store) SetPassword(name, newPW string, current *string, keepSession str
 	return s.save()
 }
 
+// accountOf is u as a list hands it out: no hash, no preferences, the keys counted.
+func accountOf(u *User) Account {
+	c := Account{User: *u, PasswordSet: u.Hash != "", WebAuthnKeys: len(u.WebAuthn)}
+	for _, k := range u.WebAuthn {
+		if !k.Passkey() {
+			c.WebAuthnUnusable++
+		}
+	}
+	c.Hash = ""
+	c.Preferences = nil // the list is about accounts, not what their shells remember
+	c.WebAuthn = nil    // the count says enough; the records hold public keys and counters
+	return c
+}
+
 // Users lists accounts without hashes.
 func (s *Store) Users() []Account {
 	s.mu.Lock()
@@ -1015,10 +1035,7 @@ func (s *Store) Users() []Account {
 	_ = s.reload()
 	out := make([]Account, 0, len(s.users))
 	for _, u := range s.users {
-		c := Account{User: *u, PasswordSet: u.Hash != "", WebAuthnKeys: len(u.WebAuthn)}
-		c.Hash = ""
-		c.Preferences = nil // the list is about accounts, not what their shells remember
-		c.WebAuthn = nil    // the count says enough; the records hold public keys and counters
+		c := accountOf(u)
 		out = append(out, c)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
@@ -1168,12 +1185,8 @@ func (s *Store) LoginDetail(name, pw, remote, agent string) (*Session, Refusal, 
 		return nil, why, ErrInvalidCredentials
 	}
 	delete(s.failures, "u:"+name)
-	// task 262: an account with a security key signs in with the key as well - the password
-	// alone opens nothing (BeginPasswordLogin is the two-step login's first half)
-	if len(u.WebAuthn) > 0 {
-		why.Reason = "second factor required"
-		return nil, why, ErrSecondFactor
-	}
+	// occulited task 14: an account's passkeys are a login of their own, never a second factor -
+	// the password opens the session whatever keys the account has
 	sess, err := s.openSession(name, u.Level, MethodPassword, remote, agent)
 	return sess, why, err
 }

@@ -60,7 +60,7 @@ jobs:
         run: python3 scripts/test_wording_check.py && python3 scripts/wording-check.py
       - name: No real device identifiers, only invented ones (B-24)
         run: python3 scripts/test_ids_check.py && python3 scripts/ids-check.py
-      - name: The version comes from the image's v* tags (openccu-lite's occulited task 9)
+      - name: The version is the commit, not the image's v* tag (occulited task 16)
         run: python3 scripts/test_version.py
       - name: svelte-check
         working-directory: ui

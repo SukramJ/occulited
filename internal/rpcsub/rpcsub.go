@@ -163,7 +163,11 @@ type IfaceStatus struct {
 	LastInit     string `json:"last_init,omitempty"`
 	LastError    string `json:"last_error,omitempty"`
 	Events       uint64 `json:"events"`
-	Calls        uint64 `json:"calls"`
+	// Telegrams counts the calls that carried a device's events (occulited task 13): a
+	// system.multicall is one, however many events it holds, and so is a single event call; a
+	// ping's PONG is none. The radio sampler makes the Status page's telegrams/s of it.
+	Telegrams uint64 `json:"telegrams"`
+	Calls     uint64 `json:"calls"`
 	// Restored: the daemon called us on its own after our init - its restart kept the entry
 	Restored bool `json:"restored,omitempty"`
 	// Stalled is when the daemon was found stuck (openccu-lite B-201), absent while it is not:
@@ -221,6 +225,7 @@ type iface struct {
 	lastInit   time.Time
 	lastErr    string
 	events     uint64
+	telegrams  uint64
 	calls      uint64
 	pingSent   time.Time
 	pingOK     bool      // the last ping call was answered (whatever came of it)
@@ -712,7 +717,7 @@ func (s *Subscriber) Status() []IfaceStatus {
 func (s *Subscriber) statusLocked() []IfaceStatus {
 	out := []IfaceStatus{}
 	for _, i := range s.ifaces {
-		st := IfaceStatus{Name: i.name, URL: i.rawURL, State: i.state, Registered: i.registered, LastError: i.lastErr, Events: i.events, Calls: i.calls, Restored: i.restored}
+		st := IfaceStatus{Name: i.name, URL: i.rawURL, State: i.state, Registered: i.registered, LastError: i.lastErr, Events: i.events, Telegrams: i.telegrams, Calls: i.calls, Restored: i.restored}
 		if i.stallKind != "" {
 			st.Stalled, st.StallKind = i.stallSince.UTC().Format(time.RFC3339), i.stallKind
 		}

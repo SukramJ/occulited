@@ -147,14 +147,14 @@ func TestVersionAndSnapshot(t *testing.T) {
 	}
 }
 
-// task 9: /version names the implementation with occulited's version and the commit beside it; a
-// build without a commit leaves the field out
+// /version names the implementation with occulited's version - the commit (occulited task 16) - and
+// the bare hash beside it; a build without a commit leaves the field out
 func TestVersionImplementationAndCommit(t *testing.T) {
 	impl, commit := Implementation, Commit
 	t.Cleanup(func() { Implementation, Commit = impl, commit })
 	for _, c := range []struct{ impl, commit string }{
-		{"occulited 1.0.0-dev.38", "fa42dfde1e31fb074df53220dd573ceb92642ff0"},
-		{"occulited 1.0.0-dev.38-5-gfa42dfd-dirty", "fa42dfde1e31fb074df53220dd573ceb92642ff0"},
+		{"occulited fa42dfde1e31fb074df53220dd573ceb92642ff0", "fa42dfde1e31fb074df53220dd573ceb92642ff0"},
+		{"occulited fa42dfde1e31fb074df53220dd573ceb92642ff0-dirty", "fa42dfde1e31fb074df53220dd573ceb92642ff0"},
 		{"occulited dev", ""},
 	} {
 		Implementation, Commit = c.impl, c.commit

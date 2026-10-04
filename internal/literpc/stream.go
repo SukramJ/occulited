@@ -87,6 +87,14 @@ func (f Filter) matches(typ string, m rpcsub.Message) bool {
 	return true
 }
 
+// Carries says whether the stream takes interface iface's messages (occulited B-45): its filter
+// names that interface, or none. Such a stream is one of the interface's subscribers on the Status
+// page, beside the callbacks registered with the process itself - whatever else it filters, as an
+// XML-RPC client's init is a subscription however much of it the client then uses.
+func (st Stream) Carries(iface string) bool {
+	return len(st.Filter.Interfaces) == 0 || has(st.Filter.Interfaces, iface)
+}
+
 func has(list []string, v string) bool {
 	for _, x := range list {
 		if x == v {

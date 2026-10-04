@@ -253,7 +253,31 @@ func (a *SystemAPI) warningSources() []warnings.Source {
 		{IDs: []string{"hmip-local-key"}, Eval: a.hmipLocalKeyWarning},
 		{IDs: []string{"hmip-key-declined"}, Eval: a.hmipKeyDeclinedWarning},
 		{IDs: []string{"legacy-session"}, Lists: true, Eval: a.legacySessionWarning},
+		// occulited task 14: an account's access was reset on the console
+		{IDs: []string{"console-reset"}, Lists: true, Eval: a.consoleResetWarning},
 	}
+}
+
+// console-reset (occulited task 14): `occulited admin reset-auth` reset accounts' access on the
+// console - passkeys removed, a one-time password set - in the last auth.ConsoleResetNotice. The
+// variant is the set of user@time, so another reset is a new notice; it clears by itself after
+// the week.
+func (a *SystemAPI) consoleResetWarning(context.Context) ([]warnings.Warning, bool) {
+	if a.ConsoleResets == nil {
+		return nil, true
+	}
+	resets := a.ConsoleResets(time.Now().Add(-auth.ConsoleResetNotice))
+	if len(resets) == 0 {
+		return nil, true
+	}
+	ids := make([]string, len(resets))
+	list := make([]map[string]any, len(resets))
+	for i, r := range resets {
+		ids[i] = fmt.Sprintf("%s@%d", r.User, r.At.Unix())
+		list[i] = map[string]any{"user": r.User, "at": r.At.UTC().Format(time.RFC3339)}
+	}
+	sort.Strings(ids)
+	return []warnings.Warning{{ID: "console-reset", Variant: strings.Join(ids, ","), Severity: warnings.SeverityWarning, Href: "/system/users", Params: map[string]any{"accounts": list}}}, true
 }
 
 // journal-target: the journal was to be persistent or ram-sync and is in RAM, because the boot
@@ -992,8 +1016,10 @@ const (
 )
 
 // hmip-key-declined (task 201, decided in task 154's Q&A): hmipserver turned an inclusion request
-// down because the device's key in sgtin.map is not that device's key. Without this the device
-// simply never appears and nothing says why - the line is in hmipserver's log and nowhere else.
+// down because the device's local key it was given (in sgtin.map, or entered for the pairing) is
+// not that device's key. Without this the device simply never appears and nothing says why - the line
+// is in hmipserver's log and nowhere else. The image's log4j2 template keeps the logger that writes it
+// at debug whatever LOGLEVEL_HMIP says, so the line is there at the warn default too.
 //
 // Read on demand from the journal of this boot, pre-filtered by journalctl on the fixed part of
 // the line, so the usual answer costs one grep that finds nothing. The devices are listed only

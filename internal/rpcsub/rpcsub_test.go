@@ -388,6 +388,24 @@ func TestRegistersAnswersAndForwards(t *testing.T) {
 	if st := s.Status(); st[0].Events != 3 || st[0].LastActivity == "" {
 		t.Fatalf("counters %+v", st)
 	}
+	// occulited task 13: a telegram is a call with a device's events - the single event and the
+	// multicall are two, its two events one; a ping's PONG, alone or in a multicall, is none
+	if st := s.Status(); st[0].Telegrams != 2 {
+		t.Fatalf("telegrams after an event and a multicall: %+v", st[0])
+	}
+	rfd.send([][3]string{{"CENTRAL", "PONG", "x"}}, false)
+	rfd.send([][3]string{{"CENTRAL", "PONG", "x"}}, true)
+	r.next(t, "event")
+	r.next(t, "event")
+	if st := s.Status(); st[0].Telegrams != 2 || st[0].Events != 5 {
+		t.Fatalf("a PONG counted as a telegram: %+v", st[0])
+	}
+	rfd.send([][3]string{{"CENTRAL", "PONG", "x"}, {"JEQ9000001:1", "STATE", "1"}}, true)
+	r.next(t, "event")
+	r.next(t, "event")
+	if st := s.Status(); st[0].Telegrams != 3 {
+		t.Fatalf("a multicall with a device's event beside a PONG: %+v", st[0])
+	}
 }
 
 // occulited task 5: updateDevice's hint and replaceDevice's old and new device go onto the bus -

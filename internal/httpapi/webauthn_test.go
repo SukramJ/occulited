@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/fxamacker/cbor/v2"
+	"github.com/go-webauthn/webauthn/webauthn"
 
 	"github.com/hobbyquaker/occulited/internal/auth"
 	"github.com/hobbyquaker/occulited/internal/meta"
@@ -37,6 +38,8 @@ type softKey struct {
 	id      []byte
 	counter uint32
 	rk, uv  bool
+	// noCredProps leaves the credProps result out, as a browser that does not report it does
+	noCredProps bool
 }
 
 func newSoftKey(t *testing.T, rk, uv bool) *softKey {
@@ -76,10 +79,14 @@ func (k *softKey) attest(challenge, origin, rpID string) []byte {
 	auth = append(auth, k.id...)
 	auth = append(auth, cose...)
 	att, _ := cbor.Marshal(map[string]any{"fmt": "none", "attStmt": map[string]any{}, "authData": auth})
+	ext := map[string]any{"credProps": map[string]any{"rk": k.rk}}
+	if k.noCredProps {
+		ext = map[string]any{}
+	}
 	out, _ := json.Marshal(map[string]any{
 		"id": b64(k.id), "rawId": b64(k.id), "type": "public-key",
 		"response":               map[string]any{"clientDataJSON": b64(cd), "attestationObject": b64(att), "transports": []string{"usb"}},
-		"clientExtensionResults": map[string]any{"credProps": map[string]any{"rk": k.rk}},
+		"clientExtensionResults": ext,
 	})
 	return out
 }
@@ -237,38 +244,12 @@ func TestWebAuthnRegisterAndLogin(t *testing.T) {
 		t.Errorf("a duplicate key: %d %v", st, out)
 	}
 
-	// the password alone opens nothing now: the key step follows
+	// occulited task 14: the password alone signs in whatever keys the account has - no second
+	// factor, and the key step's route is gone
 	if st, out = call(t, srv, rpHost, "POST", "/api/auth/v1/logout", "", hdr); st != 200 {
 		t.Fatalf("logout: %d %v", st, out)
 	}
-	st, out = call(t, srv, rpHost, "POST", "/api/auth/v1/login", `{"username":"admin","password":"secret123"}`, nil)
-	if st != 200 || out["second_factor"] != "webauthn" || out["sid"] != nil || out["login"] == "" {
-		t.Fatalf("login with a key: %d %v", st, out)
-	}
-	allow, _ := out["options"].(map[string]any)["allowCredentials"].([]any)
-	if len(allow) != 1 {
-		t.Errorf("allow list: %v", out["options"])
-	}
-	// a wrong password still fails as before, and does not start the key step
-	if st, o := call(t, srv, rpHost, "POST", "/api/auth/v1/login", `{"username":"admin","password":"wrong-one-1"}`, nil); st != 401 || o["second_factor"] != nil {
-		t.Errorf("wrong password: %d %v", st, o)
-	}
-	// the key step: a wrong answer (another key) is refused and the ceremony is spent
-	other := newSoftKey(t, false, false)
-	login := out["login"].(string)
-	challenge := challengeOf(t, out)
-	if st, o := call(t, srv, rpHost, "POST", "/api/auth/v1/login/webauthn", mustJSON(map[string]any{"login": login, "response": json.RawMessage(other.assert(challenge, rpOrigin, rpHost, nil, 1))}), nil); st != 401 {
-		t.Errorf("another key: %d %v", st, o)
-	}
-	if st, o := call(t, srv, rpHost, "POST", "/api/auth/v1/login/webauthn", mustJSON(map[string]any{"login": login, "response": json.RawMessage(passkey.assert(challenge, rpOrigin, rpHost, nil, 1))}), nil); st != 401 {
-		t.Errorf("a spent ceremony: %d %v", st, o)
-	}
-	// and the right one opens the session, with the password's method
-	st, out = call(t, srv, rpHost, "POST", "/api/auth/v1/login", `{"username":"admin","password":"secret123"}`, nil)
-	if st != 200 || out["second_factor"] != "webauthn" {
-		t.Fatalf("login again: %d %v", st, out)
-	}
-	req, _ := http.NewRequest("POST", srv.URL+"/api/auth/v1/login/webauthn", strings.NewReader(mustJSON(map[string]any{"login": out["login"], "response": json.RawMessage(passkey.assert(challengeOf(t, out), rpOrigin, rpHost, nil, 1))})))
+	req, _ := http.NewRequest("POST", srv.URL+"/api/auth/v1/login", strings.NewReader(`{"username":"admin","password":"secret123"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Host = rpHost
 	res, err := http.DefaultClient.Do(req)
@@ -279,19 +260,21 @@ func TestWebAuthnRegisterAndLogin(t *testing.T) {
 	_ = json.NewDecoder(res.Body).Decode(&fin)
 	res.Body.Close()
 	sid, _ := fin["sid"].(string)
-	if res.StatusCode != 200 || sid == "" || len(res.Cookies()) < 2 {
-		t.Fatalf("key step: %d %v %v", res.StatusCode, fin, res.Cookies())
+	if res.StatusCode != 200 || sid == "" || fin["second_factor"] != nil || len(res.Cookies()) < 2 {
+		t.Fatalf("password login with a passkey: %d %v %v", res.StatusCode, fin, res.Cookies())
 	}
 	if st, o := call(t, srv, rpHost, "GET", "/api/auth/v1/state", "", map[string]string{"Cookie": CookieName + "=" + sid}); st != 200 || o["authenticated"] != true || o["method"] != "password" {
-		t.Errorf("state after the key step: %d %v", st, o)
+		t.Errorf("state after the password: %d %v", st, o)
 	}
-	// the key's last use is recorded, its sign count too (1 now: a lower one is a clone)
-	st, out = call(t, srv, rpHost, "GET", "/api/auth/v1/me/webauthn", "", map[string]string{"Cookie": CookieName + "=" + sid})
-	if k := out["keys"].([]any)[0].(map[string]any); st != 200 || k["last_used"] == nil {
-		t.Errorf("last used: %d %v", st, out)
+	if st, o := call(t, srv, rpHost, "POST", "/api/auth/v1/login/webauthn", `{"login":"x","response":{}}`, nil); st == 200 {
+		t.Errorf("the key step's route answers: %d %v", st, o)
+	}
+	// a wrong password still fails as before
+	if st, o := call(t, srv, rpHost, "POST", "/api/auth/v1/login", `{"username":"admin","password":"wrong-one-1"}`, nil); st != 401 || o["sid"] != nil {
+		t.Errorf("wrong password: %d %v", st, o)
 	}
 
-	// the passkey signs in alone, with user verification
+	// the passkey signs in without name and password, with user verification
 	st, out = call(t, srv, rpHost, "POST", "/api/auth/v1/login/passkey", "{}", nil)
 	if st != 200 || out["login"] == "" {
 		t.Fatalf("passkey begin: %d %v", st, out)
@@ -301,6 +284,18 @@ func TestWebAuthnRegisterAndLogin(t *testing.T) {
 	}
 	handle := []byte(fin["account_id"].(string))
 	// a sign count that went backwards: refused
+	if st, o := call(t, srv, rpHost, "POST", "/api/auth/v1/login/passkey/finish", mustJSON(map[string]any{"login": out["login"], "response": json.RawMessage(passkey.assert(challengeOf(t, out), rpOrigin, rpHost, handle, 0))}), nil); st != 200 {
+		t.Errorf("a first use (count 0): %d %v", st, o)
+	}
+	if st, out = call(t, srv, rpHost, "POST", "/api/auth/v1/login/passkey", "{}", nil); st != 200 {
+		t.Fatalf("passkey begin: %d %v", st, out)
+	}
+	if st, o := call(t, srv, rpHost, "POST", "/api/auth/v1/login/passkey/finish", mustJSON(map[string]any{"login": out["login"], "response": json.RawMessage(passkey.assert(challengeOf(t, out), rpOrigin, rpHost, handle, 3))}), nil); st != 200 {
+		t.Errorf("count 3: %d %v", st, o)
+	}
+	if st, out = call(t, srv, rpHost, "POST", "/api/auth/v1/login/passkey", "{}", nil); st != 200 {
+		t.Fatalf("passkey begin: %d %v", st, out)
+	}
 	if st, o := call(t, srv, rpHost, "POST", "/api/auth/v1/login/passkey/finish", mustJSON(map[string]any{"login": out["login"], "response": json.RawMessage(passkey.assert(challengeOf(t, out), rpOrigin, rpHost, handle, 1))}), nil); st != 401 {
 		t.Errorf("a cloned key's count: %d %v", st, o)
 	}
@@ -314,7 +309,7 @@ func TestWebAuthnRegisterAndLogin(t *testing.T) {
 	if st, o := call(t, srv, rpHost, "GET", "/api/auth/v1/state", "", map[string]string{"Cookie": CookieName + "=" + out["sid"].(string)}); st != 200 || o["method"] != auth.MethodPasskey {
 		t.Errorf("state after the passkey: %d %v", st, o)
 	}
-	// without user verification a key is a second factor only
+	// without user verification a key signs nobody in
 	noUV := *passkey
 	noUV.uv = false
 	if st, out = call(t, srv, rpHost, "POST", "/api/auth/v1/login/passkey", "{}", nil); st != 200 {
@@ -341,36 +336,101 @@ func TestWebAuthnRegisterAndLogin(t *testing.T) {
 	if st, o := call(t, srv, rpHost, "DELETE", "/api/auth/v1/me/webauthn/"+b64(passkey.id), "", own); st != 200 || len(o["keys"].([]any)) != 0 {
 		t.Fatalf("remove: %d %v", st, o)
 	}
-	if st, o := call(t, srv, rpHost, "POST", "/api/auth/v1/login", `{"username":"admin","password":"secret123"}`, nil); st != 200 || o["sid"] == nil || o["second_factor"] != nil {
+	if st, o := call(t, srv, rpHost, "POST", "/api/auth/v1/login", `{"username":"admin","password":"secret123"}`, nil); st != 200 || o["sid"] == nil {
 		t.Errorf("login without keys: %d %v", st, o)
+	}
+	if _, o := call(t, srv, rpHost, "GET", "/api/auth/v1/webauthn", "", nil); o["passkeys"] != false {
+		t.Errorf("info without keys: %v", o)
 	}
 }
 
-// The key step's failures count towards the lockout like wrong passwords.
+// occulited task 14: a registration asks for a resident key and user verification, both required,
+// and refuses a credential that is not a passkey; one whose browser does not report credProps is
+// taken as the resident credential it was asked for.
+func TestWebAuthnRegisterOnlyPasskeys(t *testing.T) {
+	srv, _ := webauthnServer(t, "")
+	call(t, srv, rpHost, "POST", "/api/auth/v1/setup", `{"username":"admin","password":"secret123"}`, nil)
+	cookie := cookieOf(t, srv, `{"username":"admin","password":"secret123"}`)
+	attempt := func(k *softKey) (int, map[string]any) {
+		hdr := map[string]string{"Cookie": CookieName + "=" + cookie}
+		_, o := call(t, srv, rpHost, "POST", "/api/auth/v1/ticket", `{"path":"/api/auth/v1/me/webauthn","confirm":true,"password":"secret123"}`, hdr)
+		hdr["X-Occulite-Confirm"] = o["ticket"].(string)
+		st, out := call(t, srv, rpHost, "POST", "/api/auth/v1/me/webauthn/begin", `{"name":"k"}`, hdr)
+		if st != 200 {
+			t.Fatalf("begin: %d %v", st, out)
+		}
+		sel, _ := out["options"].(map[string]any)["authenticatorSelection"].(map[string]any)
+		if sel["residentKey"] != "required" || sel["requireResidentKey"] != true || sel["userVerification"] != "required" {
+			t.Errorf("selection: %v", sel)
+		}
+		delete(hdr, "X-Occulite-Confirm")
+		return call(t, srv, rpHost, "POST", "/api/auth/v1/me/webauthn/finish", mustJSON(map[string]any{"registration": out["registration"], "response": json.RawMessage(k.attest(challengeOf(t, out), rpOrigin, rpHost))}), hdr)
+	}
+	if st, out := attempt(newSoftKey(t, false, true)); st != 422 || out["error"] != "webauthn-not-passkey" {
+		t.Errorf("not resident: %d %v", st, out)
+	}
+	if st, out := attempt(newSoftKey(t, true, false)); st != 422 || out["error"] != "webauthn-refused" {
+		t.Errorf("no user verification: %d %v", st, out)
+	}
+	quiet := newSoftKey(t, true, true)
+	quiet.noCredProps = true
+	if st, out := attempt(quiet); st != 201 || out["key"].(map[string]any)["passkey"] != true {
+		t.Errorf("no credProps: %d %v", st, out)
+	}
+}
+
+// occulited task 14's upgrade: a key stored as a second factor by task 262 stays, listed as one
+// that cannot sign in; the password alone opens the session, and the login page has no button.
+func TestWebAuthnLegacySecondFactorKey(t *testing.T) {
+	srv, a := webauthnServer(t, "")
+	call(t, srv, rpHost, "POST", "/api/auth/v1/setup", `{"username":"admin","password":"secret123"}`, nil)
+	old := newSoftKey(t, false, false)
+	rk := false
+	cred := webauthn.Credential{ID: old.id, PublicKey: []byte("pk")}
+	cred.Extensions.RK = &rk
+	if _, err := a.Store.AddWebAuthn("admin", cred, "blue"); err != nil {
+		t.Fatal(err)
+	}
+	if _, o := call(t, srv, rpHost, "GET", "/api/auth/v1/webauthn", "", nil); o["passkeys"] != false || o["registered"] != true {
+		t.Errorf("info: %v", o)
+	}
+	st, out := call(t, srv, rpHost, "POST", "/api/auth/v1/login", `{"username":"admin","password":"secret123"}`, nil)
+	if st != 200 || out["sid"] == nil {
+		t.Fatalf("password login: %d %v", st, out)
+	}
+	hdr := map[string]string{"Cookie": CookieName + "=" + out["sid"].(string)}
+	if st, o := call(t, srv, rpHost, "GET", "/api/auth/v1/me/webauthn", "", hdr); st != 200 || o["keys"].([]any)[0].(map[string]any)["passkey"] != false {
+		t.Errorf("list: %d %v", st, o)
+	}
+	if st, o := call(t, srv, rpHost, "GET", "/api/auth/v1/users", "", hdr); st != 200 || !strings.Contains(mustJSON(o), `"webauthn_unusable":1`) {
+		t.Errorf("users: %d %v", st, o)
+	}
+}
+
+// A refused passkey counts towards the lockout of the address like a wrong password.
 func TestWebAuthnLockout(t *testing.T) {
 	srv, _ := webauthnServer(t, "")
 	call(t, srv, rpHost, "POST", "/api/auth/v1/setup", `{"username":"admin","password":"secret123"}`, nil)
 	cookie := cookieOf(t, srv, `{"username":"admin","password":"secret123"}`)
-	key := newSoftKey(t, false, false)
-	register(t, srv, cookie, "secret123", "u2f", key)
-	other := newSoftKey(t, false, false)
+	register(t, srv, cookie, "secret123", "phone", newSoftKey(t, true, true))
+	other := newSoftKey(t, true, true)
 	locked := false
 	for i := 0; i < 10 && !locked; i++ {
-		st, out := call(t, srv, rpHost, "POST", "/api/auth/v1/login", `{"username":"admin","password":"secret123"}`, nil)
+		st, out := call(t, srv, rpHost, "POST", "/api/auth/v1/login/passkey", "{}", nil)
 		if st == 429 {
 			locked = true
 			break
 		}
-		if st != 200 || out["second_factor"] != "webauthn" {
-			t.Fatalf("login %d: %d %v", i, st, out)
+		if st != 200 {
+			t.Fatalf("begin %d: %d %v", i, st, out)
 		}
-		st, out = call(t, srv, rpHost, "POST", "/api/auth/v1/login/webauthn", mustJSON(map[string]any{"login": out["login"], "response": json.RawMessage(other.assert(challengeOf(t, out), rpOrigin, rpHost, nil, uint32(i+1)))}), nil)
+		st, out = call(t, srv, rpHost, "POST", "/api/auth/v1/login/passkey/finish", mustJSON(map[string]any{"login": out["login"], "response": json.RawMessage(other.assert(challengeOf(t, out), rpOrigin, rpHost, []byte("nobody00"), uint32(i+1)))}), nil)
 		if st != 401 && st != 429 {
-			t.Fatalf("key step %d: %d %v", i, st, out)
+			t.Fatalf("finish %d: %d %v", i, st, out)
 		}
 	}
 	if !locked {
-		t.Fatal("eight refused key steps did not lock the account")
+		t.Fatal("refused passkeys did not lock the address")
 	}
 }
 

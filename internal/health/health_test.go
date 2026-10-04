@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/hobbyquaker/occulited/internal/interfaces"
+	"github.com/hobbyquaker/occulited/internal/rpcsub"
 	"github.com/hobbyquaker/occulited/internal/store"
 )
 
@@ -247,5 +248,76 @@ func TestRestoreMergesWithMemory(t *testing.T) {
 	// memory's two are pending, the file's three are not
 	if series, _ := s.Pending(false); len(series) != 1 || len(series[0].Rows) != 2 {
 		t.Errorf("pending %+v", series)
+	}
+}
+
+// occulited task 13: a poll's event rate is the count's difference to the last poll over the
+// time between, per minute (task 17); the first poll only marks, a count that went back marks again, an interface whose
+// registration is gone is a gap; the rings go into the database beside the duty cycle's and come
+// back from it, and an old occulited's decoder skips their rows.
+func TestRates(t *testing.T) {
+	t0 := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+	s := &Sampler{Rows: 3}
+	feed := func(in uint64, registered bool) []rpcsub.IfaceStatus {
+		state := "up"
+		if !registered {
+			state = "down"
+		}
+		return []rpcsub.IfaceStatus{{Name: "HmIP-RF", Telegrams: in, Registered: registered, State: state}}
+	}
+	poll := func(at time.Time, in uint64, registered bool) {
+		s.mu.Lock()
+		s.rateLocked(feed(in, registered), at)
+		s.mu.Unlock()
+	}
+	poll(t0, 100, true)
+	if r := s.Status().Rates; len(r["HmIP-RF"]) != 0 {
+		t.Fatalf("the first poll is a mark only: %+v", r)
+	}
+	poll(t0.Add(time.Minute), 130, true)                // 30 telegrams in 60 s
+	poll(t0.Add(2*time.Minute), 130, false)             // the subscriber lost its registration
+	poll(t0.Add(3*time.Minute), 5, true)                // the interface came back with fresh counts: a mark
+	poll(t0.Add(4*time.Minute), 6, true)                // one in a minute
+	poll(t0.Add(4*time.Minute+30*time.Second), 9, true) // three in half a minute
+	r := s.Status().Rates["HmIP-RF"]
+	if len(r) != 3 { // the ring of 3: the first of the four samples is gone
+		t.Fatalf("ring %+v", r)
+	}
+	if r[0].Up || r[0].In != 0 || !r[1].Up || r[1].In != 1 || !r[2].Up || r[2].In != 6 {
+		t.Errorf("rates %+v", r)
+	}
+	if got := perMinute(1, 7); got != 8.571 {
+		t.Errorf("1 in 7 s: %v", got)
+	}
+
+	// the database: the series rate:<interface>, its own row version
+	all, done := s.Pending(true)
+	if len(all) != 1 || all[0].Name != "rate:HmIP-RF" || all[0].Bucket != "health" || len(all[0].Rows) != 3 || !all[0].Replace {
+		t.Fatalf("pending %+v", all)
+	}
+	done()
+	if _, ok := decodeSample(all[0].Rows[1]); ok {
+		t.Error("a rate row reads as a duty cycle sample")
+	}
+	s2 := &Sampler{Rows: 3}
+	s2.Restore(map[string][]store.Row{"rate:HmIP-RF": append(all[0].Rows, store.Row{At: t0, Value: []byte{rateV2, 1}})})
+	back := s2.Status().Rates["HmIP-RF"]
+	if fmt.Sprint(back) != fmt.Sprint(r) {
+		t.Errorf("restored %+v, want %+v", back, r)
+	}
+	if series, _ := s2.Pending(false); len(series) != 0 {
+		t.Errorf("restored rows pending again: %+v", series)
+	}
+	// task 13's rows (0x81: in and out per second) read as in per minute, out dropped
+	old := []byte{rateV1, 1, 0, 0, 0x01, 0xf4, 0, 0, 0, 7} // in 0.5/s
+	if got, ok := decodeRate(store.Row{At: t0, Value: old}); !ok || !got.Up || got.In != 30 {
+		t.Errorf("an 0x81 row: %+v %v", got, ok)
+	}
+	if v := all[0].Rows[1].Value; len(v) != 6 || v[0] != rateV2 {
+		t.Errorf("a new row %x", v)
+	}
+	// a rate beyond what a uint32 of thousandths takes is held to it
+	if milli(5e6) != 4294967295 || milli(-1) != 0 {
+		t.Errorf("milli %d %d", milli(5e6), milli(-1))
 	}
 }

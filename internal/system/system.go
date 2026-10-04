@@ -78,8 +78,8 @@ func (r Root) ReadVersion() Version {
 type Status struct {
 	Hostname string  `json:"hostname"`
 	Version  Version `json:"version"`
-	// Occulited is occulited's own version (main.version, task 133): the image version its commit is
-	// tagged with, `git describe` between build rounds (task 9); OcculitedCommit the commit itself
+	// Occulited is occulited's own version (main.version, task 133): the commit it was built from,
+	// -dirty or -hot after it (occulited task 16); OcculitedCommit the bare hash
 	Occulited       string    `json:"occulited_version,omitempty"`
 	OcculitedCommit string    `json:"occulited_commit,omitempty"`
 	UptimeS         int64     `json:"uptime_s"`

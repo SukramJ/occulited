@@ -769,3 +769,23 @@ func TestConvertDeviceCalls(t *testing.T) {
 		}
 	}
 }
+
+// occulited B-45: a stream is a subscriber of every interface its filter takes - all without an
+// interface filter, whatever else it filters
+func TestStreamCarries(t *testing.T) {
+	for _, tc := range []struct {
+		f    Filter
+		want map[string]bool
+	}{
+		{Filter{}, map[string]bool{"HmIP-RF": true, "BidCos-RF": true}},
+		{Filter{Types: []string{"devices"}, Addresses: []string{"ABC"}}, map[string]bool{"HmIP-RF": true, "BidCos-RF": true}},
+		{Filter{Interfaces: []string{"HmIP-RF"}}, map[string]bool{"HmIP-RF": true, "BidCos-RF": false}},
+		{Filter{Interfaces: []string{"BidCos-RF", "CUxD"}}, map[string]bool{"HmIP-RF": false, "BidCos-RF": true, "CUxD": true}},
+	} {
+		for iface, want := range tc.want {
+			if got := (Stream{Filter: tc.f}).Carries(iface); got != want {
+				t.Errorf("%+v carries %s: %v", tc.f, iface, got)
+			}
+		}
+	}
+}

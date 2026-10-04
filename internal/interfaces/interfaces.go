@@ -265,6 +265,13 @@ type RadioInterface struct {
 	// set by the API from the radio plan; entries with one key are one radio
 	Radio     string `json:"radio,omitempty"`
 	RadioName string `json:"radio_name,omitempty"`
+	// Module, Adapter and Path: the radio as the Status page's interface card names it (occulited
+	// task 13, radio.Plan.Link) - the module or gateway, the HB-RF board it sits on, and how the
+	// process reaches it (multimacd, direct, usb, lan); set by the API, absent where the plan does
+	// not know the entry
+	Module  string `json:"module,omitempty"`
+	Adapter string `json:"adapter,omitempty"`
+	Path    string `json:"path,omitempty"`
 	// CarrierSense is CARRIER_SENSE_LEVEL, rounded to a whole percent; nil when nobody reported it.
 	// A pointer because 0 % is a value: the RPI-RF-MOD on the Charly reads 0.0, and an omitempty int
 	// dropped it as "not reported".

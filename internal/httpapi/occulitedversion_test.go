@@ -6,14 +6,14 @@ import (
 	"testing"
 )
 
-// task 133: /status carries occulited's own version beside /VERSION's, for the Status page; task 9:
-// the version is the image version the commit is tagged with, and the commit goes beside it
+// task 133: /status carries occulited's own version beside /VERSION's, for the Status page; the
+// version is the commit (occulited task 16), and the bare hash goes beside it
 func TestStatusCarriesOcculitedVersion(t *testing.T) {
 	r := fakeRoot(t)
 	const sha = "fa42dfde1e31fb074df53220dd573ceb92642ff0"
 	for _, c := range []struct{ version, commit string }{
-		{"1.0.0-dev.38", sha},
-		{"1.0.0-dev.38-5-gfa42dfd-dirty", sha},
+		{sha, sha},
+		{sha + "-hot", sha},
 		{"dev", ""},
 		{"", ""}, // a build without -X main.version leaves both fields out
 	} {

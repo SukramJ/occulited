@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -10,6 +11,9 @@ import (
 	"time"
 
 	"github.com/hobbyquaker/occulited/internal/health"
+	"github.com/hobbyquaker/occulited/internal/interfaces"
+	"github.com/hobbyquaker/occulited/internal/literpc"
+	"github.com/hobbyquaker/occulited/internal/rpcsub"
 	"github.com/hobbyquaker/occulited/internal/system"
 )
 
@@ -135,5 +139,94 @@ func TestStaleErrors(t *testing.T) {
 	}
 	if staleErrors(&health.Status{Errors: map[string]string{"HmIP-RF": "x"}}, units) {
 		t.Error("no poll yet, nothing is stale")
+	}
+}
+
+// occulited task 13: GET /radio/health carries the event rate of every interface process the
+// sampler counts (per minute, task 17), and the subscriber summary of every interface it knows that
+// has a handlers file - with lite-rpc's open event streams counted in (B-45)
+func TestRadioHealthRatesAndSubscribers(t *testing.T) {
+	r := fakeRoot(t)
+	if err := os.MkdirAll(filepath.Join(string(r), "var"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(string(r), "var/LegacyService.handlers"), []byte("HmIP-RF_java=http\\://127.0.0.1\\:39292/bidcos\nmb_HmIP_RF=http\\://198.51.100.9\\:2049\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := ln.Addr().String()
+	_ = ln.Close()
+	var in uint64 = 10
+	s := &health.Sampler{Timeout: 2 * time.Second,
+		Interfaces: func() []interfaces.Interface {
+			return interfaces.FromList([]struct{ Name, URL string }{{"HmIP-RF", "xmlrpc://" + closed}, {"CUxD", "xmlrpc_bin://" + closed}})
+		},
+		Feed: func() []rpcsub.IfaceStatus {
+			return []rpcsub.IfaceStatus{{Name: "HmIP-RF", State: "up", Registered: true, Telegrams: in}}
+		},
+	}
+	s.Poll(context.Background())
+	in = 20
+	s.Poll(context.Background())
+	mux := http.NewServeMux()
+	// B-45: an addon's stream on the loopback for every interface, a LAN client's for HmIP-RF, and
+	// one for BidCos-RF alone, which is no subscriber of HmIP-RF
+	lite := literpc.New(literpc.Config{})
+	for _, o := range []struct {
+		subj      literpc.Subject
+		remote    string
+		f         literpc.Filter
+		transport string
+	}{
+		{literpc.Subject{Kind: "token", Name: "addon:openccu-loom"}, "127.0.0.1", literpc.Filter{}, "sse"},
+		{literpc.Subject{Kind: "session", Name: "admin"}, "198.51.100.20", literpc.Filter{Interfaces: []string{"HmIP-RF"}, Types: []string{"devices"}}, "websocket"},
+		{literpc.Subject{Kind: "token", Name: "ha"}, "198.51.100.21", literpc.Filter{Interfaces: []string{"BidCos-RF"}}, "sse"},
+	} {
+		if _, err := lite.Open(o.subj, o.transport, o.remote, o.f); err != nil {
+			t.Fatal(err)
+		}
+	}
+	(&SystemAPI{Root: r, Services: scriptBox{system.AddonScripts{Root: r}}, Health: s, LiteRPC: lite}).Register(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	st, out, _ := do(t, srv, "GET", "/api/system/v1/radio/health", "", nil)
+	if st != 200 {
+		t.Fatalf("%d %v", st, out)
+	}
+	rates, _ := out["rates"].(map[string]any)
+	hmip, _ := rates["HmIP-RF"].([]any)
+	if len(hmip) != 1 {
+		t.Fatalf("rates %v", out["rates"])
+	}
+	if s0 := hmip[0].(map[string]any); s0["up"] != true || s0["in"].(float64) <= 0 {
+		t.Errorf("rate sample %v", s0)
+	} else if _, ok := s0["out"]; ok {
+		t.Errorf("task 17: no outgoing rate any more: %v", s0)
+	}
+	subs, _ := out["subscribers"].(map[string]any)
+	h, _ := subs["HmIP-RF"].(map[string]any)
+	// two callbacks in the handlers file (one internal, one external) and two streams (the addon's
+	// internal, the LAN client's external)
+	if h == nil || h["total"] != 4.0 || h["internal"] != 2.0 || h["external"] != 2.0 || len(h["clients"].([]any)) != 4 {
+		t.Fatalf("subscribers %v", out["subscribers"])
+	}
+	cs := h["clients"].([]any)
+	loom, _ := cs[2].(map[string]any)
+	sm, _ := loom["stream"].(map[string]any)
+	if loom["id"] != "addon:openccu-loom" || loom["internal"] != true || sm["kind"] != "token" || sm["transport"] != "sse" || sm["remote"] != "127.0.0.1" || sm["id"] == "" {
+		t.Errorf("the addon's stream %v", loom)
+	}
+	if lan, _ := cs[3].(map[string]any); lan["id"] != "admin" || lan["internal"] != false {
+		t.Errorf("the LAN client's stream %v", lan)
+	}
+	if _, ok := cs[0].(map[string]any)["stream"]; ok {
+		t.Errorf("a handlers entry carries a stream: %v", cs[0])
+	}
+	// CUxD answered nothing and has no handlers file: no count
+	if _, ok := subs["CUxD"]; ok {
+		t.Errorf("CUxD has a subscriber count: %v", subs)
 	}
 }

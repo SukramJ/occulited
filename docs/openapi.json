@@ -773,6 +773,13 @@
       },
       "AuthAccount": {
         "properties": {
+          "console_reset": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "created": {
             "format": "date-time",
             "type": "string"
@@ -832,6 +839,9 @@
             ]
           },
           "webauthn_keys": {
+            "type": "integer"
+          },
+          "webauthn_unusable": {
             "type": "integer"
           }
         },
@@ -3680,6 +3690,26 @@
         ],
         "type": "object"
       },
+      "HealthRate": {
+        "properties": {
+          "in": {
+            "type": "number"
+          },
+          "t": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "up": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "in",
+          "t",
+          "up"
+        ],
+        "type": "object"
+      },
       "HealthSample": {
         "properties": {
           "cs": {
@@ -3936,6 +3966,9 @@
       },
       "InterfacesRadioInterface": {
         "properties": {
+          "adapter": {
+            "type": "string"
+          },
           "address": {
             "type": "string"
           },
@@ -3964,6 +3997,12 @@
             "type": "string"
           },
           "interface": {
+            "type": "string"
+          },
+          "module": {
+            "type": "string"
+          },
+          "path": {
             "type": "string"
           },
           "radio": {
@@ -7237,6 +7276,10 @@
           "state": {
             "type": "string"
           },
+          "telegrams": {
+            "minimum": 0,
+            "type": "integer"
+          },
           "url": {
             "type": "string"
           }
@@ -7247,6 +7290,7 @@
           "name",
           "registered",
           "state",
+          "telegrams",
           "url"
         ],
         "type": "object"
@@ -13722,58 +13766,35 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "anyOf": [
-                    {
-                      "properties": {
-                        "account_id": {
-                          "type": "string"
-                        },
-                        "level": {
-                          "type": "string"
-                        },
-                        "must_change_password": {
-                          "type": "boolean"
-                        },
-                        "role": {
-                          "type": "string"
-                        },
-                        "sid": {
-                          "type": "string"
-                        },
-                        "user": {
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "account_id",
-                        "level",
-                        "must_change_password",
-                        "role",
-                        "sid",
-                        "user"
-                      ],
-                      "type": "object"
+                  "properties": {
+                    "account_id": {
+                      "type": "string"
                     },
-                    {
-                      "properties": {
-                        "login": {
-                          "type": "string"
-                        },
-                        "options": {
-                          "$ref": "#/components/schemas/ProtocolPublicKeyCredentialRequestOptions"
-                        },
-                        "second_factor": {
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "login",
-                        "options",
-                        "second_factor"
-                      ],
-                      "type": "object"
+                    "level": {
+                      "type": "string"
+                    },
+                    "must_change_password": {
+                      "type": "boolean"
+                    },
+                    "role": {
+                      "type": "string"
+                    },
+                    "sid": {
+                      "type": "string"
+                    },
+                    "user": {
+                      "type": "string"
                     }
-                  ]
+                  },
+                  "required": [
+                    "account_id",
+                    "level",
+                    "must_change_password",
+                    "role",
+                    "sid",
+                    "user"
+                  ],
+                  "type": "object"
                 }
               }
             },
@@ -13784,7 +13805,7 @@
           }
         },
         "security": [],
-        "summary": "Logs in with user name and password; a security key asks for its second step",
+        "summary": "Logs in with user name and password",
         "tags": [
           "auth/login"
         ],
@@ -13822,7 +13843,7 @@
           }
         },
         "security": [],
-        "summary": "Starts a sign-in with a passkey alone",
+        "summary": "Starts a sign-in with a passkey (no name, no password)",
         "tags": [
           "auth/login"
         ],
@@ -13887,70 +13908,6 @@
         },
         "security": [],
         "summary": "Finishes a passkey sign-in and opens the session",
-        "tags": [
-          "auth/login"
-        ],
-        "x-occulite-scopes": []
-      }
-    },
-    "/api/auth/v1/login/webauthn": {
-      "post": {
-        "operationId": "postAuthLoginWebauthn",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PendingBodyInput"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "properties": {
-                    "account_id": {
-                      "type": "string"
-                    },
-                    "level": {
-                      "type": "string"
-                    },
-                    "must_change_password": {
-                      "type": "boolean"
-                    },
-                    "role": {
-                      "type": "string"
-                    },
-                    "sid": {
-                      "type": "string"
-                    },
-                    "user": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "account_id",
-                    "level",
-                    "must_change_password",
-                    "role",
-                    "sid",
-                    "user"
-                  ],
-                  "type": "object"
-                }
-              }
-            },
-            "description": "OK"
-          },
-          "default": {
-            "$ref": "#/components/responses/Error"
-          }
-        },
-        "security": [],
-        "summary": "The security key step of a password login: opens the session",
         "tags": [
           "auth/login"
         ],
@@ -14162,7 +14119,7 @@
             ]
           }
         ],
-        "summary": "The caller's security keys and passkeys",
+        "summary": "The caller's passkeys",
         "tags": [
           "auth/me"
         ],
@@ -14234,7 +14191,7 @@
             ]
           }
         ],
-        "summary": "Starts registering a security key on the caller's account (needs a confirmed ticket)",
+        "summary": "Starts registering a passkey on the caller's account (needs a confirmed ticket)",
         "tags": [
           "auth/me"
         ],
@@ -14297,7 +14254,7 @@
             ]
           }
         ],
-        "summary": "Finishes registering a security key on the caller's account",
+        "summary": "Finishes registering a passkey on the caller's account",
         "tags": [
           "auth/me"
         ],
@@ -14370,7 +14327,7 @@
             ]
           }
         ],
-        "summary": "Removes one of the caller's security keys (needs a confirmed ticket)",
+        "summary": "Removes one of the caller's passkeys (needs a confirmed ticket)",
         "tags": [
           "auth/me"
         ],
@@ -15620,58 +15577,35 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "anyOf": [
-                    {
-                      "properties": {
-                        "account_id": {
-                          "type": "string"
-                        },
-                        "level": {
-                          "type": "string"
-                        },
-                        "must_change_password": {
-                          "type": "boolean"
-                        },
-                        "role": {
-                          "type": "string"
-                        },
-                        "sid": {
-                          "type": "string"
-                        },
-                        "user": {
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "account_id",
-                        "level",
-                        "must_change_password",
-                        "role",
-                        "sid",
-                        "user"
-                      ],
-                      "type": "object"
+                  "properties": {
+                    "account_id": {
+                      "type": "string"
                     },
-                    {
-                      "properties": {
-                        "login": {
-                          "type": "string"
-                        },
-                        "options": {
-                          "$ref": "#/components/schemas/ProtocolPublicKeyCredentialRequestOptions"
-                        },
-                        "second_factor": {
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "login",
-                        "options",
-                        "second_factor"
-                      ],
-                      "type": "object"
+                    "level": {
+                      "type": "string"
+                    },
+                    "must_change_password": {
+                      "type": "boolean"
+                    },
+                    "role": {
+                      "type": "string"
+                    },
+                    "sid": {
+                      "type": "string"
+                    },
+                    "user": {
+                      "type": "string"
                     }
-                  ]
+                  },
+                  "required": [
+                    "account_id",
+                    "level",
+                    "must_change_password",
+                    "role",
+                    "sid",
+                    "user"
+                  ],
+                  "type": "object"
                 }
               }
             },
@@ -16713,7 +16647,7 @@
             ]
           }
         ],
-        "summary": "Another account's security keys",
+        "summary": "Another account's passkeys",
         "tags": [
           "auth/users"
         ],
@@ -16794,7 +16728,7 @@
             ]
           }
         ],
-        "summary": "Removes another account's security key and ends its sessions",
+        "summary": "Removes another account's passkey and ends its sessions",
         "tags": [
           "auth/users"
         ],
@@ -16838,7 +16772,7 @@
           }
         },
         "security": [],
-        "summary": "Whether any account has a passkey or a security key, and the name keys are made on",
+        "summary": "Whether any account has a passkey or any key, and the name keys are made on",
         "tags": [
           "auth/webauthn"
         ],
@@ -28838,6 +28772,25 @@
                     "polled": {
                       "format": "date-time",
                       "type": "string"
+                    },
+                    "rates": {
+                      "additionalProperties": {
+                        "items": {
+                          "$ref": "#/components/schemas/HealthRate"
+                        },
+                        "type": [
+                          "array",
+                          "null"
+                        ]
+                      },
+                      "type": [
+                        "object",
+                        "null"
+                      ]
+                    },
+                    "subscribers": {
+                      "properties": {},
+                      "type": "object"
                     },
                     "units": {
                       "items": {

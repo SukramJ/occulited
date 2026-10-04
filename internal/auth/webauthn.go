@@ -11,15 +11,18 @@ import (
 	"github.com/go-webauthn/webauthn/webauthn"
 )
 
-// Security keys and passkeys (openccu-lite task 262, ASVS 5.0 V6.5): an account may register
-// WebAuthn credentials, each user for their own account. One or more keys make the key the second
-// factor after the password - the password alone is refused - and a key registered as a
-// discoverable credential with user verification signs in alone (a passkey). The store keeps the
-// library's credential record (id, public key, sign count, flags, AAGUID, transports) beside a
-// name, when it was made and last used, in users.json next to the password hash; the console
-// writes the same file. The WebAuthn ceremonies - the challenges and their verification - are
-// the API's (internal/httpapi/webauthn.go) with github.com/go-webauthn/webauthn; the store
-// holds the pending state between a ceremony's two halves, so a login that is half done has one
+// Passkeys (openccu-lite task 262, ASVS 5.0 V6.5; occulited task 14): an account may register
+// WebAuthn credentials, each user for their own account. Since occulited task 14 a key is always a
+// passkey - a discoverable credential that verified the user (PIN or biometric) - and a passkey is
+// always a login of its own: it signs in without name and password. There is no second factor any
+// more: the password alone opens a session whatever keys the account has. A key registered before
+// task 14 as a second factor only (no resident credential, or no user verification) is kept and
+// listed as one that cannot be used to sign in, for its owner to remove and replace. The store
+// keeps the library's credential record (id, public key, sign count, flags, AAGUID, transports)
+// beside a name, when it was made and last used, in users.json next to the password hash; the
+// console writes the same file. The WebAuthn ceremonies - the challenges and their verification -
+// are the API's (internal/httpapi/webauthn.go) with github.com/go-webauthn/webauthn; the store
+// holds the pending state between a ceremony's two halves, so a ceremony that is half done has one
 // owner and one time limit.
 
 // WebAuthnCredential is one security key or passkey of an account as users.json holds it.
@@ -35,9 +38,10 @@ type WebAuthnCredential struct {
 // ID is the credential id as the API and the console name it: base64url, unpadded.
 func (c *WebAuthnCredential) ID() string { return base64.RawURLEncoding.EncodeToString(c.Key.ID) }
 
-// Passkey reports whether the key can sign in alone: it was made as a discoverable credential
-// (resident key) and the authenticator verified the user (PIN or biometric) when it was made.
-// Anything else - an old U2F key, a key made without a PIN - is a second factor only.
+// Passkey reports whether the key can sign in: it was made as a discoverable credential (resident
+// key) and the authenticator verified the user (PIN or biometric). Anything else - an old U2F key,
+// a key made without a PIN before occulited task 14 - cannot be used to sign in any more; it stays
+// listed until its owner removes it.
 func (c *WebAuthnCredential) Passkey() bool {
 	resident := c.Key.Extensions.RK != nil && *c.Key.Extensions.RK
 	return resident && c.Key.Flags.UserVerified
@@ -49,7 +53,8 @@ type WebAuthnView struct {
 	Name     string     `json:"name"`
 	Created  time.Time  `json:"created"`
 	LastUsed *time.Time `json:"last_used,omitempty"`
-	// Passkey: signs in alone; false: a second factor only.
+	// Passkey: signs in (without name and password); false: a key registered before occulited
+	// task 14 as a second factor only, which cannot be used to sign in any more.
 	Passkey bool `json:"passkey"`
 	// Transports the authenticator reported (usb, nfc, ble, internal, hybrid), for the list.
 	Transports []string `json:"transports,omitempty"`
@@ -77,24 +82,24 @@ var (
 	ErrWebAuthnClone = errors.New("the key's signature counter went backwards: it may have been cloned")
 	// ErrPendingLogin is a pending login that is unknown, spent or run out.
 	ErrPendingLogin = errors.New("the login is unknown, spent or run out: start again")
-	// ErrSecondFactor is the password alone for an account that has a key.
-	ErrSecondFactor = errors.New("this account signs in with its security key as well")
+	// ErrNotPasskey is a registration whose credential is not a passkey: the authenticator made
+	// no discoverable credential, or did not verify the user (occulited task 14).
+	ErrNotPasskey = errors.New("the key did not make a passkey (a discoverable credential with PIN or biometrics): it cannot be used to sign in")
 )
 
 // MaxWebAuthnKeys is the number of keys an account may register.
 const MaxWebAuthnKeys = 10
 
-// MethodPasskey is the login method of a session a passkey opened alone; a password-and-key
-// login is MethodPassword (the password was used, and its rules - must_change_password - apply).
+// MethodPasskey is the login method of a session a passkey opened.
 const MethodPasskey = "passkey"
 
-// PendingTTL is how long a login may stay half done: the password verified, the key not yet
-// presented; or a passkey ceremony started and not finished.
+// PendingTTL is how long a ceremony may stay half done: a passkey login or a registration started
+// and not finished.
 const PendingTTL = 2 * time.Minute
 
 // pendingLogin is a ceremony's state between its two halves.
 type pendingLogin struct {
-	user    string // "" for a passkey login, which names its user in the assertion
+	user    string // "" for a passkey login, which names its user in the assertion; a registration's account
 	remote  string
 	expires time.Time
 	data    any // the API's ceremony state (webauthn.SessionData)
@@ -184,8 +189,7 @@ func (s *Store) WebAuthnKeys(name string) []WebAuthnView {
 	return out
 }
 
-// HasWebAuthn reports whether the account has at least one key: its password alone is then
-// refused at the login.
+// HasWebAuthn reports whether the account has at least one key.
 func (s *Store) HasWebAuthn(name string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -194,8 +198,8 @@ func (s *Store) HasWebAuthn(name string) bool {
 	return ok && len(u.WebAuthn) > 0
 }
 
-// AnyPasskey reports whether any account has a key that signs in alone: the login page offers
-// the passkey button then.
+// AnyPasskey reports whether any account has a passkey: the login page offers the passkey
+// button then.
 func (s *Store) AnyPasskey() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -298,6 +302,10 @@ func (s *Store) usedWebAuthnLocked(u *User, key *webauthn.Credential) error {
 		now := s.opt.Now()
 		c.Key.Authenticator.SignCount = key.Authenticator.SignCount
 		c.Key.Flags = key.Flags
+		// a discoverable login found it, so it is a resident credential whatever its
+		// registration reported (a browser that left credProps out): a passkey from now on
+		rk := true
+		c.Key.Extensions.RK = &rk
 		c.LastUsed = &now
 		return nil
 	}
@@ -328,46 +336,9 @@ func (s *Store) newPendingLocked(user, remote string, data any) (string, error) 
 	return id, nil
 }
 
-// BeginPasswordLogin is the first half of a login: the password is verified as Login verifies
-// it (the lockout included), and the account's keys decide what follows. Without keys the session
-// is opened at once and returned; with keys nothing is opened - the caller gets the account (for
-// the assertion's allow list) and hands the ceremony's state to StorePending, then CompleteLogin.
-func (s *Store) BeginPasswordLogin(name, pw, remote, agent string) (sess *Session, user *WebAuthnUser, why Refusal, err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	_ = s.reload()
-	if len(s.users) == 0 {
-		return nil, nil, why, ErrSetupRequired
-	}
-	if s.lockedOut("u:"+name) || s.lockedOut("r:"+remote) {
-		why.Reason = "locked"
-		return nil, nil, why, ErrLockedOut
-	}
-	u, ok := s.users[name]
-	if !verifyOrBurn(u, ok, pw) {
-		switch {
-		case !ok:
-			why.Reason = "unknown user"
-		case u.Hash == "":
-			why.Reason = "no password"
-		default:
-			why.Reason = "wrong password"
-		}
-		s.failLogin(name, remote, &why)
-		return nil, nil, why, ErrInvalidCredentials
-	}
-	delete(s.failures, "u:"+name)
-	if len(u.WebAuthn) == 0 {
-		sess, err = s.openSession(name, u.Level, MethodPassword, remote, agent)
-		return sess, nil, why, err
-	}
-	wu := s.webauthnUserLocked(u)
-	return nil, &wu, why, nil
-}
-
 // StorePending keeps a ceremony's state (the library's SessionData) for PendingTTL and answers
-// its id: the client's handle for the second half. user is the account for a second-factor
-// login, "" for a passkey login or a registration's user is not a login.
+// its id: the client's handle for the second half. user is the account of a registration, "" for
+// a passkey login (the assertion names the account).
 func (s *Store) StorePending(user, remote string, data any) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -393,10 +364,9 @@ func (s *Store) TakePending(id, remote string) (user string, data any, err error
 	return p.user, p.data, nil
 }
 
-// CompleteLogin is the second half of a login with a key: key is the library's record after
-// the assertion verified. The sign count is checked and written, the session opened with
-// method - MethodPassword when the password came first, MethodPasskey when the key signed in
-// alone (the account's other rules stay the account's).
+// CompleteLogin is the second half of a passkey login: key is the library's record after the
+// assertion verified. The sign count is checked and written, the session opened with method
+// (MethodPasskey; the account's other rules stay the account's).
 func (s *Store) CompleteLogin(name string, key *webauthn.Credential, method, remote, agent string) (*Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -420,7 +390,7 @@ func (s *Store) CompleteLogin(name string, key *webauthn.Credential, method, rem
 	return s.openSession(name, u.Level, method, remote, agent)
 }
 
-// FailKeyStep counts a key step that failed - an assertion the library refused - towards the
+// FailKeyStep counts a passkey login that failed - an assertion the library refused - towards the
 // lockout of the name (when known) and the address, as a wrong password counts. It answers
 // whether this attempt started a lockout, and until when.
 func (s *Store) FailKeyStep(name, remote string) Refusal {

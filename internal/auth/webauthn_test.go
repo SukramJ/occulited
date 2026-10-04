@@ -50,16 +50,23 @@ func TestWebAuthnStore(t *testing.T) {
 	if !s.HasWebAuthn("admin") || !s.AnyPasskey() || !s.AnyWebAuthn() || len(s.WebAuthnKeys("admin")) != 2 {
 		t.Fatal("two keys, one a passkey")
 	}
-	// the password alone is refused now; the two-step login hands the account over instead
-	if _, _, err := s.LoginDetail("admin", "secret123", "192.0.2.1", "t"); err != ErrSecondFactor {
-		t.Errorf("password alone: %v", err)
+	// occulited task 14: the keys do not touch the password login - no second factor
+	sess, _, err := s.LoginDetail("admin", "secret123", "192.0.2.1", "t")
+	if err != nil || sess == nil || sess.Method != MethodPassword {
+		t.Fatalf("password with keys: %v %v", sess, err)
 	}
-	sess, user, _, err := s.BeginPasswordLogin("admin", "secret123", "192.0.2.1", "t")
-	if err != nil || sess != nil || user == nil || user.Name != "admin" || len(user.Credentials) != 2 || string(user.WebAuthnID()) != user.AccountID {
-		t.Fatalf("begin: %v %v %v", sess, user, err)
+	if _, _, err := s.LoginDetail("admin", "wrong-one", "192.0.2.1", "t"); err != ErrInvalidCredentials {
+		t.Errorf("wrong password: %v", err)
 	}
-	if _, _, _, err := s.BeginPasswordLogin("admin", "wrong-one", "192.0.2.1", "t"); err != ErrInvalidCredentials {
-		t.Errorf("begin, wrong password: %v", err)
+	user := s.WebAuthnUser("admin")
+	if user == nil || user.Name != "admin" || len(user.Credentials) != 2 || string(user.WebAuthnID()) != user.AccountID {
+		t.Fatalf("the ceremony's account: %v", user)
+	}
+	// the list counts the key that cannot sign in (a second factor from before task 14)
+	for _, a := range s.Users() {
+		if a.Name == "admin" && (a.WebAuthnKeys != 2 || a.WebAuthnUnusable != 1) {
+			t.Errorf("account counts: %+v", a)
+		}
 	}
 	// the pending state is bound to the address and spent once
 	id, err := s.StorePending("admin", "192.0.2.1", "state")
@@ -115,14 +122,14 @@ func TestWebAuthnStore(t *testing.T) {
 	if !lockedUser || !lockedRemote || !s.LockedRemote("192.0.2.9") {
 		t.Errorf("lockout: user %v remote %v", lockedUser, lockedRemote)
 	}
-	if _, _, _, err := s.BeginPasswordLogin("admin", "secret123", "192.0.2.1", "t"); err != ErrLockedOut {
+	if _, _, err := s.LoginDetail("admin", "secret123", "192.0.2.1", "t"); err != ErrLockedOut {
 		t.Errorf("locked user: %v", err)
 	}
 	now = now.Add(16 * time.Minute)
 	// removal: by the owner keeps the sessions, by an administrator ends them
 	other, _ := s.Setup("x", "y"), 0
 	_ = other
-	sess2, err := s.CompleteLogin("admin", &webauthn.Credential{ID: []byte("k1"), PublicKey: []byte("pk-k1")}, MethodPassword, "192.0.2.1", "t")
+	sess2, err := s.CompleteLogin("admin", &webauthn.Credential{ID: []byte("k1"), PublicKey: []byte("pk-k1")}, MethodPasskey, "192.0.2.1", "t")
 	if err != nil {
 		t.Fatal(err)
 	}

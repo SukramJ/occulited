@@ -324,6 +324,15 @@ keeps its owner), and `occulited passwd <user>` sets or resets a password (a pro
 account gets one). `occulited auth password-login off` exists too, for scripts and tests, and is
 refused outside mode `oidc`.
 
+**The console's account commands** (occulited task 14), root only: `occulited admin list` shows
+the accounts (level, whether a password is set or must be changed, how many passkeys, keys that
+cannot sign in), and `occulited admin reset-auth <user>` resets one account's access — its
+passkeys removed, a new one-time password printed (to be changed at the next login,
+`must_change_password`), its sessions ended. Each reset writes `auth: access reset on the console`
+(Warn, `user`, `passkeys_removed`) to the journal and `console_reset` into the account in
+`users.json`, and the Status page shows the notice `console-reset` for a week. Both take
+`--state-dir DIR` (default `/usr/local/etc/occulite`).
+
 Redirect URI to register at the provider: `http(s)://<host>/api/auth/v1/oidc/callback` — the
 scheme follows how the browser reached the system (lighttpd forwards it), so register both if you
 use both.

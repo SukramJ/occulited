@@ -67,19 +67,19 @@ import (
 	"github.com/hobbyquaker/occulited/internal/ui"
 )
 
-// version and commit are set at build time with -ldflags -X (task 9): version is the image version
-// the commit is tagged with (v1.0.0-dev.38 gives 1.0.0-dev.38), `git describe` between build rounds
-// (1.0.0-dev.38-5-gfa42dfd, -dirty for an uncommitted tree), "dev" without a tag; commit is the
-// full hash. scripts/build.sh sets both, the image's package passes both from its pin.
+// version and commit are set at build time with -ldflags -X: version is the commit occulited was
+// built from (occulited task 16 took back task 9's image version) - the full hash, -dirty for an
+// uncommitted tree, -hot for a binary deployed by hand, "dev" for a bare go build; commit is the bare
+// hash. scripts/build.sh sets both, the image's package passes the pinned commit as both.
 var (
 	version = "dev"
 	commit  = ""
 )
 
 // versionLine is what --version prints and the journal's start line says: the version, and the
-// commit beside it where the binary carries one.
+// commit beside it only where the version does not begin with it.
 func versionLine() string {
-	if commit == "" {
+	if commit == "" || strings.HasPrefix(version, commit) {
 		return "occulited " + version
 	}
 	return "occulited " + version + " (" + commit + ")"
@@ -165,6 +165,13 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "auth" {
 		if err := authCmd(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, "occulited auth:", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "admin" {
+		if err := adminCmd(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "occulited admin:", err)
 			os.Exit(1)
 		}
 		return
@@ -609,6 +616,8 @@ func run(opts daemonOptions) error {
 	rpcSub := rpcsub.New(rpcsub.Config{Listen: cfg.RPC.CallbackListen, Interfaces: filepath.Join(*rootDir, "etc/config/InterfacesList.xml"), Log: area("radio"), Trace: tracer, Enrich: devState.Enrich,
 		Taken: system.Root(*rootDir).HoldsRegistration})
 	rpcSub.Attach(sampler, serviceMsgs, devState)
+	// occulited task 13: the sampler makes the interface cards' events/min of the subscriber's counts
+	sampler.Feed = rpcSub.Status
 	// the daily addon update check (what checkAddonUpdates.sh did into a ReGa variable)
 	// the update check runs the addon's update.cgi through occulited's own CGI route (not
 	// lighttpd's gate), authenticated with the box's local token (B-2)
@@ -987,7 +996,8 @@ func run(opts daemonOptions) error {
 	sysAPI.LAN = &eq3disc.Client{} // task 220: one client, so finds and writes take turns
 	sysAPI.Groups = &httpapi.GroupsAPI{Client: &hmgroups.Client{Base: fmt.Sprintf("http://127.0.0.1:%d", radio.HMServerPort(*rootDir)), Session: groupSession}, Session: groupSession, Meta: store, Log: area("rpc"), Interface: "VirtualDevices"}
 	sysAPI.Public = authAPI
-	sysAPI.RPCTrace = tracer // task 79
+	sysAPI.ConsoleResets = authAPI.Store.ConsoleResets // occulited task 14: the Status page's notice
+	sysAPI.RPCTrace = tracer                           // task 79
 	sysAPI.Names = func(ref string) (string, []string, bool) {
 		o, err := store.GetObject(ref)
 		if err != nil || o == nil {
@@ -1499,10 +1509,10 @@ func authCmd(args []string) error {
 	return nil
 }
 
-// webauthnCmd is the console side of the security keys (openccu-lite task 262): `occulited
-// webauthn list <user>` shows an account's keys, `occulited webauthn remove <user> <id>|--all`
-// removes one or all of them and ends the account's stored sessions - the way back in for an
-// administrator whose key is lost, next to `occulited passwd`. Run as root on the system, like
+// webauthnCmd is the console side of the passkeys (openccu-lite task 262): `occulited webauthn
+// list <user>` shows an account's keys, `occulited webauthn remove <user> <id>|--all` removes one
+// or all of them and ends the account's stored sessions. `occulited admin reset-auth` (task 14)
+// is the whole way back in. Run as root on the system, like
 // passwd; a running occulited follows the changed users.json at the account's next request.
 func webauthnCmd(args []string) error {
 	const usage = "usage: occulited webauthn list <user> | remove <user> <id>|--all   [--state-dir DIR]"
@@ -1538,7 +1548,7 @@ func webauthnCmd(args []string) error {
 			return nil
 		}
 		for _, k := range keys {
-			kind := "second factor"
+			kind := "cannot sign in (a second-factor key from before)"
 			if k.Passkey {
 				kind = "passkey"
 			}

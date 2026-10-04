@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for scripts/version.sh: occulited's version from the v* tags (openccu-lite's occulited task 9).
+"""Tests for scripts/version.sh: occulited's version is its commit; the image's v* tags are not (occulited task 16).
 
     python3 scripts/test_version.py
 """
@@ -46,26 +46,19 @@ class VersionTest(unittest.TestCase):
     def test_versions(self):
         git(self.dir, "init", "-q")
         first = self.commit("1\n")
-        self.assertEqual(self.run_script(), ["dev", first], "no tag")
+        self.assertEqual(self.run_script(), [first, first], "the commit")
         (self.dir / "f").write_text("changed\n")
-        self.assertEqual(self.run_script(), ["dev-dirty", first], "no tag, dirty")
+        self.assertEqual(self.run_script(), [first + "-dirty", first], "an uncommitted tree")
         git(self.dir, "checkout", "-q", "--", "f")
 
-        git(self.dir, "tag", "-a", "-m", "occulited 1.0.0-dev.38", "v1.0.0-dev.38")
-        git(self.dir, "tag", "release-notes")  # a tag without the v prefix is not a version
-        self.assertEqual(self.run_script(), ["1.0.0-dev.38", first], "the tagged commit is the image version")
+        git(self.dir, "tag", "-a", "-m", "occulited 1.0.0-dev.40", "v1.0.0-dev.40")
+        self.assertEqual(self.run_script(), [first, first], "a round's tag names the commit, it is not the version")
 
-        second = self.commit("2\n")
-        self.commit("3\n")
-        head = git(self.dir, "rev-parse", "HEAD")
-        self.assertNotEqual(second, head)
-        self.assertEqual(self.run_script(), ["1.0.0-dev.38-2-g" + head[:7], head], "between build rounds")
+        head = self.commit("2\n")
+        self.assertNotEqual(first, head)
+        self.assertEqual(self.run_script(), [head, head], "a commit after the tag")
         (self.dir / "f").write_text("changed\n")
-        self.assertEqual(self.run_script(), ["1.0.0-dev.38-2-g" + head[:7] + "-dirty", head], "a hot build")
-        git(self.dir, "checkout", "-q", "--", "f")
-
-        git(self.dir, "tag", "-a", "-m", "occulited 1.0.0-dev.39", "v1.0.0-dev.39")
-        self.assertEqual(self.run_script(), ["1.0.0-dev.39", head], "the next round's tag")
+        self.assertEqual(self.run_script(), [head + "-dirty", head], "a hot build")
 
 
 if __name__ == "__main__":

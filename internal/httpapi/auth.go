@@ -358,7 +358,7 @@ func open(path string) bool {
 	if id, ok := strings.CutPrefix(path, "/api/auth/v1/pairing/request/"); ok && id != "" && !strings.Contains(id, "/") {
 		return true
 	}
-	if webauthnOpen[path] { // task 262: the key step of a login, the passkey login, the feature
+	if webauthnOpen[path] { // task 262: the passkey login and the feature
 		return true
 	}
 	switch path {
@@ -649,9 +649,7 @@ func authErr(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusConflict, apiError{Error: "no-password", Message: err.Error()})
 	case errors.Is(err, auth.ErrWeakPassword), errors.Is(err, auth.ErrBadUsername), errors.Is(err, auth.ErrBadRole), errors.Is(err, auth.ErrWebAuthnName), errors.Is(err, auth.ErrSessionLimits):
 		writeJSON(w, http.StatusUnprocessableEntity, apiError{Error: "invalid-body", Message: err.Error()})
-	// task 262: the security keys
-	case errors.Is(err, auth.ErrSecondFactor):
-		writeJSON(w, http.StatusUnauthorized, apiError{Error: "second-factor", Message: err.Error()})
+	// task 262: the passkeys
 	case errors.Is(err, auth.ErrWebAuthnClone), errors.Is(err, auth.ErrPendingLogin):
 		writeJSON(w, http.StatusUnauthorized, apiError{Error: "invalid-credentials", Message: err.Error()})
 	case errors.Is(err, auth.ErrWebAuthnDuplicate), errors.Is(err, auth.ErrWebAuthnLimit):
@@ -1025,12 +1023,9 @@ func (a *AuthAPI) login(w http.ResponseWriter, r *http.Request) {
 func (a *AuthAPI) loginWith(w http.ResponseWriter, r *http.Request, c credentials) {
 	// a failed login costs the client a little time: argon2 already does, this keeps it uniform
 	start := time.Now()
-	// task 262: an account with a security key gets no session here but the key step
-	sess, keyUser, why, err := a.Store.BeginPasswordLogin(c.Username, c.Password, remote(r), r.UserAgent())
-	if err == nil && keyUser != nil {
-		a.secondFactor(w, r, keyUser)
-		return
-	}
+	// occulited task 14: an account's passkeys do not touch the password login - there is no
+	// second factor
+	sess, why, err := a.Store.LoginDetail(c.Username, c.Password, remote(r), r.UserAgent())
 	if err != nil {
 		reason := why.Reason
 		if reason == "" {

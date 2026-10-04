@@ -110,6 +110,77 @@ func (r Root) InterfaceSubscribers(name string) []InterfaceSubscriber {
 	return parsePlainHandlers(body)
 }
 
+// SubscriberSummary is who is subscribed to one interface process, as the Status page's interface
+// card counts it (occulited task 13): internal are the callbacks on this system - the loopback
+// (occulited, the addons, the VirtualDevices process) and the system's own interface addresses, as
+// the Interfaces page's "local" - external every other address (maintainer, 2026-10-03).
+type SubscriberSummary struct {
+	Total    int                `json:"total"`
+	Internal int                `json:"internal"`
+	External int                `json:"external"`
+	Clients  []SubscriberClient `json:"clients"`
+}
+
+// SubscriberClient is one registered callback of the summary, or one lite-rpc stream (Stream set).
+type SubscriberClient struct {
+	ID       string `json:"id"`
+	URL      string `json:"url"`
+	Internal bool   `json:"internal"`
+	Own      bool   `json:"own,omitempty"`
+	// Stream is set for a client subscribed through occulited's lite-rpc event stream (occulited
+	// B-45): ID is then the token's or account's name, URL empty
+	Stream *SubscriberStream `json:"stream,omitempty"`
+}
+
+// SubscriberStream is a lite-rpc stream as a subscriber of an interface (occulited B-45): the
+// stream's id, who holds it (kind token, session or public), the transport (sse or websocket) and
+// the address it came from.
+type SubscriberStream struct {
+	ID        string `json:"id"`
+	Kind      string `json:"kind"`
+	Transport string `json:"transport"`
+	Remote    string `json:"remote,omitempty"`
+}
+
+// AddStreams counts lite-rpc's open event streams that carry the interface (occulited B-45), each
+// one subscriber: internal when its client address is this system (IsLocalHost), external
+// otherwise. They are not in the daemon's handlers file - only occulited's own registration is,
+// which stays one subscriber, the system's own - so nothing is counted twice. The streams follow
+// the callbacks in the list, in the order given (oldest first).
+func (s *SubscriberSummary) AddStreams(streams []SubscriberClient) {
+	for _, c := range streams {
+		c.Internal = c.Stream != nil && IsLocalHost(c.Stream.Remote)
+		s.Total++
+		if c.Internal {
+			s.Internal++
+		} else {
+			s.External++
+		}
+		s.Clients = append(s.Clients, c)
+	}
+}
+
+// SubscriberSummary counts the registered callbacks of an interface process; false for an
+// interface without a handlers file (CUxD, a custom entry), whose subscribers are not knowable.
+// Each id and callback once, as InterfaceSubscribers lists them.
+func (r Root) SubscriberSummary(name string) (SubscriberSummary, bool) {
+	if _, ok := handlerFiles[name]; !ok {
+		return SubscriberSummary{}, false
+	}
+	out := SubscriberSummary{Clients: []SubscriberClient{}}
+	for _, s := range r.InterfaceSubscribers(name) {
+		c := SubscriberClient{ID: s.ID, URL: s.URL, Internal: s.Local, Own: s.Own}
+		out.Total++
+		if c.Internal {
+			out.Internal++
+		} else {
+			out.External++
+		}
+		out.Clients = append(out.Clients, c)
+	}
+	return out, true
+}
+
 // HoldsRegistration says whether the daemon of interface name has taken the registration id ->
 // callback: its handlers file lists exactly that entry, and was written at or after since (less a
 // second, for a clock that stamps coarsely). openccu-lite B-270: hmipserver writes the entry when
@@ -187,11 +258,24 @@ func isLocalCallback(url string) bool {
 	} else {
 		host, _, _ = strings.Cut(host, ":")
 	}
-	if host == "127.0.0.1" || host == "localhost" || host == "::1" {
+	return IsLocalHost(host)
+}
+
+// IsLocalHost says whether a host - an address or "localhost" - is this box: the loopback names
+// and any of its own interface addresses. 28.6: a callback registered at the box's own LAN address
+// (an addon that bound 0.0.0.0 and announced the external address) is on this box too, not "on the
+// network"; occulited B-45 asks the same of a lite-rpc stream's client address.
+func IsLocalHost(host string) bool {
+	host = strings.Trim(host, "[]")
+	if host == "localhost" {
 		return true
 	}
-	// 28.6: a callback registered at the box's own LAN address (an addon that bound 0.0.0.0 and
-	// announced the external address) is on this box too, not "on the network"
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.IsLoopback() {
+			return true
+		}
+		host = ip.String()
+	}
 	return ownAddresses()[host]
 }
 
