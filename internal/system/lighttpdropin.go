@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -70,6 +71,80 @@ type DropinResult struct {
 	Action string `json:"action"`
 	Source string `json:"source,omitempty"`
 	Reason string `json:"reason,omitempty"`
+	// Line and Statement (occulited task 23): where in the fragment the validator stopped - the first
+	// line of the refused statement, 1-based, and the statement itself (shortened); absent for a
+	// refusal that names no statement (a link out of the tree, a file too large).
+	Line      int    `json:"line,omitempty"`
+	Statement string `json:"statement,omitempty"`
+}
+
+// LighttpdRejection is why an addon's lighttpd fragment is not in use (occulited task 23): the
+// validator's verdict, kept in <id>.conf.rejected beside the drop-in the fragment would have been,
+// and shown on the addon's entry (GET /addons, lighttpd_rejected), in the install output and on
+// the Addons page until a later sync accepts a fragment of the addon. Reason is the sentence,
+// Line the first line of the refused statement (1-based; 0 when the verdict names no statement)
+// and Statement that statement, shortened to one line.
+type LighttpdRejection struct {
+	Reason    string `json:"reason"`
+	Line      int    `json:"line,omitempty"`
+	Statement string `json:"statement,omitempty"`
+}
+
+// Error is the one-line form the journal and the note's first line carry.
+func (r *LighttpdRejection) Error() string {
+	if r.Line <= 0 {
+		return r.Reason
+	}
+	if r.Statement == "" {
+		return fmt.Sprintf("%s (line %d)", r.Reason, r.Line)
+	}
+	return fmt.Sprintf("%s (line %d: %q)", r.Reason, r.Line, r.Statement)
+}
+
+// lighttpdRejectedNotePrefix starts the note's first line, as every sync since B-120 wrote it; the
+// keyed lines after it (`# reason: `, `# line: `, `# statement: `) came with task 23, so a note an
+// older occulited wrote still reads as a reason.
+const lighttpdRejectedNotePrefix = "# occulited refused this addon's lighttpd fragment: "
+
+// LighttpdRejection reads the verdict the last sync left for an addon, nil when its fragment is in
+// use or it has none.
+func (r Root) LighttpdRejection(id string) *LighttpdRejection {
+	raw, err := os.ReadFile(r.join(filepath.Join(lighttpdDropinDir, id+".conf"+LighttpdRejectedSuffix)))
+	if err != nil {
+		return nil
+	}
+	return parseLighttpdRejectedNote(string(raw))
+}
+
+func parseLighttpdRejectedNote(note string) *LighttpdRejection {
+	lines := strings.Split(strings.TrimRight(note, "\n"), "\n")
+	if len(lines) == 0 || !strings.HasPrefix(lines[0], lighttpdRejectedNotePrefix) {
+		return nil
+	}
+	rej := &LighttpdRejection{Reason: strings.TrimPrefix(lines[0], lighttpdRejectedNotePrefix)}
+	for _, l := range lines[1:] {
+		switch {
+		case strings.HasPrefix(l, "# reason: "):
+			rej.Reason = strings.TrimPrefix(l, "# reason: ")
+		case strings.HasPrefix(l, "# line: "):
+			rej.Line, _ = strconv.Atoi(strings.TrimPrefix(l, "# line: "))
+		case strings.HasPrefix(l, "# statement: "):
+			rej.Statement = strings.TrimPrefix(l, "# statement: ")
+		}
+	}
+	return rej
+}
+
+func lighttpdRejectedNote(rej *LighttpdRejection) string {
+	note := lighttpdRejectedNotePrefix + rej.Error() + "\n"
+	if rej.Line > 0 {
+		note += "# reason: " + rej.Reason + "\n"
+		note += "# line: " + strconv.Itoa(rej.Line) + "\n"
+		if rej.Statement != "" {
+			note += "# statement: " + rej.Statement + "\n"
+		}
+	}
+	return note
 }
 
 var (
@@ -88,6 +163,10 @@ func SyncLighttpdDropins(root Root) (changed bool, results []DropinResult, err e
 		for _, e := range entries {
 			if strings.HasSuffix(e.Name(), ".conf") {
 				ids[strings.TrimSuffix(e.Name(), ".conf")] = true
+			} else if strings.HasSuffix(e.Name(), ".conf"+LighttpdRejectedSuffix) {
+				// a note without a drop-in: its addon's verdict, which goes once the addon is gone
+				// (an uninstall left fragbad.conf.rejected behind on the lab box, occulited task 23)
+				ids[strings.TrimSuffix(e.Name(), ".conf"+LighttpdRejectedSuffix)] = true
 			}
 		}
 	} else if !errors.Is(rerr, os.ErrNotExist) {
@@ -133,6 +212,11 @@ func syncLighttpdDropin(root Root, dir, id string) (DropinResult, bool, error) {
 	res := DropinResult{ID: id}
 	dropin := filepath.Join(dir, id+".conf")
 	rejected := dropin + LighttpdRejectedSuffix
+	reject := func(rej *LighttpdRejection) (DropinResult, bool, error) {
+		res.Action, res.Reason, res.Line, res.Statement = "rejected", rej.Error(), rej.Line, rej.Statement
+		ch, err := applyRejected(root, dropin, rejected, rej)
+		return res, ch, err
+	}
 	addonTree := root.join(filepath.Join(AddonsDir, id))
 	fragment := filepath.Join(addonTree, addonLighttpdFragment)
 	frag := readAddonFragment(addonTree)
@@ -149,9 +233,7 @@ func syncLighttpdDropin(root Root, dir, id string) (DropinResult, bool, error) {
 		}
 		target, rerr := filepath.EvalSymlinks(dropin)
 		if rerr != nil || !underDir(target, addonTree) {
-			res.Action, res.Reason = "rejected", "the drop-in is a link that does not lead into the addon's own directory"
-			ch, err := applyRejected(root, dropin, rejected, res.Reason)
-			return res, ch, err
+			return reject(&LighttpdRejection{Reason: "the drop-in is a link that does not lead into the addon's own directory"})
 		}
 		src = target
 	case lerr == nil && lst.Mode().IsRegular():
@@ -174,9 +256,7 @@ func syncLighttpdDropin(root Root, dir, id string) (DropinResult, bool, error) {
 			src = dropin
 		}
 	case lerr == nil:
-		res.Action, res.Reason = "rejected", "the drop-in is neither a file nor a link"
-		ch, err := applyRejected(root, dropin, rejected, res.Reason)
-		return res, ch, err
+		return reject(&LighttpdRejection{Reason: "the drop-in is neither a file nor a link"})
 	default:
 		if !frag.exists {
 			// nothing to do for this addon; a stale note goes
@@ -192,9 +272,7 @@ func syncLighttpdDropin(root Root, dir, id string) (DropinResult, bool, error) {
 	var raw []byte
 	if src == fragment {
 		if frag.problem != "" {
-			res.Action, res.Reason = "rejected", frag.problem
-			ch, err := applyRejected(root, dropin, rejected, res.Reason)
-			return res, ch, err
+			return reject(&LighttpdRejection{Reason: frag.problem})
 		}
 		if frag.template {
 			// a template the addon's installer renders itself (Homematic Manager's @PORT@ before
@@ -208,27 +286,19 @@ func syncLighttpdDropin(root Root, dir, id string) (DropinResult, bool, error) {
 	} else {
 		st, serr := os.Stat(src)
 		if serr != nil || !st.Mode().IsRegular() {
-			res.Action, res.Reason = "rejected", "the fragment is not a regular file"
-			ch, err := applyRejected(root, dropin, rejected, res.Reason)
-			return res, ch, err
+			return reject(&LighttpdRejection{Reason: "the fragment is not a regular file"})
 		}
 		if st.Size() > lighttpdDropinMax {
-			res.Action, res.Reason = "rejected", fmt.Sprintf("the fragment is larger than %d bytes", lighttpdDropinMax)
-			ch, err := applyRejected(root, dropin, rejected, res.Reason)
-			return res, ch, err
+			return reject(&LighttpdRejection{Reason: fmt.Sprintf("the fragment is larger than %d bytes", lighttpdDropinMax)})
 		}
 		var rerr error
 		raw, rerr = os.ReadFile(src)
 		if rerr != nil {
-			res.Action, res.Reason = "rejected", "the fragment cannot be read: "+rerr.Error()
-			ch, err := applyRejected(root, dropin, rejected, res.Reason)
-			return res, ch, err
+			return reject(&LighttpdRejection{Reason: "the fragment cannot be read: " + rerr.Error()})
 		}
 	}
-	if verr := ValidateLighttpdDropin(id, raw); verr != nil {
-		res.Action, res.Reason = "rejected", verr.Error()
-		ch, err := applyRejected(root, dropin, rejected, res.Reason)
-		return res, ch, err
+	if rej := validateLighttpdDropin(id, raw); rej != nil {
+		return reject(rej)
 	}
 	var want []byte
 	if src == dropin {
@@ -313,7 +383,7 @@ func isOurLighttpdCopy(path string) bool {
 
 // applyRejected takes a refused drop-in out of lighttpd's way - the link or the file goes - and
 // leaves the reason beside it.
-func applyRejected(root Root, dropin, rejected, reason string) (bool, error) {
+func applyRejected(root Root, dropin, rejected string, rej *LighttpdRejection) (bool, error) {
 	changed := false
 	if _, err := os.Lstat(dropin); err == nil {
 		if err := Priv.Remove(dropin); err != nil {
@@ -321,7 +391,7 @@ func applyRejected(root Root, dropin, rejected, reason string) (bool, error) {
 		}
 		changed = true
 	}
-	note := "# occulited refused this addon's lighttpd fragment: " + reason + "\n"
+	note := lighttpdRejectedNote(rej)
 	if have, err := os.ReadFile(rejected); err != nil || string(have) != note {
 		if err := Priv.WriteFile(rejected, []byte(note), 0o644); err != nil {
 			return changed, err
@@ -366,90 +436,103 @@ var lighttpdAllowedDirectives = map[string]bool{
 var (
 	lighttpdConditionRe = regexp.MustCompile(`^\$HTTP\["(url|querystring|request-method|useragent|referer|cookie|language|remoteip|scheme|host)"\]\s*(==|!=|=~|!~)\s*"((?:[^"\\]|\\.)*)"\s*\{$`)
 	lighttpdElseRe      = regexp.MustCompile(`^\}\s*else\s+(.*)$`)
-	lighttpdDirectiveRe = regexp.MustCompile(`^([a-z][a-z0-9.-]*)\s*(\+?=)\s*(.*)$`)
+	// (?s): a statement spans lines while a parenthesis is open (lighttpdStatements), so the value
+	// may hold line breaks - without it every multi-line value was refused as "not a directive" (B-54)
+	lighttpdDirectiveRe = regexp.MustCompile(`(?s)^([a-z][a-z0-9.-]*)\s*(\+?=)\s*(.*)$`)
 	lighttpdStringRe    = regexp.MustCompile(`"(?:[^"\\]|\\.)*"`)
 	lighttpdValueRestRe = regexp.MustCompile(`^[\s()=>,0-9]*$`)
 	lighttpdHostRe      = regexp.MustCompile(`"host"\s*=>\s*"((?:[^"\\]|\\.)*)"`)
 	lighttpdSocketRe    = regexp.MustCompile(`"socket"\s*=>\s*"((?:[^"\\]|\\.)*)"`)
 )
 
-// ValidateLighttpdDropin holds an addon's fragment to the allowlist. The error names the first
-// statement that fails and why.
+// ValidateLighttpdDropin holds an addon's fragment to the allowlist. The error (a
+// *LighttpdRejection) names the first statement that fails, its line and why.
 func ValidateLighttpdDropin(id string, conf []byte) error {
+	if rej := validateLighttpdDropin(id, conf); rej != nil {
+		return rej
+	}
+	return nil
+}
+
+func validateLighttpdDropin(id string, conf []byte) *LighttpdRejection {
 	if !utf8.Valid(conf) || bytes.IndexByte(conf, 0) >= 0 {
-		return errors.New("the fragment is not text")
+		return &LighttpdRejection{Reason: "the fragment is not text"}
 	}
 	if len(conf) > lighttpdDropinMax {
-		return fmt.Errorf("the fragment is larger than %d bytes", lighttpdDropinMax)
+		return &LighttpdRejection{Reason: fmt.Sprintf("the fragment is larger than %d bytes", lighttpdDropinMax)}
 	}
 	tree := filepath.Join(AddonsDir, id)
 	www := filepath.Join(AddonWWW, id)
 	depth := 0
 	for _, stmt := range lighttpdStatements(stripLighttpdComments(string(conf))) {
-		s := strings.TrimSpace(stmt)
+		s := strings.TrimSpace(stmt.text)
 		if s == "" {
 			continue
+		}
+		// at reports a verdict on this statement: the sentence, where it starts, what it says
+		at := func(reason string) *LighttpdRejection {
+			return &LighttpdRejection{Reason: reason, Line: stmt.line, Statement: excerpt(s)}
 		}
 		switch {
 		case s == "}":
 			depth--
 			if depth < 0 {
-				return errors.New("a block is closed that was never opened")
+				return at("a block is closed that was never opened")
 			}
 			continue
 		case s == "} else {":
 			if depth < 1 {
-				return errors.New("an else without a block")
+				return at("an else without a block")
 			}
 			continue
 		}
 		if m := lighttpdElseRe.FindStringSubmatch(s); m != nil {
 			if depth < 1 {
-				return errors.New("an else without a block")
+				return at("an else without a block")
 			}
 			if !lighttpdConditionRe.MatchString(strings.TrimSpace(m[1])) {
-				return fmt.Errorf("a condition that is not allowed: %q", excerpt(s))
+				return at("a condition that is not allowed")
 			}
 			continue
 		}
 		if strings.HasPrefix(s, "$") {
 			if !lighttpdConditionRe.MatchString(s) {
-				return fmt.Errorf("a condition that is not allowed: %q", excerpt(s))
+				return at("a condition that is not allowed")
 			}
 			depth++
 			continue
 		}
 		m := lighttpdDirectiveRe.FindStringSubmatch(s)
 		if m == nil {
-			return fmt.Errorf("not a directive: %q", excerpt(s))
+			return at("not a directive")
 		}
 		name, value := m[1], m[3]
 		if !lighttpdAllowedDirectives[name] {
-			return fmt.Errorf("the directive %s is not allowed in an addon's fragment", name)
+			return at(fmt.Sprintf("the directive %s is not allowed in an addon's fragment", name))
 		}
 		if strings.Count(value, "(") != strings.Count(value, ")") {
-			return fmt.Errorf("unbalanced parentheses: %q", excerpt(s))
+			return at("unbalanced parentheses")
 		}
 		// the value is strings, parentheses, arrows, commas and numbers - never a name (no
 		// variables, no calls, no env.*)
 		if !lighttpdValueRestRe.MatchString(lighttpdStringRe.ReplaceAllString(value, "")) {
-			return fmt.Errorf("a value that is not plain strings and numbers: %q", excerpt(s))
+			return at("a value that is not plain strings and numbers")
 		}
 		for _, str := range lighttpdStringRe.FindAllString(value, -1) {
 			if strings.ContainsAny(str, "\n\r") {
-				return fmt.Errorf("a string with a line break: %q", excerpt(s))
+				return at("a string with a line break")
 			}
 		}
 		switch name {
 		case "proxy.server":
 			for _, h := range lighttpdHostRe.FindAllStringSubmatch(value, -1) {
 				if !loopbackHost(h[1]) {
-					return fmt.Errorf("proxy.server may point at this system only, not at %q", h[1])
+					return at(fmt.Sprintf("proxy.server may point at this system only, not at %q", h[1]))
 				}
 			}
 			for _, so := range lighttpdSocketRe.FindAllStringSubmatch(value, -1) {
 				if !underDir(so[1], tree) {
-					return fmt.Errorf("proxy.server's socket must lie in the addon's directory, not %q", so[1])
+					return at(fmt.Sprintf("proxy.server's socket must lie in the addon's directory, not %q", so[1]))
 				}
 			}
 		case "server.errorfile-prefix", "alias.url":
@@ -462,13 +545,13 @@ func ValidateLighttpdDropin(id string, conf []byte) error {
 					continue
 				}
 				if !underDir(p, tree) && !underDir(p, www) {
-					return fmt.Errorf("%s must point into the addon's directory, not %q", name, p)
+					return at(fmt.Sprintf("%s must point into the addon's directory, not %q", name, p))
 				}
 			}
 		}
 	}
 	if depth != 0 {
-		return errors.New("a block is not closed")
+		return &LighttpdRejection{Reason: "a block is not closed"}
 	}
 	return nil
 }
@@ -482,14 +565,22 @@ func loopbackHost(h string) bool {
 	return strings.HasPrefix(h, "127.")
 }
 
+// lighttpdStatement is one statement of a fragment and the line (1-based) it starts on.
+type lighttpdStatement struct {
+	text string
+	line int
+}
+
 // lighttpdStatements splits the comment-free text into statements: a line ends one when the
-// parentheses are balanced outside strings; `{` closes a condition line.
-func lighttpdStatements(conf string) []string {
-	var out []string
+// parentheses are balanced outside strings; `{` closes a condition line. stripLighttpdComments
+// keeps the lines where they were, so the numbers are the fragment's own.
+func lighttpdStatements(conf string) []lighttpdStatement {
+	var out []lighttpdStatement
 	var cur strings.Builder
 	depth := 0
 	inStr := false
 	esc := false
+	line, start := 1, 1
 	for _, r := range conf {
 		switch {
 		case esc:
@@ -503,14 +594,19 @@ func lighttpdStatements(conf string) []string {
 		case !inStr && r == ')':
 			depth--
 		case !inStr && r == '\n' && depth <= 0:
-			out = append(out, cur.String())
+			out = append(out, lighttpdStatement{cur.String(), start})
 			cur.Reset()
+			line++
+			start = line
 			continue
+		}
+		if r == '\n' {
+			line++
 		}
 		cur.WriteRune(r)
 	}
 	if cur.Len() > 0 {
-		out = append(out, cur.String())
+		out = append(out, lighttpdStatement{cur.String(), start})
 	}
 	return out
 }

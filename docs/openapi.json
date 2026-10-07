@@ -7745,6 +7745,9 @@
           "file": {
             "type": "string"
           },
+          "foreign": {
+            "type": "boolean"
+          },
           "hsts_cleared": {
             "type": "boolean"
           },
@@ -7767,6 +7770,9 @@
           },
           "recovery_armed": {
             "type": "boolean"
+          },
+          "sha256": {
+            "type": "string"
           },
           "size": {
             "type": "integer"
@@ -8053,6 +8059,16 @@
           },
           "legacy_session": {
             "type": "boolean"
+          },
+          "lighttpd_rejected": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SystemLighttpdRejection"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "may_mount": {
             "type": "boolean"
@@ -10212,6 +10228,23 @@
         ],
         "type": "object"
       },
+      "SystemLighttpdRejection": {
+        "properties": {
+          "line": {
+            "type": "integer"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "statement": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "type": "object"
+      },
       "SystemListener": {
         "properties": {
           "address": {
@@ -11622,6 +11655,9 @@
           "file": {
             "type": "string"
           },
+          "foreign": {
+            "type": "boolean"
+          },
           "kind": {
             "type": "string"
           },
@@ -11631,6 +11667,9 @@
           },
           "recovery_armed": {
             "type": "boolean"
+          },
+          "sha256": {
+            "type": "string"
           },
           "size": {
             "type": "integer"
@@ -12513,6 +12552,83 @@
           "tag",
           "url",
           "version"
+        ],
+        "type": "object"
+      },
+      "SysupdateRelease": {
+        "properties": {
+          "direction": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "newer": {
+            "type": "boolean"
+          },
+          "notes_url": {
+            "type": "string"
+          },
+          "prerelease": {
+            "type": "boolean"
+          },
+          "published": {
+            "type": "string"
+          },
+          "sha256_url": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer"
+          },
+          "tag": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "direction",
+          "name",
+          "newer",
+          "prerelease",
+          "size",
+          "tag",
+          "url",
+          "version"
+        ],
+        "type": "object"
+      },
+      "SysupdateReleaseList": {
+        "properties": {
+          "channel": {
+            "type": "string"
+          },
+          "default_channel": {
+            "type": "string"
+          },
+          "releases": {
+            "items": {
+              "$ref": "#/components/schemas/SysupdateRelease"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "running": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "channel",
+          "default_channel",
+          "releases",
+          "running"
         ],
         "type": "object"
       },
@@ -34050,6 +34166,21 @@
     "/api/system/v1/system-update/download": {
       "post": {
         "operationId": "postSystemSystemUpdateDownload",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "version": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "content": {
@@ -34090,7 +34221,7 @@
             ]
           }
         ],
-        "summary": "Downloads the available release",
+        "summary": "Downloads the available release, or a named version",
         "tags": [
           "system/system-update"
         ],
@@ -34171,6 +34302,61 @@
           }
         ],
         "summary": "Installs the staged update (reboots into the recovery system)",
+        "tags": [
+          "system/system-update"
+        ],
+        "x-occulite-scopes": [
+          "power"
+        ]
+      }
+    },
+    "/api/system/v1/system-update/releases": {
+      "get": {
+        "operationId": "getSystemSystemUpdateReleases",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "channel",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SysupdateReleaseList"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "bearer": [
+              "power"
+            ]
+          },
+          {
+            "cookie": [
+              "power"
+            ]
+          }
+        ],
+        "summary": "Lists this product's published releases in a channel",
         "tags": [
           "system/system-update"
         ],

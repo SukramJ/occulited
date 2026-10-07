@@ -346,6 +346,48 @@ exactly that name, without a password if it should sign in through authentik onl
 
 The button on the login page reads `name`.
 
+## The system update from the console: `occulited update`
+
+`occulited update` (occulited task 22) updates the system from the command line - over SSH, from
+a script or a timer - as the Updates page does it. Root only. It is a client of the running
+occulited: it calls the same routes as the page (`docs/system-api.md`, *System firmware update*)
+with **the console's credential**, an API token minted at every start of occulited whose secret
+is in `/run/occulite/console-token` (`0600`, root; accepted from the loopback only; the journal
+names its calls `token:console`). No user token is needed; occulited has to be running.
+
+| Command | What it does |
+| --- | --- |
+| `occulited update check [--pre\|--stable]` | Asks the release feed now: the installed version, the channel, the newest release for this system. Exit **100** when it is an update, **0** when the system is up to date. |
+| `occulited update install [latest] [--pre\|--stable]` | Installs the newest release of the channel, when it is newer than the installed one (else it says *up to date* and exits 0). |
+| `occulited update install <version>` | Installs that published version, from either channel: a newer one, the installed one again, or an older one (a **downgrade**, which warns that settings only the newer version knows may be lost). `v1.0.0-dev.41` and `1.0.0-dev.41` both work. |
+| `occulited update install --file <path>` | Installs a release file already on the system; a `<path>.sha256` beside it is checked, a mismatch refuses the file. |
+| `occulited update status` | The installed version, the staged file (and whether it installs at the next boot), the last check. |
+| `occulited update discard` | Removes a staged file. |
+
+**The channel** is the Updates page's: a system that runs a prerelease (every `-dev` release) follows
+prereleases, one on a release sees releases only. `--pre` and `--stable` override it for one call.
+
+**`install`, step by step:** the question - *Install … and reboot?*, a reinstall's or a downgrade's
+with its warning - answered `y` on the terminal or by `--yes` (without a terminal and without
+`--yes` nothing happens, exit 3); **a backup**: *Back up now* to every enabled backup target
+(Backup page), waited for, and the install goes on when at least one target holds the new backup
+(`--no-backup` skips it; no enabled target is refused with that hint); the download (the release's
+published `.sha256` checked by occulited - a release without one is not installed from the command
+line) or the upload of `--file`, staged as the page stages it (a file for another board is
+discarded again); then the reboot into the recovery system, which installs it and keeps
+`/usr/local`. The SSH session ends with the reboot; `occulited update status` after it shows the
+new version. A signed release's signature will be checked on the same path once releases are
+signed.
+
+`--json` prints the answer as JSON on stdout (the progress goes to stderr then); `--config FILE`
+names occulited's configuration (default `/usr/local/etc/occulite/occulited.json`), whose `listen`
+address is where the command reaches occulited. **Exit codes:** 0 done (or nothing to do), 1
+failed, 2 usage, 3 not confirmed, 100 `check`: an update is available.
+
+An unattended update is the user's own job - a timer or a cron entry that runs, say weekly,
+`occulited update install --yes`: it installs only what is newer, and only after a successful
+backup.
+
 ## The journal: the one log, and `/etc/config/journal`
 
 **The journal is the only log on an openccu-lite system**: rfd, hs485d, multimacd, hmipserver

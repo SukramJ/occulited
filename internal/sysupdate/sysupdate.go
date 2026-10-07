@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"path"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -402,13 +403,45 @@ func (s *Service) Run(ctx context.Context) {
 func (s *Service) Download(ctx context.Context) (*system.StagedUpdate, error) {
 	s.mu.Lock()
 	av := s.available
+	s.mu.Unlock()
+	if av == nil {
+		return nil, errors.New("no release known - check first")
+	}
+	return s.download(ctx, av)
+}
+
+// DownloadVersion fetches and stages one published version of this product's release (occulited
+// task 22: `occulited update install <version>`, a downgrade among them), from either channel;
+// "" is the newest of the default channel. The version may carry the tag's "v".
+func (s *Service) DownloadVersion(ctx context.Context, version string) (*system.StagedUpdate, error) {
+	version = strings.TrimPrefix(strings.TrimSpace(version), "v")
+	channel := ChannelAll
+	if version == "" {
+		channel = ""
+	}
+	list, err := s.Releases(ctx, channel)
+	if err != nil {
+		return nil, err
+	}
+	for _, av := range list.Releases {
+		if version == "" || av.Version == version {
+			return s.download(ctx, &av.Available)
+		}
+	}
+	if version == "" {
+		return nil, fmt.Errorf("no release in the %s channel", list.Channel)
+	}
+	return nil, fmt.Errorf("%w: %s", ErrNoSuchVersion, version)
+}
+
+// ErrNoSuchVersion: the feed lists no release of that version for this product.
+var ErrNoSuchVersion = errors.New("the release feed has no such version for this system")
+
+func (s *Service) download(ctx context.Context, av *Available) (*system.StagedUpdate, error) {
+	s.mu.Lock()
 	if s.downloading != "" {
 		s.mu.Unlock()
 		return nil, errors.New("a download is running")
-	}
-	if av == nil {
-		s.mu.Unlock()
-		return nil, errors.New("no release known - check first")
 	}
 	s.downloading = av.Name
 	s.mu.Unlock()
@@ -419,11 +452,11 @@ func (s *Service) Download(ctx context.Context) (*system.StagedUpdate, error) {
 	}()
 	want := ""
 	if av.SHA256URL != "" {
-		res, err := s.HTTP.Get(av.SHA256URL)
-		if err == nil {
-			line, _ := bufio.NewReader(io.LimitReader(res.Body, 4096)).ReadString('\n')
-			res.Body.Close()
-			want = strings.ToLower(strings.TrimSpace(strings.SplitN(line, " ", 2)[0]))
+		// occulited task 22: a published checksum that cannot be read is a failed download, not
+		// an unverified one - the file would be staged without the check it is published for
+		var err error
+		if want, err = s.fetchSHA256(ctx, av.SHA256URL); err != nil {
+			return nil, err
 		}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, av.URL, nil)
@@ -449,6 +482,7 @@ func (s *Service) Download(ctx context.Context) (*system.StagedUpdate, error) {
 			return nil, fmt.Errorf("sha256 mismatch: published %s, downloaded %s", want, got)
 		}
 		staged.Warning = strings.TrimSpace(staged.Warning + " sha256 verified")
+		staged.SHA256 = want
 	} else if staged.Warning == "" {
 		staged.Warning = "no .sha256 published for this asset; not verified"
 	}
@@ -456,4 +490,172 @@ func (s *Service) Download(ctx context.Context) (*system.StagedUpdate, error) {
 		s.Log.Info("system update staged from the feed", "file", staged.File, "size", staged.Size)
 	}
 	return staged, nil
+}
+
+// fetchSHA256 reads the first word of a published .sha256 file: 64 hex characters.
+func (s *Service) fetchSHA256(ctx context.Context, url string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", err
+	}
+	res, err := s.HTTP.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("sha256: %w", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		return "", fmt.Errorf("sha256: HTTP %d", res.StatusCode)
+	}
+	line, _ := bufio.NewReader(io.LimitReader(res.Body, 4096)).ReadString('\n')
+	want := strings.ToLower(strings.TrimSpace(strings.SplitN(strings.TrimSpace(line), " ", 2)[0]))
+	if len(want) != 64 || strings.Trim(want, "0123456789abcdef") != "" {
+		return "", errors.New("sha256: the published file holds no checksum")
+	}
+	return want, nil
+}
+
+// The channels of the release list (occulited task 22). The default follows the Updates page: a
+// system that runs a prerelease follows prereleases, one on a release sees releases only (pick).
+const (
+	ChannelPre    = "pre"    // releases and prereleases
+	ChannelStable = "stable" // releases only
+	ChannelAll    = "all"    // every version, for an install of a named one
+)
+
+// DefaultChannel is the channel the Updates page follows for this system.
+func DefaultChannel(v system.Version) string {
+	if v.Variant == "lite" && isPrerelease(v.Full()) {
+		return ChannelPre
+	}
+	return ChannelStable
+}
+
+// Direction says what installing target means on a system that runs running: "upgrade", "same",
+// "downgrade", or "other" where either is not a semantic version (OpenCCU's, a renamed file).
+func Direction(running, target string) string {
+	_, okr := parseSemver(running)
+	_, okt := parseSemver(target)
+	switch {
+	case !okr || !okt:
+		if running == target && running != "" {
+			return "same"
+		}
+		return "other"
+	case semverNewer(target, running):
+		return "upgrade"
+	case semverNewer(running, target):
+		return "downgrade"
+	}
+	return "same"
+}
+
+// Release is one entry of the release list: what the feed offers, and what installing it means.
+type Release struct {
+	Available
+	Prerelease bool `json:"prerelease"`
+	// Direction: upgrade, same, downgrade or other (Direction).
+	Direction string `json:"direction"`
+}
+
+// ReleaseList is GET /system-update/releases.
+type ReleaseList struct {
+	Running  string    `json:"running"`
+	Channel  string    `json:"channel"`
+	Default  string    `json:"default_channel"`
+	Releases []Release `json:"releases"`
+}
+
+// Releases asks the feed now and lists this product's releases in the channel, newest first
+// ("" is DefaultChannel). Asked for the default channel, the newest one is also what the check
+// remembers, so the Updates page and the status LED see the same answer as the command line.
+func (s *Service) Releases(ctx context.Context, channel string) (ReleaseList, error) {
+	v := s.Root.ReadVersion()
+	def := DefaultChannel(v)
+	if channel == "" {
+		channel = def
+	}
+	out := ReleaseList{Running: v.Full(), Channel: channel, Default: def, Releases: []Release{}}
+	if channel != ChannelPre && channel != ChannelStable && channel != ChannelAll {
+		return out, fmt.Errorf("channel %q: pre, stable or all", channel)
+	}
+	prefix, suffix, err := assetPattern(v)
+	if err != nil {
+		return out, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.FeedURL, nil)
+	if err != nil {
+		return out, err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	res, err := s.HTTP.Do(req)
+	if err != nil {
+		return out, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode == http.StatusNotFound {
+		return out, errors.New("no release published yet on the update feed")
+	}
+	if res.StatusCode != 200 {
+		msg, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
+		return out, fmt.Errorf("feed: HTTP %d %s", res.StatusCode, feedErrorText(msg))
+	}
+	body, err := io.ReadAll(io.LimitReader(res.Body, 8<<20))
+	if err != nil {
+		return out, fmt.Errorf("feed: %w", err)
+	}
+	rels, err := decodeReleases(body)
+	if err != nil {
+		return out, fmt.Errorf("feed: %w", err)
+	}
+	out.Releases = listReleases(rels, v, prefix, suffix, channel)
+	if channel == def {
+		if len(out.Releases) > 0 {
+			av := out.Releases[0].Available
+			s.remember(&av, nil)
+		} else {
+			s.remember(nil, fmt.Errorf("feed: no release carries %s*%s", prefix, suffix))
+		}
+	}
+	return out, nil
+}
+
+// listReleases is every release of the feed with an asset for this product, in the channel; on
+// openccu-lite sorted newest first by semver, on OpenCCU in the feed's order.
+func listReleases(rels []release, v system.Version, prefix, suffix, channel string) []Release {
+	running := v.Full()
+	out := []Release{}
+	seen := map[string]bool{}
+	for _, rel := range rels {
+		if rel.Draft {
+			continue
+		}
+		for _, a := range rel.Assets {
+			if !strings.HasSuffix(a.Name, suffix) || !strings.HasPrefix(a.Name, prefix) || len(a.Name) <= len(prefix)+len(suffix) {
+				continue
+			}
+			version := strings.TrimSuffix(strings.TrimPrefix(a.Name, prefix), suffix)
+			pre := rel.Prerelease || isPrerelease(version)
+			if (pre && channel == ChannelStable) || seen[version] {
+				break
+			}
+			seen[version] = true
+			dir := Direction(running, version)
+			if v.Variant != "lite" && dir == "other" {
+				// OpenCCU's versions are no semver: the old script's "differs"
+				dir = "upgrade"
+			}
+			r := Release{Available: Available{Version: version, Tag: rel.Tag, Name: a.Name, URL: a.URL, Size: a.Size, Published: rel.PublishedAt, Notes: rel.HTMLURL, Newer: dir == "upgrade"}, Prerelease: pre, Direction: dir}
+			for _, b := range rel.Assets {
+				if b.Name == a.Name+".sha256" {
+					r.SHA256URL = b.URL
+				}
+			}
+			out = append(out, r)
+			break
+		}
+	}
+	if v.Variant == "lite" {
+		sort.SliceStable(out, func(i, j int) bool { return semverNewer(out[i].Version, out[j].Version) })
+	}
+	return out
 }

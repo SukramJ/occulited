@@ -112,15 +112,18 @@ func (b AddonScripts) Install(ctx context.Context, archive io.Reader) (*InstallR
 	_ = remove(target) // install_addon removes it itself; belt and braces
 	// the archive named the addon, not the caller: every cached scan verdict is stale now
 	ForgetAddonScans("")
-	// B-120: the addon's lighttpd fragment becomes a validated copy, and lighttpd is reloaded
-	if results, err := lighttpdDropinsAfterChange(ctx, b.Root); err != nil {
-		slog.Warn("addons: the lighttpd drop-ins after the install", "err", err)
-	} else {
-		for _, d := range results {
-			if d.Action == "rejected" {
-				slog.Warn("addons: an addon's lighttpd fragment was refused", "addon", d.ID, "reason", d.Reason)
-			}
+	// B-120: the addon's lighttpd fragment becomes a validated copy, and lighttpd is reloaded. A
+	// refused fragment goes into the output too (occulited task 23): until then the author saw only
+	// the journal and <id>.conf.rejected, and the install read as a success.
+	results, lerr := lighttpdDropinsAfterChange(ctx, b.Root)
+	for _, d := range results {
+		if d.Action == "rejected" {
+			slog.Warn("addons: an addon's lighttpd fragment was refused", "addon", d.ID, "reason", d.Reason)
+			res.Output += fmt.Sprintf("\n[lighttpd] %s: the addon's lighttpd fragment was refused and is not in use: %s", d.ID, d.Reason)
 		}
+	}
+	if lerr != nil {
+		slog.Warn("addons: the lighttpd drop-ins after the install", "err", lerr)
 	}
 	return res, nil
 }

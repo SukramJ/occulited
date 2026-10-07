@@ -45,6 +45,29 @@ func TestInstall(t *testing.T) {
 	if _, err := b.Install(t.Context(), strings.NewReader("tiny")); err == nil {
 		t.Fatal("an empty upload must be refused")
 	}
+	// occulited task 23: an addon whose fragment the validator refuses is told so in the output,
+	// and the verdict stays on its entry until an install brings a fragment that passes
+	frag := r.join("/usr/local/addons/badfrag/etc/lighttpd.conf")
+	res, err = b.Install(t.Context(), tarGz(t, map[string]string{"update_script": "#!/bin/sh\nmkdir -p " + filepath.Dir(frag) + "\nprintf '# the frontend\\n$HTTP[\"url\"] =~ \"^/addons/badfrag/\" {\\n  proxy.server = ( \"\" => (\\n    ( \"host\" => \"10.0.0.1\", \"port\" => 80 )\\n  ))\\n}\\n' > " + frag + "\nexit 0\n"}))
+	if err != nil || res.Exit != 0 {
+		t.Fatalf("badfrag: %v %+v", err, res)
+	}
+	if !strings.Contains(res.Output, "[lighttpd] badfrag: the addon's lighttpd fragment was refused and is not in use: proxy.server may point at this system only, not at \"10.0.0.1\" (line 3: ") {
+		t.Fatalf("the refusal is not in the output: %q", res.Output)
+	}
+	if rej := r.LighttpdRejection("badfrag"); rej == nil || rej.Line != 3 || !strings.HasPrefix(rej.Statement, "proxy.server") {
+		t.Fatalf("badfrag's verdict: %+v", rej)
+	}
+	res, err = b.Install(t.Context(), tarGz(t, map[string]string{"update_script": "#!/bin/sh\nprintf 'url.redirect = ( \"^/addons/badfrag$\" => \"/addons/badfrag/\" )\\n' > " + frag + "\nexit 0\n"}))
+	if err != nil || res.Exit != 0 || strings.Contains(res.Output, "[lighttpd]") {
+		t.Fatalf("a good fragment: %v %+v", err, res)
+	}
+	if rej := r.LighttpdRejection("badfrag"); rej != nil {
+		t.Fatalf("the verdict stayed: %+v", rej)
+	}
+	if _, err := os.Stat(r.join(lighttpdDropinDir + "/badfrag.conf")); err != nil {
+		t.Fatalf("no copy of the good fragment: %v", err)
+	}
 	if _, err := os.Stat(r.join("/usr/local/tmp/new_addon.tar.gz")); !os.IsNotExist(err) {
 		t.Fatal("archive must not linger")
 	}

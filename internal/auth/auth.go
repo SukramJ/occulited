@@ -2329,6 +2329,28 @@ func (s *Store) MintEphemeral(name string, scopes Scopes) (string, error) {
 	return secret, nil
 }
 
+// ConsoleTokenName is the console's own credential (occulited task 22): minted at every start,
+// its secret in a file only root reads (system.ConsoleTokenFile), accepted from the loopback
+// alone. `occulited update` uses it, so the command line and the web UI go through the same
+// routes; the journal names it as token:console.
+const ConsoleTokenName = "console"
+
+// ConsoleTokenScopes is what the console's credential holds: what `occulited update` calls.
+var ConsoleTokenScopes = Scopes{ScopeSystemRead, ScopePower, ScopeBackup}
+
+// MintConsoleToken mints the console's credential, accepted from the loopback only (the
+// command runs on the system; behind lighttpd a request carries the browser's address).
+func (s *Store) MintConsoleToken() (string, error) {
+	secret, err := s.MintEphemeral(ConsoleTokenName, ConsoleTokenScopes)
+	if err != nil {
+		return "", err
+	}
+	s.mu.Lock()
+	s.ephemeral[ConsoleTokenName].IPs = []string{"127.0.0.0/8", "::1/128"}
+	s.mu.Unlock()
+	return secret, nil
+}
+
 // DropEphemeral forgets an ephemeral token.
 func (s *Store) DropEphemeral(name string) {
 	s.mu.Lock()

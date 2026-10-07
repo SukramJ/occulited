@@ -28,10 +28,13 @@ does not repeat them.
   [system-api.md → Scopes](system-api.md#scopes)): every read below needs
   **`meta:read`** — `/snapshot`, `/objects`, `/objects/{ref}`, `/enums`, `/enums/{enum}/tree`,
   `/export`, `/events/sse` — and every mutation and import **`meta:write`**, which includes the
-  read; `/version` is open. An account session with the role `user` has `meta:read`, one with
-  `admin` everything; the local token has `meta:read` and nothing else, so a program on the system
-  reads names and rooms with it and needs a token with `meta:write` (or the user's session) to
-  change anything. A `403` names the missing scope in its `scope` field.
+  read; `/version` is open. An account session has the scopes of its level on the ladder
+  (system-api.md → Scopes): `read` and `operate` have `meta:read`, `configure` and `administer`
+  have `meta:write` — so names, rooms, functions and favorites are a `configure` account's to
+  change, not an administrator's alone (occulited B-55); the local token has `meta:read` and
+  nothing else, so a program on the system reads names and rooms with it and needs a token with
+  `meta:write` (or the user's session) to change anything. A `403` names the missing scope in its
+  `scope` field.
   The `orphaned` flag is set only by the owning process, never through the API.
 
 ## The page
@@ -45,7 +48,8 @@ with `?members=detach` after the page has listed what is assigned, and `PATCH /o
 `name` and `enums`. A new node's id is the slug of its name, free among its siblings (`-2`, `-3`
 on a collision). The page follows the change stream below and re-reads the snapshot on every
 event, so an edit made by an addon or by the Manager shows up as it happens; nothing is drawn from
-a write's own answer. Writes need an administrator session; a user sees the store read-only.
+a write's own answer. Writes need a session with `meta:write` — an account of the level `configure`
+or `administer`; a `read` or `operate` account sees the store read-only.
 
 ## Feature detection
 

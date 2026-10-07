@@ -2,6 +2,7 @@ package system
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -35,10 +36,31 @@ $HTTP["url"] =~ "^/addons/hmm/(?!settings\.cgi|service\.cgi|update_check\.cgi)" 
 }
 `
 
+// B-54: ccu-addon-mui's fragment before its single-line workaround (PR #191): values that span
+// lines inside parentheses, which the directive match refused as "not a directive".
+const muiFragment = `# The WebSocket and the gzip-compressed assets come from the server
+$HTTP["url"] =~ "^/addons/mui/(ws|assets/)" {
+  proxy.server = ( "" => (
+    ( "host" => "127.0.0.1", "port" => 8088 )
+  ))
+  proxy.header = (
+    "upgrade" => "enable",
+    "map-host-request" => ( "-" => "127.0.0.1" ),
+    "map-host-response" => ( "127.0.0.1" => "-" )
+  )
+}
+
+# The app's routes (no dot in the path) are its index.html
+$HTTP["url"] !~ "^/addons/mui/(ws|assets/)" {
+  url.rewrite-once = ( "^/addons/mui/[^.?]*(\?.*)?$" => "/addons/mui/index.html" )
+}
+`
+
 func TestValidateLighttpdDropin(t *testing.T) {
 	ok := map[string]string{
 		"redmatic": redmaticFragment,
 		"hmm":      hmmFragment,
+		"mui":      muiFragment,
 		"x":        "# only a comment\n",
 	}
 	okX := []string{
@@ -46,6 +68,8 @@ func TestValidateLighttpdDropin(t *testing.T) {
 		"alias.url = ( \"/addons/x/static/\" => \"/usr/local/addons/x/share/static/\" )\nsetenv.add-response-header = ( \"X-Frame-Options\" => \"SAMEORIGIN\" )\nmimetype.assign += ( \".wasm\" => \"application/wasm\" )\n",
 		"$HTTP[\"url\"] =~ \"^/addons/x/\" {\n  proxy.server = ( \"\" => ( ( \"socket\" => \"/usr/local/addons/x/run/x.sock\" ) ) )\n}\n",
 		"$HTTP[\"url\"] =~ \"^/addons/x/\" {\n  proxy.server = ( \"\" => ( ( \"host\" => \"127.0.0.1\", \"port\" => 8090 ) ) )\n} else {\n  url.access-deny = ( \"~\" )\n}\n",
+		// B-54: a value over several lines, with a comment on one of them, outside a condition
+		"alias.url = (\n  \"/addons/x/static/\" => \"/usr/local/addons/x/share/static/\", # the static files\n  \"/addons/x/docs/\" => \"/usr/local/addons/x/share/docs/\"\n)\n",
 	}
 	for id, conf := range ok {
 		if err := ValidateLighttpdDropin(id, []byte(conf)); err != nil {
@@ -75,11 +99,58 @@ func TestValidateLighttpdDropin(t *testing.T) {
 		"host condition":    "$HTTP[\"host\"] == \"x\" {\n}\n$HTTP[\"remote-ip\"] == \"1\" {\n}\n",
 		"binary":            "proxy.server = \x00\n",
 		"modules":           "server.modules += ( \"mod_cgi\" )\n",
+		// B-54: what a multi-line value must not smuggle in on its later lines
+		"multi-line include":  "proxy.server = ( \"\" => (\n  ( \"host\" => \"127.0.0.1\", \"port\" => 1 )\n)\ninclude_shell \"id\"\n)\n",
+		"multi-line host":     "$HTTP[\"url\"] =~ \"^/addons/x/\" {\n  proxy.server = ( \"\" => (\n    ( \"host\" => \"10.0.0.1\",\n      \"port\" => 80 )\n  ))\n}\n",
+		"multi-line variable": "proxy.server = ( \"\" => (\n  ( \"host\" => \"127.0.0.1\",\n    \"port\" => var.port )\n))\n",
+		"multi-line string":   "url.redirect = (\n  \"^/x\" => \"/addons/x/\n\"\n)\n",
+		"multi-line alias":    "alias.url = (\n  \"/addons/x/\" => \"/usr/local/addons/x/www/\",\n  \"/addons/x/etc/\" => \"/etc/config/\"\n)\n",
 	}
 	for name, conf := range bad {
 		if err := ValidateLighttpdDropin("x", []byte(conf)); err == nil {
 			t.Errorf("%s: a bad fragment passed", name)
 		}
+	}
+}
+
+// occulited task 23: the verdict names the line the refused statement starts on and the statement,
+// also for one that spans lines; a verdict on the whole fragment names no line
+func TestValidateLighttpdDropinNamesTheLine(t *testing.T) {
+	cases := []struct {
+		conf   string
+		reason string
+		line   int
+		stmt   string
+	}{
+		{"# a comment\n\ninclude_shell \"id\"\n", "not a directive", 3, `include_shell "id"`},
+		{"\nserver.modules += ( \"mod_cgi\" )\n", "the directive server.modules is not allowed in an addon's fragment", 2, `server.modules += ( "mod_cgi" )`},
+		{"url.redirect = ( \"^/x$\" => \"/x/\" )\n$HTTP[\"url\"] =~ \"^/addons/x/\" {\n  proxy.server = ( \"\" => (\n    ( \"host\" => \"10.0.0.1\", \"port\" => 80 )\n  ))\n}\n", `proxy.server may point at this system only, not at "10.0.0.1"`, 3, `proxy.server = ( "" => ( ( "host" => "10.0.0.1", "port" => 80 ) ))`},
+		{"$HTTP[\"url\"] =~ \"^/addons/x/\" {\n  url.access-deny = ( \"~\" )\n", "a block is not closed", 0, ""},
+		{"proxy.server = \x00\n", "the fragment is not text", 0, ""},
+	}
+	for i, c := range cases {
+		err := ValidateLighttpdDropin("x", []byte(c.conf))
+		var rej *LighttpdRejection
+		if !errors.As(err, &rej) {
+			t.Fatalf("%d: %T %v", i, err, err)
+		}
+		if rej.Reason != c.reason || rej.Line != c.line || rej.Statement != c.stmt {
+			t.Errorf("%d: got %+v", i, *rej)
+		}
+		if c.line > 0 && !strings.Contains(rej.Error(), fmt.Sprintf("(line %d: ", c.line)) {
+			t.Errorf("%d: the one-line form lacks the line: %q", i, rej.Error())
+		}
+	}
+	// the note round-trips, and one an older occulited wrote (the first line alone) still reads
+	rej := &LighttpdRejection{Reason: "not a directive", Line: 7, Statement: "proxy.server ( \"\" )"}
+	if got := parseLighttpdRejectedNote(lighttpdRejectedNote(rej)); got == nil || *got != *rej {
+		t.Errorf("round trip: %+v", got)
+	}
+	if got := parseLighttpdRejectedNote("# occulited refused this addon's lighttpd fragment: the fragment is not a regular file\n"); got == nil || got.Reason != "the fragment is not a regular file" || got.Line != 0 {
+		t.Errorf("old note: %+v", got)
+	}
+	if got := parseLighttpdRejectedNote("# something else\n"); got != nil {
+		t.Errorf("not a note: %+v", got)
 	}
 }
 
@@ -172,6 +243,30 @@ func TestSyncLighttpdDropins(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(dropins, "tmpl.conf"+LighttpdRejectedSuffix)); err == nil {
 		t.Fatal("a template got a note")
+	}
+	// occulited task 23: the verdict is readable from the note, with the line, and absent for the rest
+	if rej := root.LighttpdRejection("evil2"); rej == nil || rej.Line != 1 || rej.Reason != "not a directive" || !strings.HasPrefix(rej.Statement, "include_shell") {
+		t.Fatalf("evil2's verdict: %+v", rej)
+	}
+	if rej := root.LighttpdRejection("evil"); rej == nil || rej.Line != 0 || !strings.Contains(rej.Reason, "link") {
+		t.Fatalf("evil's verdict: %+v", rej)
+	}
+	for _, id := range []string{"redmatic", "frag", "hmm", "tmpl", "plain", "nothing"} {
+		if rej := root.LighttpdRejection(id); rej != nil {
+			t.Fatalf("%s has a verdict: %+v", id, rej)
+		}
+	}
+	// occulited task 23: the note of an addon that was uninstalled - no fragment, no drop-in, no
+	// tree - goes with the next sync, instead of lying there until a reinstall
+	must(os.RemoveAll(root.join("/usr/local/addons/evil2")))
+	if changed, _, err := SyncLighttpdDropins(root); err != nil || changed {
+		t.Fatalf("after evil2's uninstall: changed=%v err=%v", changed, err)
+	}
+	if _, err := os.Lstat(filepath.Join(dropins, "evil2.conf"+LighttpdRejectedSuffix)); err == nil {
+		t.Fatal("evil2's note stayed after its uninstall")
+	}
+	if root.LighttpdRejection("evil2") != nil {
+		t.Fatal("evil2 still has a verdict")
 	}
 	// a second run changes nothing
 	changed, results, err = SyncLighttpdDropins(root)

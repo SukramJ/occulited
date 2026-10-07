@@ -53,6 +53,12 @@ type StagedUpdate struct {
 	// (task 96): OpenCCU sends no HSTS and later serves a self-signed certificate. A renamed file
 	// counts as a way back - clearing HSTS costs little, a lockout a lot.
 	WayBack bool `json:"way_back"`
+	// Foreign: the file name names another board than this system's; the recovery refuses it
+	// (the Warning says so). occulited task 22: the command line stops there.
+	Foreign bool `json:"foreign,omitempty"`
+	// SHA256: the checksum a download was verified against (occulited task 22); empty for an
+	// upload and for a release that publishes none.
+	SHA256 string `json:"sha256,omitempty"`
 }
 
 // isWayBack: not recognisably an openccu-lite release by its name.
@@ -106,6 +112,7 @@ func (r Root) StagedSystemUpdate() *StagedUpdate {
 	u := &StagedUpdate{File: filepath.Base(target), Size: st.Size(), Modified: st.ModTime()}
 	u.Kind, _ = detectUpdateKind(path)
 	u.Version, u.Board, u.Warning = r.describeRelease(u.File)
+	u.Foreign = u.Warning != ""
 	u.WayBack = isWayBack(u.File)
 	_, err = os.Stat(r.join(recoveryFlag))
 	u.RecoveryArmed = err == nil
@@ -174,6 +181,7 @@ func (r Root) StageSystemUpdate(ctx context.Context, name string, size int64, sr
 	}
 	u := &StagedUpdate{File: name, Size: n, Modified: time.Now(), Kind: kind, WayBack: isWayBack(name)}
 	u.Version, u.Board, u.Warning = r.describeRelease(name)
+	u.Foreign = u.Warning != ""
 	return u, nil
 }
 
@@ -447,4 +455,12 @@ func (c readerCtx) Read(p []byte) (int, error) {
 		return 0, err
 	}
 	return c.r.Read(p)
+}
+
+// ReleaseFileVersion reads the version out of a release file's name (D-44's
+// openccu-lite-<product>-<version>.<ext>, or OpenCCU's): what `occulited update install --file`
+// compares with the running one before it uploads.
+func ReleaseFileVersion(name string) (version string, ok bool) {
+	version, _, ok = parseReleaseName(filepath.Base(name))
+	return version, ok
 }

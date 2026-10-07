@@ -31,3 +31,19 @@ func WriteInstallToken(root Root) (string, error) {
 	}
 	return tok, nil
 }
+
+// ConsoleTokenFile holds the console's credential (occulited task 22): the secret of the
+// ephemeral token auth.ConsoleTokenName, with which `occulited update` - run as root on the
+// system - calls the running occulited's API, so the command line takes the same routes as the
+// web UI. Root's alone (0600, gone at reboot, minted again at every start of occulited); the
+// token is accepted from the loopback only.
+const ConsoleTokenFile = "/run/occulite/console-token"
+
+// WriteConsoleToken writes the console's credential, root's alone.
+func WriteConsoleToken(root Root, secret string) error {
+	path := root.join(ConsoleTokenFile)
+	if err := Priv.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return writeOwned(path, secret, 0)
+}

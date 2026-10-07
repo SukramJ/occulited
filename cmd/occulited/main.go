@@ -176,6 +176,10 @@ func main() {
 		}
 		return
 	}
+	// occulited task 22: the system update from the command line, through the running daemon
+	if len(os.Args) > 1 && os.Args[1] == "update" {
+		os.Exit(updateCmd(os.Args[2:]))
+	}
 	if len(os.Args) > 1 && os.Args[1] == "webauthn" {
 		if err := webauthnCmd(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, "occulited webauthn:", err)
@@ -501,6 +505,13 @@ func run(opts daemonOptions) error {
 				log.Warn("install token: not written, /bin/install_addon installs on its own", "err", err)
 			} else {
 				installToken = tok
+			}
+			// occulited task 22: `occulited update` calls this API with the console's credential
+			if tok, err := users.MintConsoleToken(); err != nil {
+				log.Warn("console token: not minted, `occulited update` cannot reach the API", "err", err)
+			} else if err := system.WriteConsoleToken(root, tok); err != nil {
+				users.DropEphemeral(auth.ConsoleTokenName)
+				log.Warn("console token: not written, `occulited update` cannot reach the API", "err", err)
 			}
 		}
 		j := system.JournalLog{Root: root} // B-116: the kernel's lines on the wall clock by their boot's start

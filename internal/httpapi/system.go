@@ -568,6 +568,7 @@ func (a *SystemAPI) Register(mux *http.ServeMux) {
 	route(mux, auth.ScopePower, "POST "+p+"/system-update/check", a.systemUpdateCheck)
 	route(mux, auth.ScopePower, "PUT "+p+"/system-update/settings", a.systemUpdateSettings)
 	route(mux, auth.ScopePower, "POST "+p+"/system-update/download", a.systemUpdateDownload)
+	route(mux, auth.ScopePower, "GET "+p+"/system-update/releases", a.systemUpdateReleases)
 	a.registerWarnings(mux, p)      // task 81, warnings.go
 	a.registerLED(mux, p)           // task 95, led.go
 	a.registerLegacySession(mux, p) // task 125, legacysession.go
@@ -2688,10 +2689,34 @@ func (a *SystemAPI) systemUpdateDownload(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusNotImplemented, apiError{Error: "unsupported", Message: "no release feed configured"})
 		return
 	}
+	// occulited task 22: {"version"} downloads that published version (a downgrade among them),
+	// {"version": "latest"} the newest of the default channel; no body is the available release
+	var b struct {
+		Version string `json:"version"`
+	}
+	if r.ContentLength != 0 {
+		if err := readJSON(r, &b); err != nil {
+			badBody(w, err)
+			return
+		}
+	}
 	// the download outlives the request's context on purpose: a closed browser tab must not
 	// leave a half-written file behind as "staged"
-	u, err := a.Feed.Download(context.Background())
+	var u *system.StagedUpdate
+	var err error
+	switch b.Version {
+	case "":
+		u, err = a.Feed.Download(context.Background())
+	case "latest":
+		u, err = a.Feed.DownloadVersion(context.Background(), "")
+	default:
+		u, err = a.Feed.DownloadVersion(context.Background(), b.Version)
+	}
 	if noUpdateSpace(w, err) {
+		return
+	}
+	if errors.Is(err, sysupdate.ErrNoSuchVersion) {
+		writeJSON(w, http.StatusNotFound, apiError{Error: "not_found", Message: err.Error()})
 		return
 	}
 	if err != nil {
@@ -2699,6 +2724,27 @@ func (a *SystemAPI) systemUpdateDownload(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, 200, u)
+}
+
+// systemUpdateReleases lists this product's published releases in a channel, newest first, each
+// with what installing it means (occulited task 22: `occulited update check` and `install
+// <version>`). ?channel=pre|stable|all; none is the channel the Updates page follows.
+func (a *SystemAPI) systemUpdateReleases(w http.ResponseWriter, r *http.Request) {
+	if a.Feed == nil {
+		writeJSON(w, http.StatusNotImplemented, apiError{Error: "unsupported", Message: "no release feed configured"})
+		return
+	}
+	ch := r.URL.Query().Get("channel")
+	if ch != "" && ch != sysupdate.ChannelPre && ch != sysupdate.ChannelStable && ch != sysupdate.ChannelAll {
+		writeJSON(w, http.StatusBadRequest, apiError{Error: "invalid", Message: "channel: pre, stable or all"})
+		return
+	}
+	list, err := a.Feed.Releases(r.Context(), ch)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "feed-unreachable", "message": err.Error(), "releases": list})
+		return
+	}
+	writeJSON(w, 200, list)
 }
 
 // noUpdateSpace answers a staged update that would not fit where the recovery unpacks it

@@ -307,6 +307,10 @@ type Addon struct {
 	// MayMount and RemountRefused as on Service (D-66).
 	MayMount       bool `json:"may_mount,omitempty"`
 	RemountRefused bool `json:"remount_refused,omitempty"`
+	// LighttpdRejected (occulited task 23): the addon ships a lighttpd fragment the last sync refused,
+	// so none of it is in use - the verdict from <id>.conf.rejected, gone once a later install
+	// brings a fragment that passes.
+	LighttpdRejected *LighttpdRejection `json:"lighttpd_rejected,omitempty"`
 	// APIScopes are the scopes the addon's own API token holds (task 66): the catalogue's
 	// runtime.api_scopes less what an addon never gets; absent when it has no token of its own.
 	APIScopes []string `json:"api_scopes,omitempty"`
@@ -360,6 +364,7 @@ func (b AddonScripts) ListAddons(ctx context.Context) ([]Addon, error) {
 		a.Enabled = b.Root.AddonEnabled(id)
 		a.RegaDependent, a.RegaReason = b.Root.RegaDependence(id)
 		a.BinaryIncompatible, a.BinaryReason = b.Root.BinaryCompatibility(id)
+		a.LighttpdRejected = b.Root.LighttpdRejection(id)
 		if s, ok := settings[id]; ok {
 			s := s
 			a.Settings = &s
