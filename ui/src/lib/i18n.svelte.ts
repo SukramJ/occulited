@@ -1732,6 +1732,14 @@ const CATALOGUE: Record<string, {de: string; en?: string}> = {
         de: 'Diese Zusatzsoftware läuft als root, und ihr Manifest deklariert CAP_SYS_ADMIN: sie behält das Recht, Dateisysteme einzuhängen und die Systempartition neu einzuhängen, das jede andere root-Zusatzsoftware verloren hat.',
     },
     'remount refused': {de: 'Neueinhängen verweigert'},
+    // occulited task 23: the addon's lighttpd fragment failed the check
+    'web configuration refused': {de: 'Web-Konfiguration abgelehnt'},
+    "The system refused this addon's lighttpd fragment (etc/lighttpd.conf in its directory), so lighttpd serves nothing through it: {reason} — line {line}: {statement}. The output of the install names it too; an install that brings a fragment the check accepts clears this.": {
+        de: 'Das System hat das lighttpd-Fragment dieser Zusatzsoftware (etc/lighttpd.conf in ihrem Verzeichnis) abgelehnt, lighttpd liefert also nichts darüber aus: {reason} — Zeile {line}: {statement}. Die Ausgabe der Installation nennt es ebenfalls; eine Installation, die ein Fragment bringt, das die Prüfung besteht, löscht den Hinweis.',
+    },
+    "The system refused this addon's lighttpd fragment (etc/lighttpd.conf in its directory), so lighttpd serves nothing through it: {reason}. The output of the install names it too; an install that brings a fragment the check accepts clears this.": {
+        de: 'Das System hat das lighttpd-Fragment dieser Zusatzsoftware (etc/lighttpd.conf in ihrem Verzeichnis) abgelehnt, lighttpd liefert also nichts darüber aus: {reason}. Die Ausgabe der Installation nennt es ebenfalls; eine Installation, die ein Fragment bringt, das die Prüfung besteht, löscht den Hinweis.',
+    },
     'This addon tried to remount the system partition read-write, which openccu-lite does not allow. It still works: what it writes into the device descriptions lands in the writable extension directory instead.': {
         de: 'Diese Zusatzsoftware wollte die Systempartition beschreibbar neu einhängen, was openccu-lite nicht erlaubt. Sie funktioniert trotzdem: was sie in die Gerätebeschreibungen schreibt, landet stattdessen im beschreibbaren Erweiterungsverzeichnis.',
     },

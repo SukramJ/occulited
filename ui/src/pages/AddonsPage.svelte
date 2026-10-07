@@ -257,6 +257,13 @@
 
     // ---- task 146 (D-106): addons a restore brought back without their program files ---------
     const toReinstall = $derived((addons ?? []).filter((a) => a.payload_missing && !a.reinstall_dismissed));
+    // occulited task 23: why the addon's lighttpd fragment is not in use, with the line when the
+    // verdict names one
+    function rejectedWhy(r: NonNullable<Addon['lighttpd_rejected']>): string {
+        return r.line && r.statement
+            ? t("The system refused this addon's lighttpd fragment (etc/lighttpd.conf in its directory), so lighttpd serves nothing through it: {reason} — line {line}: {statement}. The output of the install names it too; an install that brings a fragment the check accepts clears this.", {reason: r.reason, line: r.line, statement: r.statement})
+            : t("The system refused this addon's lighttpd fragment (etc/lighttpd.conf in its directory), so lighttpd serves nothing through it: {reason}. The output of the install names it too; an install that brings a fragment the check accepts clears this.", {reason: r.reason});
+    }
     // the catalogue entry that can reinstall it: known, with a release for this system
     const reinstallEntry = (a: Addon): Entry | null => {
         const e = entryOf(a.id);
@@ -713,6 +720,11 @@
                             {@render badge('ol-badge bad', a.enabled ? t('incompatible, still enabled') : t('disabled, incompatible'), a.rega_reason ?? '')}
                         {:else if a.binary_incompatible}
                             {@render badge('ol-badge bad', a.enabled ? t('needs an update for this architecture') : t('disabled, needs update'), a.binary_reason ?? '')}
+                        {/if}
+                        <!-- occulited task 23: the addon's lighttpd fragment failed the check, so its
+                             frontend is not served; the verdict stays until an install brings one that passes -->
+                        {#if a.lighttpd_rejected}
+                            {@render badge('ol-badge bad ad-lighttpd-rejected', t('web configuration refused'), rejectedWhy(a.lighttpd_rejected))}
                         {/if}
                         {#if a.policy_mode === 'root'}
                             {@render badge('ol-badge warn', t('root (unsafe)'), t('This addon runs as root: it can change anything on the system. The Services page switches it to its own user.'))}

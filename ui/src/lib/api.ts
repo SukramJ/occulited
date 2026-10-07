@@ -429,6 +429,10 @@ export interface Addon {
     undeclared?: boolean;
     may_mount?: boolean;
     remount_refused?: boolean;
+    /** occulited task 23: the addon's lighttpd fragment failed the check and is not in use - the
+     *  verdict, the line the refused statement starts on and that statement; gone once an
+     *  install brings a fragment that passes */
+    lighttpd_rejected?: {reason: string; line?: number; statement?: string};
     /** task 66: the scopes of the addon's own API token, from its catalogue entry */
     api_scopes?: string[];
     /** task 146: the program files are gone (a restore brings no .nobackup directory back); the dirs; the hint dismissed */

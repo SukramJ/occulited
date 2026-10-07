@@ -72,6 +72,9 @@ const ADDONS = [
 // has no settings page and no Name: of its own - the API names it from its built-in list. Only with the cookie `stub-addon-off=1`, so the addon list the
 // other pages are tested against stays as it was.
 const ADDON_OFF = {id: '97NeoServer', name: 'NEO Server', version: '', operations: ['uninstall'], running: false, enabled: false, rega_dependent: true, rega_reason: 'needs ReGaHSS, which this system does not have'};
+// occulited task 23: an addon whose lighttpd fragment the check refused, only with the cookie
+// `stub-addon-rejected=1` - the card carries the verdict with the line
+const ADDON_REJECTED = {id: 'fragtest', name: 'Fragment Test', version: '0.3.1', operations: ['restart', 'uninstall'], running: true, pid: 2201, enabled: true, policy_mode: 'confined', policy_source: 'manifest', lighttpd_rejected: {reason: 'proxy.server may point at this system only, not at "10.0.0.1"', line: 3, statement: 'proxy.server = ( "" => ( ( "host" => "10.0.0.1", "port" => 8088 ) ))'}};
 // task 59: a third addon with a frontend of its own, only with the cookie `stub-addon-more=1` - for
 // three pinned tabs, and for the pin of an addon that is gone (the cookie dropped, the shell reloaded)
 const ADDON_MORE = {id: 'iobroker', name: 'ioBroker', version: '1.2.0', config_url: '/addons/iobroker/settings.cgi', operations: ['restart', 'uninstall'], running: true, pid: 2100, enabled: true, policy_mode: 'confined', policy_source: 'catalog', images: IOB_IMAGES};
@@ -3395,9 +3398,10 @@ const srv = http.createServer((req, res) => {
         const jar = cookieJar(req);
         const off = jar['stub-addon-off'] === '1';
         const more = jar['stub-addon-more'] === '1';
-        if (req.method === 'GET' && u.pathname === '/api/system/v1/addons' && (off || more)) {
+        const rejected = jar['stub-addon-rejected'] === '1';
+        if (req.method === 'GET' && u.pathname === '/api/system/v1/addons' && (off || more || rejected)) {
             res.writeHead(200, {'Content-Type': 'application/json'});
-            return res.end(JSON.stringify({addons: [...ADDONS, ...(more ? [ADDON_MORE] : []), ...(off ? [ADDON_OFF] : [])]}));
+            return res.end(JSON.stringify({addons: [...ADDONS, ...(more ? [ADDON_MORE] : []), ...(off ? [ADDON_OFF] : []), ...(rejected ? [ADDON_REJECTED] : [])]}));
         }
         const navPage = jar['stub-nav-page'] === '1';
         if (req.method === 'GET' && u.pathname === '/api/system/v1/nav' && (more || navPage)) {
