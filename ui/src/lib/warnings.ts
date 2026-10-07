@@ -45,7 +45,7 @@ export interface Warning {
     id: string;
     variant: string;
     severity: Severity;
-    params?: {addons?: WarnAddon[]; account?: string; at?: string; path?: string; days?: number; verdict?: string; reasons?: StorageReason[]; devices?: WarnDevice[]; mode?: string; reason?: string; adapter?: string; cause?: string; line?: string; families?: string[]; unreachable?: number; total?: number; port?: number; addresses?: string; sgtin?: string; address?: string; name?: string; detail?: string; label?: string; dir?: string; target?: string; share?: string; reconnecting?: boolean; interface?: string; kind?: string; since?: string; checked?: boolean; listeners?: StallListener[]; folder?: string; device?: string; running?: string; newest?: string; node?: string; drops_off?: boolean; hosts?: string[]; issuer?: string; store?: string; candidate?: boolean; from?: string; module?: string; version?: string; minimum?: string; count?: number; units?: WarnLoopUnit[]; fails?: number; restarts?: number; result?: string; first?: string; last?: string; written?: number; calc?: number; current?: number; offset?: number; wraps_at?: string; clock_state?: string; behind?: boolean; source?: string; duty_cycle?: number; carrier_sense?: number; purpose?: string; host?: string; subject?: string; fingerprint?: string; spki?: string; accounts?: {user: string; at: string}[]};
+    params?: {addons?: WarnAddon[]; account?: string; at?: string; path?: string; days?: number; verdict?: string; reasons?: StorageReason[]; devices?: WarnDevice[]; mode?: string; reason?: string; adapter?: string; cause?: string; line?: string; families?: string[]; unreachable?: number; total?: number; port?: number; addresses?: string; sgtin?: string; address?: string; name?: string; detail?: string; label?: string; dir?: string; target?: string; share?: string; reconnecting?: boolean; interface?: string; kind?: string; since?: string; checked?: boolean; listeners?: StallListener[]; folder?: string; device?: string; running?: string; newest?: string; node?: string; drops_off?: boolean; hosts?: string[]; issuer?: string; store?: string; candidate?: boolean; from?: string; module?: string; version?: string; minimum?: string; count?: number; units?: WarnLoopUnit[]; fails?: number; failures?: number; restarts?: number; result?: string; first?: string; last?: string; written?: number; calc?: number; current?: number; offset?: number; wraps_at?: string; clock_state?: string; behind?: boolean; source?: string; duty_cycle?: number; carrier_sense?: number; purpose?: string; host?: string; subject?: string; fingerprint?: string; spki?: string; accounts?: {user: string; at: string}[]};
     href?: string;
     /** this administrator's own silence (D-64) */
     silenced?: Silence;
@@ -189,6 +189,9 @@ export function warningText(w: Warning, words: Words): string {
         case 'rpc-stalled':
             // B-201: an interface process held by a callback listener that never answers
             return stallSentence({interface: p.interface ?? w.variant, kind: p.kind ?? 'delivery', checked: p.checked ?? false, stuck: p.listeners ?? []}, t);
+        case 'catalog-check':
+            // occulited B-52: the catalogue's check keeps failing (three in a row, or over a day)
+            return t('The addon catalogue could not be loaded from GitHub {n} times in a row since {since}: {detail}. The Addons page shows the list the system holds; load the catalogue there once the connection works.', {n: String(p.failures ?? '?'), since: p.since ? words.when(p.since) : '?', detail: p.detail === 'the check did not finish in time' ? t('the check did not finish in time') : (p.detail ?? '')});
         case 'addon-update': {
             // task 248: what the Addons page's check found (the catalogue, or the addon's own check)
             const list = (p.addons ?? []) as {name?: string; id?: string; available?: string}[];
@@ -331,6 +334,7 @@ const LINK_LABELS: Record<string, string> = {
     'radio-load': 'Interfaces',
     'radio-firmware': 'Radio firmware',
     'addon-update': 'Manage addons',
+    'catalog-check': 'Manage addons',
     'radio-module-unusable': 'Radio firmware',
     'rpc-stalled': 'Interfaces',
     firewall: 'Firewall',

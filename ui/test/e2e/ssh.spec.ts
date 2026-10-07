@@ -14,12 +14,18 @@ const KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEFSx3g/oLwaC84xZMOZIv9tk8m/eIm
 
 async function confirmWithPassword(page: Page, first = 'labpass1') {
     const dialog = page.getByRole('dialog');
-    await expect(dialog).toContainText('Enter your password to confirm; it is asked every time.');
-    await dialog.getByLabel('Password').fill(first);
+    // task 20 (openccu-lite#5): the signed-in account's own password, named in the label and handed
+    // to a password manager as a hidden username beside a current-password field
+    await expect(dialog).toContainText('Confirm with your login password.');
+    const field = dialog.getByLabel('Login password (admin)');
+    await expect(field).toHaveAttribute('autocomplete', 'current-password');
+    await expect(dialog.locator('input[data-username]')).toHaveValue('admin');
+    await expect(dialog.locator('input[data-username]')).toHaveAttribute('autocomplete', 'username');
+    await field.fill(first);
     await dialog.getByRole('button', {name: 'Confirm'}).click();
     if (first !== 'labpass1') {
         await expect(dialog).toContainText('The password was wrong.');
-        await dialog.getByLabel('Password').fill('labpass1');
+        await dialog.getByLabel('Login password (admin)').fill('labpass1');
         await dialog.getByRole('button', {name: 'Confirm'}).click();
     }
 }
@@ -98,6 +104,8 @@ test("root's password asks for the user's password; cancelling sets nothing", as
     await page.getByRole('dialog').getByRole('button', {name: 'Cancel'}).click();
     await expect(page.locator('[data-notice="ssh-notice"]')).toHaveCount(0);
     await page.locator('[data-ssh="set-pw"]').click();
+    // task 20: the dialog tells the new root password from the password that confirms it
+    await expect(page.getByRole('dialog')).toContainText('The new password logs in as root over SSH. Confirm with your login password.');
     await confirmWithPassword(page);
     await expect(page.locator('[data-notice="ssh-notice"]')).toHaveText('Root password set.');
     await expect(page.locator('[data-panel="ssh-password"] [data-notice="ssh-notice"]')).toBeVisible();
@@ -111,9 +119,25 @@ test('an account that signs in at the provider: the pasted key goes in after the
     await page.locator('[data-ssh="add"]').click();
     const dialog = page.getByRole('dialog');
     await expect(dialog).toContainText('you sign in at the identity provider once more and come back here');
+    // task 20: an account of the provider keeps the provider's wording and gets no password field
+    await expect(dialog).not.toContainText('login password');
+    await expect(dialog.locator('input')).toHaveCount(0);
     await dialog.getByRole('button', {name: 'Continue'}).click();
     await expect(page.locator('[data-notice="ssh-notice"]')).toHaveText('Key added: laptop ed');
     await expect(page).toHaveURL(/\/system\/remote-access$/);
+});
+
+test("in German, the confirmation names the account's own login password", async ({page, baseURL}) => {
+    await own(page, baseURL);
+    await page.addInitScript(() => localStorage.setItem('ol.language', 'de'));
+    await page.goto('/system/remote-access');
+    await page.locator('[data-ssh="pw"]').fill('rootpass123');
+    await page.locator('[data-ssh="pw2"]').fill('rootpass123');
+    await page.locator('[data-ssh="set-pw"]').click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toContainText('Mit dem neuen Passwort meldet man sich per SSH als root an. Zur Bestätigung Ihr Anmelde-Passwort eingeben.');
+    await expect(dialog.getByLabel('Anmelde-Passwort (admin)')).toBeVisible();
+    await dialog.getByRole('button', {name: 'Abbrechen'}).click();
 });
 
 test('SSH is not on the Network page any more; its old anchor leads here', async ({page, baseURL}) => {

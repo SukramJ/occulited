@@ -126,8 +126,8 @@ test('the welcome page: a step on an empty HmIP network, an explicit choice befo
         if (r.method() === 'PUT' && r.url().endsWith('/radio/hmip/local-key')) puts.push(r.postData() ?? '');
     });
     await page.goto('/welcome');
-    await expect(page.getByRole('heading', {name: '3 · The HmIP network key'})).toBeVisible();
-    await expect(page.getByRole('heading', {name: '4 · A frontend'})).toBeVisible();
+    await expect(page.getByRole('heading', {name: '4 · The HmIP network key'})).toBeVisible();
+    await expect(page.getByRole('heading', {name: '5 · A frontend'})).toBeVisible();
     const done = page.getByRole('button', {name: 'Done'});
     await expect(done).toBeDisabled();
     await expect(page.getByRole('button', {name: 'Open the catalogue'})).toBeDisabled();
@@ -143,7 +143,7 @@ test('the welcome page: a step on an empty HmIP network, an explicit choice befo
     await expect(later).toContainText('So oder so lässt sich das später auf der Seite Schlüssel unter „Lokaler Schlüssel" ändern.');
     await expect(later.getByRole('link', {name: 'Schlüssel'})).toHaveAttribute('href', '/system/keys#local-key');
     // task 305: "Netzwerkschlüssel", never "Netzschlüssel"
-    await expect(page.getByRole('heading', {name: '3 · Der HmIP-Netzwerkschlüssel'})).toBeVisible();
+    await expect(page.getByRole('heading', {name: '4 · Der HmIP-Netzwerkschlüssel'})).toBeVisible();
     await expect(page.locator('main, body').first()).not.toContainText('Netzschlüssel');
     await page.evaluate(() => localStorage.setItem('ol.language', 'en'));
     await page.addInitScript(() => localStorage.setItem('ol.language', 'en'));
@@ -171,7 +171,7 @@ test('the welcome page: a step on an empty HmIP network, an explicit choice befo
 test('the welcome page without the step: HmIP devices are paired already', async ({page, baseURL}) => {
     await own(page, baseURL);
     await page.goto('/welcome');
-    await expect(page.getByRole('heading', {name: '3 · A frontend'})).toBeVisible();
+    await expect(page.getByRole('heading', {name: '4 · A frontend'})).toBeVisible();
     await expect(page.getByRole('heading', {name: /The HmIP network key/})).toHaveCount(0);
     await expect(page.getByRole('button', {name: 'Done'})).toBeEnabled();
 });

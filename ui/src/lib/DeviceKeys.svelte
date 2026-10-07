@@ -7,8 +7,9 @@
     // The list never carries a key; the sheet asks for the password (or a fresh login at the
     // identity provider) every time.
     import {onMount} from 'svelte';
-    import {api, ApiError} from './api';
-    import {ask, askText} from './dialog.svelte';
+    import {api} from './api';
+    import {confirmTicket, returned} from './confirm';
+    import {ask} from './dialog.svelte';
     import {t} from './i18n.svelte';
     import {scrollToAnchor} from './anchor';
     import {DEVICE_KEYS, addressOf, formatSGTIN, keyShape, normalizeSGTIN, parseDeviceCode, type AddResult, type DeviceKeysView, type ExportedKey} from './devicekeys';
@@ -150,65 +151,29 @@
         }
     }
 
-    /** The sheet: confirmed every time, by the password or at the identity provider (D-104). */
+    /** The sheet: confirmed every time, by the login password or at the identity provider (D-104, task 20). */
     async function printSheet() {
         err = refused = '';
-        let how: {method: string; url?: string};
+        let ticket: string | null;
         try {
-            how = await api.get<{method: string; url?: string}>(`/api/auth/v1/confirm?path=${encodeURIComponent(EXPORT)}&return=${encodeURIComponent(location.pathname)}`);
+            ticket = await confirmTicket(EXPORT, {
+                title: t('Print the key sheet'),
+                message: t('The sheet holds every HmIP device key in clear.'),
+                provider: t('The sheet holds every HmIP device key in clear, so it asks who you are every time: you sign in at the identity provider once more and come back here.'),
+                impossible: t('This account has no password and no identity provider is configured, so it cannot confirm the key sheet.'),
+            });
         } catch (e) {
             err = (e as Error).message;
             return;
         }
-        if (how.method === 'oidc' && how.url) {
-            const go = await ask({
-                title: t('Print the key sheet'),
-                message: t('The sheet holds every HmIP device key in clear, so it asks who you are every time: you sign in at the identity provider once more and come back here.'),
-                confirm: t('Continue'),
-            });
-            if (go) location.href = how.url;
-            return;
-        }
-        if (how.method !== 'password' && how.method !== 'none') {
-            err = t('This account has no password and no identity provider is configured, so it cannot confirm the key sheet.');
-            return;
-        }
-        let ticket = '';
-        let wrong = false;
-        while (!ticket) {
-            let password = '';
-            if (how.method === 'password') {
-                const pw = await askText({
-                    title: t('Print the key sheet'),
-                    message: (wrong ? t('The password was wrong.') + '\n\n' : '') + t('The sheet holds every HmIP device key in clear. Enter your password to confirm; it is asked every time.'),
-                    input: {type: 'password', label: t('Password')},
-                    confirm: t('Confirm'),
-                });
-                if (pw === null) return;
-                password = pw;
-            }
-            try {
-                ticket = (await api.post<{ticket: string}>('/api/auth/v1/ticket', {path: EXPORT, confirm: true, password})).ticket;
-            } catch (e) {
-                if (e instanceof ApiError && e.status === 401 && how.method === 'password') {
-                    wrong = true;
-                    continue;
-                }
-                err = (e as Error).message;
-                return;
-            }
-        }
-        await openSheet(ticket);
+        if (ticket) await openSheet(ticket);
     }
 
     onMount(() => {
         // back from the identity provider: the ticket (or why there is none) in the fragment
-        const h = location.hash;
-        if (h.startsWith('#confirm=') || h.startsWith('#confirm-error=')) {
-            history.replaceState(history.state, '', location.pathname + location.search);
-            if (h.startsWith('#confirm=')) void openSheet(decodeURIComponent(h.slice('#confirm='.length)));
-            else refused = t('The confirmation at the identity provider was refused: {reason}', {reason: decodeURIComponent(h.slice('#confirm-error='.length))});
-        }
+        const back = returned();
+        if (back && 'ticket' in back) void openSheet(back.ticket);
+        else if (back) refused = t('The confirmation at the identity provider was refused: {reason}', {reason: back.refused});
         void load();
         return () => clearTimeout(poll);
     });

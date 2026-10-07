@@ -23,7 +23,7 @@ test('the about box: not OpenCCU, its own issue tracker, no donations, the licen
     // no licence text on the page, and the box comes before the first decision
     await expect(page.getByText('TERMS AND CONDITIONS')).toHaveCount(0);
     const aboutY = (await about.boundingBox())!.y;
-    const firstY = (await page.getByRole('heading', {name: '1 · Automatic checks'}).boundingBox())!.y;
+    const firstY = (await page.getByRole('heading', {name: '2 · Automatic checks'}).boundingBox())!.y;
     expect(aboutY).toBeLessThan(firstY);
 });
 

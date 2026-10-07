@@ -1,4 +1,5 @@
 import {expect, test, type Page} from '@playwright/test';
+import {shellStreamInWindow} from './fixtures';
 
 // openccu-lite task 219: a program's request on the Status page - the code, the access per area
 // with its own words, devices at administer in red, the look-alike mark, Approve and Reject - and
@@ -12,7 +13,9 @@ const REQ = {
 
 async function withRequests(page: Page, requests: unknown[]) {
     await page.route('**/api/auth/v1/pairing', (route) => route.fulfill({json: {enabled: true, requests}}));
-    await page.route('**/api/auth/v1/pairing/stream', (route) => route.fulfill({status: 200, contentType: 'text/event-stream', body: `event: pairing\ndata: ${JSON.stringify({enabled: true, requests})}\n\n`}));
+    // the topic pairing of the shell's stream (occulited B-53), answered in the window
+    await shellStreamInWindow(page);
+    await page.route('**/api/system/v1/stream?*', (route) => route.fulfill({status: 200, contentType: 'text/event-stream', body: `event: pairing\ndata: ${JSON.stringify({enabled: true, requests})}\n\n`}));
 }
 
 test('the card: code, access, approve with the code', async ({page}) => {

@@ -4,6 +4,10 @@
  * order, at most three on the tile and the rest behind a +n. The keys are the CCU's service
  * messages; occulited's store lists the active ones for the whole house (the rollup on the
  * rooms, functions and drawer entries), the :0 channel's events keep an open page live.
+ *
+ * Reachability follows UNREACH alone (occulited B-46). STICKY_UNREACH without it means the device
+ * answers again and nobody has acknowledged the outage yet: a mild "was unreachable", no strike,
+ * and no problem for the rollup - the tile is about now.
  */
 import type {IconName} from '../Icon.svelte';
 
@@ -14,11 +18,15 @@ export interface Badge {
     label: string;
     /** the CSS class for the struck-through radio */
     strike?: boolean;
+    /** a note about the past, drawn muted: nothing is wrong now */
+    mild?: boolean;
 }
 
 // the order is the row's order: the same problem always sits in the same place
-const TABLE: {keys: RegExp; icon: IconName; label: string; strike?: boolean}[] = [
-    {keys: /^(UNREACH|STICKY_UNREACH)$/, icon: 'radio', label: 'not reachable', strike: true},
+const TABLE: {keys: RegExp; icon: IconName; label: string; strike?: boolean; mild?: boolean; unless?: RegExp}[] = [
+    {keys: /^UNREACH$/, icon: 'radio', label: 'not reachable', strike: true},
+    // only while the device is reachable: with UNREACH set, "not reachable" says it all
+    {keys: /^STICKY_UNREACH$/, icon: 'radio', label: 'was unreachable', mild: true, unless: /^UNREACH$/},
     {keys: /^(LOWBAT|LOW_BAT)$/, icon: 'battery', label: 'Low battery'},
     {keys: /^CONFIG_PENDING$/, icon: 'clock', label: 'Configuration pending'},
     {keys: /^(UPDATE_PENDING|DEVICE_IN_BOOTLOADER)$/, icon: 'download', label: 'Update pending'},
@@ -33,9 +41,15 @@ export function badgesFor(keys: Iterable<string>): Badge[] {
     const set = new Set(keys);
     for (const row of TABLE) {
         const hit = [...set].find((k) => row.keys.test(k));
-        if (hit) out.push({key: hit, icon: row.icon, label: row.label, strike: row.strike});
+        if (!hit || (row.unless && [...set].some((k) => row.unless!.test(k)))) continue;
+        out.push({key: hit, icon: row.icon, label: row.label, strike: row.strike, mild: row.mild});
     }
     return out;
+}
+
+/** Whether a set of active maintenance keys holds a problem of now: anything but a mild badge. */
+export function isProblem(keys: Iterable<string>): boolean {
+    return badgesFor(keys).some((b) => !b.mild);
 }
 
 /** Whether a maintenance datapoint's value means an active message (as the store decides it). */

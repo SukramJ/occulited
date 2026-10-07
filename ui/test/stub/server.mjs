@@ -1110,8 +1110,112 @@ const liteDescs = {
         VOLTAGE: {CONTROL: 'POWERMETER_IGL.VOLTAGE', OPERATIONS: 5, TYPE: 'FLOAT', UNIT: 'V'}, CURRENT: {CONTROL: 'POWERMETER_IGL.CURRENT', OPERATIONS: 5, TYPE: 'FLOAT', UNIT: 'mA'}, FREQUENCY: {CONTROL: 'POWERMETER_IGL.FREQUENCY', OPERATIONS: 5, TYPE: 'FLOAT', UNIT: 'Hz'},
     },
 };
+// occulited B-47: the browser rule of lite-rpc's reads, as the daemon's originRefusal has it
+// (internal/httpapi/literpc.go) - the stub knows no sessions, so an Authorization header stands for
+// the session as Bearer. Sec-Fetch-Site and Origin decide where the browser sends them; where it
+// sends neither (a page over plain http://<name>/, no secure context) the header credential does,
+// and an EventSource, which can set no header, is refused there as on a system.
+function liteOriginRefusal(req) {
+    if (req.headers.authorization) return '';
+    const sfs = req.headers['sec-fetch-site'];
+    if (sfs === 'same-origin' || sfs === 'none') return '';
+    if (sfs) return `the stream is opened from this system's own pages only (Sec-Fetch-Site: ${sfs})`;
+    const origin = req.headers.origin;
+    if (origin) {
+        let host = '';
+        try {
+            host = new URL(origin).host;
+        } catch {
+            /* not an origin */
+        }
+        if (host && host.toLowerCase() === (req.headers.host ?? '').toLowerCase()) return '';
+        return `the stream is opened from this system's own pages only (Origin: ${origin})`;
+    }
+    if (req.headers['x-occulite-request']) return '';
+    return 'the stream needs the session in the Authorization header, or a browser that says its origin (over plain HTTP: the header X-Occulite-Request)';
+}
+// the open event streams of one test (the cookie stub-app): a setValue of that test goes out on
+// them as the interface's event, the way a device answers a command. Without the cookie nothing is
+// sent, so the specs that share the stub's default values never see each other's writes.
+const liteOpen = new Map(); // stub-app -> Set of {res, ifaces}
+// occulited B-53: the shell's streams opened per spec (the cookie stub-shellstream): [{topics, open}]
+const shellStreams = new Map();
+// the open lite-rpc streams per stub-lite-limit id
+const liteLimited = new Map();
+let liteSeq = 0;
+function liteEmit(app, iface, address, key, value) {
+    if (!app) return;
+    liteSeq++;
+    const data = JSON.stringify({interface: iface, address, key, value, ts: new Date().toISOString()});
+    for (const st of liteOpen.get(app) ?? []) {
+        if (st.ifaces.length === 0 || st.ifaces.includes(iface)) st.res.write(`id: stub-${liteSeq}\nevent: event\ndata: ${data}\n\n`);
+    }
+}
+// what reached the stream's gate with ?probe=<id>, for the spec that tries the ways in from another
+// origin: a request the browser never sent (a refused preflight) is not in it
+const liteProbes = [];
+function liteEventsRoute(req, u, res) {
+    const why = liteOriginRefusal(req);
+    if (u.searchParams.get('probe')) liteProbes.push({probe: u.searchParams.get('probe'), how: u.searchParams.get('how') ?? '', refused: why !== '', header: !!req.headers['x-occulite-request'] || !!req.headers.authorization});
+    if (why) {
+        console.error(`stub: GET ${u.pathname} refused: ${why}`);
+        return sendJSON(res, {error: 'forbidden', message: why}, 403);
+    }
+    // the account's stream limit (rpc.streams_per_session) for the specs that set stub-lite-limit=<id>.<n>
+    // (occulited B-53): the stream over the limit is answered 429, as on the system
+    const limit = /^(.+)\.(\d+)$/.exec(cookieJar(req)['stub-lite-limit'] ?? '');
+    if (limit) {
+        const n = liteLimited.get(limit[1]) ?? 0;
+        if (n >= Number(limit[2])) return sendJSON(res, {error: 'too-many-streams', message: `the session has ${n} streams open`}, 429);
+        liteLimited.set(limit[1], n + 1);
+        req.on('close', () => liteLimited.set(limit[1], (liteLimited.get(limit[1]) ?? 1) - 1));
+    }
+    res.writeHead(200, {'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'});
+    res.write(': connected\n\n');
+    res.write(`id: stub-${liteSeq}\nevent: hello\ndata: ${JSON.stringify({boot_id: 'stub', seq: liteSeq, interfaces: [], buffer: {seconds: 300, events: 5000}})}\n\n`);
+    const app = cookieJar(req)['stub-app'];
+    const st = {res, ifaces: u.searchParams.getAll('interface').flatMap((v) => v.split(','))};
+    if (app) {
+        if (!liteOpen.has(app)) liteOpen.set(app, new Set());
+        liteOpen.get(app).add(st);
+    }
+    // the daemon's heartbeat: a client takes 45 s of silence for a dead connection
+    const ping = setInterval(() => res.write(': ping\n\n'), 15_000);
+    req.on('close', () => {
+        clearInterval(ping);
+        liteOpen.get(app)?.delete(st);
+        res.end();
+    });
+}
+// the state store (GET /state): the last value of the datapoints of the chosen set - the list of
+// internal/devstate/keys.go, as far as the stub's channels have them; a command key the specs
+// write (a siren's selection, the smoke detector's command) is not kept, as on a system
+const LITE_STATE_KEYS = new Set(['STATE', 'LEVEL', 'LEVEL_2', 'COLOR', 'COLOR_TEMPERATURE', 'HUE', 'SATURATION', 'SET_POINT_TEMPERATURE', 'SET_TEMPERATURE', 'SETPOINT', 'ACTUAL_TEMPERATURE', 'SET_POINT_MODE', 'CONTROL_MODE', 'BOOST_MODE', 'WINDOW_STATE',
+    'MOTION', 'SMOKE_DETECTOR_ALARM_STATUS', 'ACOUSTIC_ALARM_ACTIVE', 'OPTICAL_ALARM_ACTIVE', 'POWER', 'ENERGY_COUNTER', 'VOLTAGE', 'CURRENT', 'FREQUENCY', 'TEMPERATURE', 'HUMIDITY', 'ILLUMINATION', 'UNREACH', 'STICKY_UNREACH', 'LOW_BAT', 'CONFIG_PENDING']);
+const liteIfaceOf = (address) => (address.startsWith('BidCoS-RF') ? 'BidCos-RF' : 'HmIP-RF');
+function liteStateRoute(req, u, res) {
+    const why = liteOriginRefusal(req);
+    if (why) {
+        console.error(`stub: GET ${u.pathname} refused: ${why}`);
+        return sendJSON(res, {error: 'forbidden', message: why}, 403);
+    }
+    const list = (name) => u.searchParams.getAll(name).flatMap((v) => v.split(',')).filter(Boolean);
+    const ifaces = list('interface');
+    const addresses = list('address');
+    const entries = [];
+    for (const [address, values] of Object.entries(liteValuesOf(cookieJar(req)))) {
+        const iface = liteIfaceOf(address);
+        if (ifaces.length && !ifaces.includes(iface)) continue;
+        if (addresses.length && !addresses.some((a) => address === a || address.startsWith(a + ':'))) continue;
+        for (const [datapoint, value] of Object.entries(values)) {
+            if (LITE_STATE_KEYS.has(datapoint)) entries.push({interface: iface, address, datapoint, value, ts: now, lc: now, confirmed: true, source: 'event'});
+        }
+    }
+    sendJSON(res, {entries, total: entries.length, unconfirmed: 0, event_id: `stub-${liteSeq}`, sweeps: {}, datapoints: [...LITE_STATE_KEYS]});
+}
 function liteRoute(req, u, res) {
     const iface = decodeURIComponent(u.pathname.split('/').pop());
+    const app = cookieJar(req)['stub-app'];
     const liteValues = liteValuesOf(cookieJar(req));
     let body = '';
     req.on('data', (c) => { body += c; });
@@ -1129,6 +1233,7 @@ function liteRoute(req, u, res) {
                     if (!liteValues[addr]) return err(-2, 'Unknown instance');
                     if (addr === '000ABC:1' && key === 'SET_POINT_TEMPERATURE' && value > 30) return err(-5, 'Invalid parameter or value');
                     liteValues[addr] = {...liteValues[addr], [key]: value};
+                    liteEmit(app, iface, addr, key, value);
                     return {jsonrpc: '2.0', result: '', id: r.id};
                 case 'putParamset': {
                     // [address, 'VALUES', {key: value}]: several datapoints in one write (the siren)
@@ -1136,6 +1241,7 @@ function liteRoute(req, u, res) {
                     if (!liteValues[a]) return err(-2, 'Unknown instance');
                     if (set !== 'VALUES') return err(-32601, `not permitted: ${r.method} on ${set} needs rpc:configure`);
                     liteValues[a] = {...liteValues[a], ...vals};
+                    for (const [k, v] of Object.entries(vals ?? {})) liteEmit(app, iface, a, k, v);
                     return {jsonrpc: '2.0', result: '', id: r.id};
                 }
             }
@@ -2975,6 +3081,8 @@ const metaWrites = [];
 // openccu-lite task 100: the addon images, as the box serves them - the type by content, nosniff,
 // the policy that keeps an SVG a picture, an hour of private caching. One SVG per addon and
 // variant, told apart by colour (the dark one is light, so it reads on a dark background).
+// Each has a viewBox and no width or height, as OpenCCU-Loom's icon.svg: no intrinsic size, which
+// a slot that sized the image auto/auto laid out 0×0 (occulited B-43) - keep them so.
 const IMAGE_ADDONS = {iobroker: {letter: 'I', light: '#2a6fd6', dark: '#9cc2ff'}, mosquitto: {letter: 'M', light: '#3c5280', dark: '#b8c8ea'}, 'tm-devices': {letter: 'T', light: '#7a3e9d', dark: '#d7b3ec'}, 'xml-api': {letter: 'X', light: '#2e7d32', dark: '#a5d6a7'}};
 function imageRoute(req, u, res) {
     const m = /^\/api\/system\/v1\/(addons|catalog)\/([^/]+)\/images\/(icon|icon-dark|logo|logo-dark)$/.exec(u.pathname);
@@ -3580,11 +3688,14 @@ const srv = http.createServer((req, res) => {
     if (u.pathname.startsWith('/api/rpc/v1/json/')) {
         return liteRoute(req, u, res);
     }
-    if (u.pathname === '/api/rpc/v1/events') {
-        res.writeHead(200, {'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache'});
-        res.write(': connected\n\n');
-        req.on('close', () => res.end());
-        return;
+    if (key === 'GET /api/rpc/v1/events') {
+        return liteEventsRoute(req, u, res);
+    }
+    if (key === 'GET /__stub/lite-probes') {
+        return sendJSON(res, liteProbes.filter((p) => p.probe === u.searchParams.get('probe')).map(({probe: _, ...p}) => p));
+    }
+    if (key === 'GET /api/rpc/v1/state') {
+        return liteStateRoute(req, u, res);
     }
     if (u.pathname === '/api/system/v1/rpc-trace') {
         return traceRoute(req, u, res);
@@ -3848,6 +3959,34 @@ const srv = http.createServer((req, res) => {
         });
         return;
     }
+    if (u.pathname === '/api/system/v1/stream') {
+        // occulited B-53: the shell's stream - each topic's first event (as its own route below sends
+        // it), then a heartbeat; held open like the real one. stub-shellstream=<id> records the opens
+        // (GET /__stub/shellstream?id=), for the specs that count the browser's connections.
+        const topics = [...new Set(u.searchParams.getAll('topics').flatMap((v) => v.split(',')).filter(Boolean))].sort();
+        const known = ['addons', 'pairing', 'service-messages'];
+        const bad = topics.find((t) => !known.includes(t));
+        if (bad || topics.length === 0) return sendJSON(res, {error: 'bad-request', message: `unknown topic ${bad ?? '(none)'}`}, 400);
+        const id = cookieJar(req)['stub-shellstream'];
+        const rec = id ? {topics: topics.join(','), open: true} : null;
+        if (rec) {
+            if (!shellStreams.has(id)) shellStreams.set(id, []);
+            shellStreams.get(id).push(rec);
+        }
+        res.writeHead(200, {'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no'});
+        for (const t of topics) {
+            if (t === 'addons') res.write(`event: addons\ndata: ${JSON.stringify({revision: 1})}\n\n`);
+            if (t === 'service-messages') res.write(`event: messages\ndata: ${JSON.stringify(serviceMessagesView(cookieJar(req)))}\n\n`);
+            if (t === 'pairing') res.write('event: pairing\ndata: {"enabled":true,"requests":[]}\n\n');
+        }
+        const hb = setInterval(() => res.write(': ping\n\n'), 30000);
+        req.on('close', () => {
+            clearInterval(hb);
+            if (rec) rec.open = false;
+        });
+        return;
+    }
+    if (u.pathname === '/__stub/shellstream') return sendJSON(res, shellStreams.get(u.searchParams.get('id')) ?? []);
     if (u.pathname === '/api/system/v1/addons/stream') {
         // openccu-lite B-297: the addons' revision once, then a heartbeat - nothing changes on the
         // stub; a spec that wants a change answers the route itself (addon-menu-follows.spec.ts)

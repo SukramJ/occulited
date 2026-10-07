@@ -37,6 +37,7 @@
     import FrameHost from './lib/FrameHost.svelte';
     import {dropAll, leaveFrames, noteAddons, recheck} from './lib/frames.svelte';
     import {watchAddons} from './lib/addonsync';
+    import {setShellStreamKey} from './lib/shellstream/client';
     import {frontendKey, settingsKey} from './lib/framekeep';
     import {FRAMED_BACK} from './lib/framed';
     import {tick, untrack, type Component} from 'svelte';
@@ -291,6 +292,9 @@
         if (!auth.authenticated || auth.public || auth.mustChangePassword) return;
         return untrack(() => watchAddons(refreshMenu));
     });
+    // occulited B-53: the shell's stream is shared by the browser's windows; a new sign-in opens it
+    // anew under the new session
+    $effect(() => setShellStreamKey(auth.authenticated ? auth.sid || auth.user : ''));
 
     // ---- the menu (task 26) ------------------------------------------------------------------
     // Eleven fixed tabs plus one per addon was too many to read (maintainer, 2026-09-07). Every

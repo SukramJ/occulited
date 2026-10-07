@@ -165,7 +165,7 @@ test('the unencrypted download asks first, then for the password, and follows wi
     const dialog = page.getByRole('dialog');
     await expect(dialog).toContainText('every key of this system in plain');
     await dialog.getByRole('button', {name: 'Continue'}).click();
-    await expect(dialog).toContainText('asks for your password every time');
+    await expect(dialog).toContainText('is confirmed every time. Confirm with your login password.');
     await dialog.locator('input[type="password"]').fill('secret');
     const [dl] = await Promise.all([page.waitForEvent('download'), dialog.getByRole('button', {name: 'Confirm'}).click()]);
     expect(dl.suggestedFilename()).toBe('x.sbk');

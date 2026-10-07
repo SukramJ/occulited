@@ -38,3 +38,17 @@ export const test = base.extend({
 });
 
 export {expect};
+
+/**
+ * occulited B-53: the shell's stream (GET /api/system/v1/stream) is held by a SharedWorker for every
+ * window of the browser, and Playwright routes no request of a SharedWorker - neither page.route
+ * nor context.route sees it. A spec that answers the stream itself makes the page run the stream's
+ * hub in the window, as a browser without SharedWorker does (shellstream/client.ts): call this
+ * before page.goto.
+ */
+export async function shellStreamInWindow(page: Page): Promise<void> {
+    await page.addInitScript(() => {
+        // the client looks for SharedWorker with typeof
+        Object.defineProperty(window, 'SharedWorker', {value: undefined, configurable: true});
+    });
+}

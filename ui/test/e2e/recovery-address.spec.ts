@@ -136,8 +136,12 @@ test.describe('the power menu', () => {
         });
         await page.route('**/api/system/v1/reboot', (r) => r.fulfill({json: {ok: true, message: 'rebooting'}}));
         await page.goto(`${NAME}/`);
+        // the menu asks for the staged update when it opens: its answer, and a moment to take it in
+        // (not networkidle: the shell's stream worker's script, occulited B-53, never ends for Playwright)
+        const asked = page.waitForResponse((r) => r.url().endsWith('/api/system/v1/system-update'));
         await page.locator('.ol-powerbtn').click();
-        await page.waitForLoadState('networkidle');
+        await asked;
+        await page.waitForTimeout(300);
         await page.locator('.ol-powerpop [data-action="reboot"]').click();
         const dialog = page.getByRole('dialog', {name: 'Reboot', exact: true});
         await expect(dialog).toContainText(`A system update is set to install at this boot: it stays in the recovery system for a few minutes, and the progress of the installation is shown at ${ADDRESS}.`);

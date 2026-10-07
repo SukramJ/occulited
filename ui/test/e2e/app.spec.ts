@@ -1,4 +1,4 @@
-import {expect, test} from './fixtures';
+import {expect, shellStreamInWindow, test} from './fixtures';
 
 // task 193, phase 2: the App - a tab beside Status; the drawer generated from the metadata tree
 // (favorites, the enums as foldable sections, service messages with a count, settings for an
@@ -437,7 +437,8 @@ test('badges: the maintenance messages on the tile, at most three plus more, and
     test.skip(!!isMobile, 'the drawer is behind the button on a phone');
     const msgs = ['UNREACH', 'LOW_BAT', 'CONFIG_PENDING', 'UPDATE_PENDING'].map((key) => ({interface: 'HmIP-RF', address: '000DD8', channel: '0', key, value: true, since: '2026-09-22T12:00:00Z', seen: 'event', type: 'HmIP-PDT'}));
     await page.route('**/api/system/v1/service-messages', (r) => r.fulfill({json: {count: msgs.length, messages: msgs, swept: '2026-09-22T12:00:00Z', errors: {}}}));
-    await page.route('**/api/system/v1/service-messages/stream', (r) => r.fulfill({status: 200, headers: {'Content-Type': 'text/event-stream'}, body: ': stub\n\n'}));
+    await shellStreamInWindow(page);
+    await page.route('**/api/system/v1/stream?*', (r) => r.fulfill({status: 200, headers: {'Content-Type': 'text/event-stream'}, body: ': stub\n\n'}));
     await page.goto('/app/e/rooms/og/bad');
     const lamp = page.locator('[data-app-tile="HmIP-RF.000DD8:3"]');
     const badges = lamp.locator('[data-app-badges]');
@@ -457,6 +458,47 @@ test('badges: the maintenance messages on the tile, at most three plus more, and
     await expect(page.getByRole('dialog')).toContainText('not reachable');
     await expect(page.getByRole('dialog')).toContainText('Low battery');
     await page.keyboard.press('Escape');
+});
+
+// occulited B-46: a device that answers again but whose outage nobody acknowledged (STICKY_UNREACH
+// without UNREACH) is not shown as unreachable: a mild badge, no strike, no dot in the drawer - and
+// the event that clears UNREACH turns the struck badge into the mild one on an open page
+test('badges: STICKY_UNREACH alone is a mild "was unreachable", not "not reachable"', async ({page, isMobile}) => {
+    test.skip(!!isMobile, 'the drawer is behind the button on a phone');
+    const msg = (key: string) => ({interface: 'HmIP-RF', address: '000DD8', channel: '0', key, value: true, since: '2026-09-22T12:00:00Z', seen: 'event', type: 'HmIP-PDT'});
+    let msgs = [msg('STICKY_UNREACH')];
+    await page.route('**/api/system/v1/service-messages', (r) => r.fulfill({json: {count: msgs.length, messages: msgs, swept: '2026-09-22T12:00:00Z', errors: {}}}));
+    await shellStreamInWindow(page);
+    await page.route('**/api/system/v1/stream?*', (r) => r.fulfill({status: 200, headers: {'Content-Type': 'text/event-stream'}, body: ': stub\n\n'}));
+    await page.goto('/app/e/rooms/og/bad');
+    const badges = page.locator('[data-app-tile="HmIP-RF.000DD8:3"] [data-app-badges]');
+    await expect(badges).toHaveAttribute('data-app-badges', '1');
+    await expect(badges.locator('.app-badge-mild[data-app-badge="STICKY_UNREACH"]')).toHaveCount(1);
+    await expect(badges.locator('.app-badge-strike')).toHaveCount(0);
+    await expect(badges).toHaveAttribute('title', 'was unreachable');
+    // nothing is wrong now: no dot on the room, its parent or the title
+    await expect(page.locator('[data-app-node="rooms/og/bad"] [data-app-problem]')).toHaveCount(0);
+    await expect(page.locator('[data-app-node="rooms/og"] [data-app-problem]')).toHaveCount(0);
+    await expect(page.locator('[data-app-title] .app-dot')).toHaveCount(0);
+    await badges.click();
+    await expect(page.getByRole('dialog')).toContainText('was unreachable');
+    await expect(page.getByRole('dialog')).not.toContainText('not reachable');
+    await page.keyboard.press('Escape');
+    // in German
+    await page.evaluate(() => localStorage.setItem('ol.language', 'de'));
+    // both set: the device is away now - the struck badge alone, and the dot
+    msgs = [msg('UNREACH'), msg('STICKY_UNREACH')];
+    await page.reload();
+    await expect(badges).toHaveAttribute('data-app-badges', '1');
+    await expect(badges.locator('.app-badge-strike[data-app-badge="UNREACH"]')).toHaveCount(1);
+    await expect(badges).toHaveAttribute('title', 'nicht erreichbar');
+    await expect(page.locator('[data-app-node="rooms/og/bad"] [data-app-problem]')).toHaveCount(1);
+    // it answers again, the acknowledgement is still missing
+    msgs = [msg('STICKY_UNREACH')];
+    await page.reload();
+    await expect(badges).toHaveAttribute('title', 'war nicht erreichbar');
+    await expect(badges.locator('.app-badge-strike')).toHaveCount(0);
+    await expect(page.locator('[data-app-node="rooms/og/bad"] [data-app-problem]')).toHaveCount(0);
 });
 
 // the widget gaps (task 193's parity checklist): colour, the meter's readings, the smoke detector's

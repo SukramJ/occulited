@@ -20,10 +20,12 @@
     import Loading from '../lib/Loading.svelte';
     import {isOn, LEVEL_KEYS, longAction, mainAction, stateText, working, type Model} from '../lib/app/channels';
     import {loadChannels, openEvents, setValue, type Channel, putValues} from '../lib/app/rpc';
+    import type {StreamState} from '../lib/app/eventstream';
+    import {subscribeShell} from '../lib/shellstream/client';
     import Sheet from '../lib/app/Sheet.svelte';
     import AssignSheet from '../lib/app/AssignSheet.svelte';
     import TaxonomySheet from '../lib/app/TaxonomySheet.svelte';
-    import {active, badgesFor, deviceOf, isMaintenanceKey, type Badge} from '../lib/app/badges';
+    import {active, badgesFor, deviceOf, isMaintenanceKey, isProblem, type Badge} from '../lib/app/badges';
     import {ask} from '../lib/dialog.svelte';
     import type {ServiceMessage} from '../lib/api';
     import {askText} from '../lib/dialog.svelte';
@@ -83,7 +85,8 @@
         const out = new Set<string>();
         if (!snap) return out;
         for (const [ref, o] of Object.entries(snap.objects)) {
-            if (!maint.has(deviceOf(ref))) continue;
+            // a device that only "was unreachable" is no problem of now (B-46)
+            if (!isProblem(maint.get(deviceOf(ref)) ?? [])) continue;
             for (const p of o.enums) {
                 const parts = p.split('/');
                 for (let i = 2; i <= parts.length; i++) out.add(parts.slice(0, i).join('/'));
@@ -95,21 +98,27 @@
         const list = badges(ref).map((b) => `• ${t(b.label)}`).join('\n');
         void ask({title: name, message: list, confirm: t('OK'), cancel: ''});
     }
-    let msgStream: EventSource | null = null;
+    // the service messages: the topic of the shell's stream (occulited B-53: one stream for every
+    // window of the browser), while the page is shown
+    $effect(() => {
+        if (!life.active) return;
+        return subscribeShell('service-messages', (data) => {
+            try {
+                takeMessages(JSON.parse(data));
+            } catch {
+                /* a torn line: the poll repairs it */
+            }
+        });
+    });
     onMount(() => {
         void load();
-        if (typeof EventSource !== 'undefined') {
-            msgStream = new EventSource('/api/system/v1/service-messages/stream');
-            msgStream.addEventListener('messages', (ev) => {
-                try {
-                    takeMessages(JSON.parse((ev as MessageEvent).data));
-                } catch {
-                    /* a torn line: the poll repairs it */
-                }
-            });
-        }
         const poll = setInterval(() => life.active && load(), 30000);
-        const stopReturn = life.onReturn(() => void load());
+        // back on the page: the tree and the messages, and the values of its tiles again
+        const stopReturn = life.onReturn(() => {
+            void load();
+            // a parked stream: the return below reads them, with the stream (occulited B-53)
+            if (!parked) reloadValues();
+        });
         // the floating button hides while the page scrolls down, comes back on scroll up
         const port = document.querySelector('.ol-scrollport');
         let last = port?.scrollTop ?? 0;
@@ -129,8 +138,6 @@
             stopReturn();
             port?.removeEventListener('scroll', onScroll);
             window.removeEventListener('keydown', onKey);
-            msgStream?.close();
-            msgStream = null;
         };
     });
 
@@ -282,11 +289,89 @@
     let rpcError = $state('');
     let acting = $state<Record<string, string>>({}); // ref -> a failed command's message
     let closeEvents: () => void = () => undefined;
+    // occulited B-47: the snapshot is read again every 30 s, and each time made new tiles of the same
+    // channels - which read every value again from the interface processes (BidCos asks the device
+    // over the radio for that) and opened the stream anew. The values are loaded when the page's
+    // channels are others than the ones loaded, when the page is shown again and when the stream
+    // says it lost events; in between the stream keeps them, and it stays open across the pages.
+    let loadedRefs = ''; // the channels the values were last loaded for
+    let streamFor = ''; // the interfaces the open stream is for
+    // occulited task 19: where the stream stands, and the quiet "not live" mark in the title - shown
+    // when the stream has not been live for NOT_LIVE_AFTER (a reconnect after a restart of the
+    // stream is quicker, and says nothing), with the reason: another window holds the account's
+    // streams (429), the connection is being made again, or the system refused it
+    const NOT_LIVE_AFTER = 2000;
+    let streamState = $state<StreamState | ''>('');
+    let notLive = $state<'' | 'busy' | 'reconnecting' | 'refused'>('');
+    $effect(() => {
+        const s = streamState;
+        if (s === '' || s === 'live') {
+            notLive = '';
+            return;
+        }
+        if (notLive) {
+            notLive = s; // shown already: the new reason at once
+            return;
+        }
+        const timer = setTimeout(() => (notLive = s), NOT_LIVE_AFTER);
+        return () => clearTimeout(timer);
+    });
+    const notLiveReason = $derived(notLive === 'busy' ? t('too many windows') : notLive === 'refused' ? t('connection refused') : t('reconnecting'));
+    const notLiveWhy = $derived(
+        notLive === 'busy'
+            ? t('This account has as many live connections open as the system allows (other windows or devices). The values here are not updated until one of them closes; this window keeps trying.')
+            : notLive === 'refused'
+              ? t('The system refused the live connection. Reload the page to try again.')
+              : t('The live connection to the system is interrupted (a restart, the network). The values shown may be out of date; it is made again by itself.'),
+    );
     const refs = $derived(tiles.map((x) => x.ref));
     $effect(() => {
         const list = refs;
-        untrack(() => void loadValues(list));
+        untrack(() => {
+            const key = list.join(' ');
+            if (key === loadedRefs) return;
+            loadedRefs = key;
+            void loadValues(list);
+        });
     });
+    function reloadValues() {
+        const list = untrack(() => refs);
+        loadedRefs = list.join(' ');
+        void loadValues(list);
+    }
+    function onEvent(ref: string, key: string, value: unknown) {
+        if (ref.endsWith(':0')) {
+            maintEvent(ref, key, value);
+            return;
+        }
+        const c = channels.get(ref);
+        if (!c) return;
+        // a key's press is a moment: the tile shows it for a second
+        if ((key === 'PRESS_SHORT' || key === 'PRESS_LONG') && value) {
+            flash(ref, key === 'PRESS_LONG' ? t('long press') : t('short press'));
+            return;
+        }
+        const m = new Map(channels);
+        const values = {...c.values, [key]: value};
+        // a level reported while the channel ramps is intermediate (the maintainer,
+        // 2026-09-22: a slider set to 100 % jumped back to 0.5 % and crept up): keep the
+        // shown level - the one sent, or the last settled one - until the ramp is over,
+        // then take what the channel reports
+        if (LEVEL_KEYS.has(key) && working(c.values)) {
+            pendingLevel.set(`${ref}|${key}`, value);
+            values[key] = c.values[key];
+        } else if ((key === 'WORKING' || key === 'PROCESS') && !working(values)) {
+            for (const k of LEVEL_KEYS) {
+                const p = pendingLevel.get(`${ref}|${k}`);
+                if (p !== undefined) {
+                    values[k] = p;
+                    pendingLevel.delete(`${ref}|${k}`);
+                }
+            }
+        }
+        m.set(ref, {...c, values});
+        channels = m;
+    }
     async function loadValues(list: string[]) {
         if (list.length === 0) return;
         try {
@@ -295,46 +380,60 @@
             for (const [ref, c] of r.channels) next.set(ref, c);
             channels = next;
             rpcError = r.errors.join('; ');
-            closeEvents();
-            const ifaces = [...new Set([...r.channels.values()].map((c) => c.iface))];
-            closeEvents = openEvents(ifaces, (ref, key, value) => {
-                if (ref.endsWith(':0')) {
-                    maintEvent(ref, key, value);
-                    return;
-                }
-                const c = channels.get(ref);
-                if (!c) return;
-                // a key's press is a moment: the tile shows it for a second
-                if ((key === 'PRESS_SHORT' || key === 'PRESS_LONG') && value) {
-                    flash(ref, key === 'PRESS_LONG' ? t('long press') : t('short press'));
-                    return;
-                }
-                const m = new Map(channels);
-                const values = {...c.values, [key]: value};
-                // a level reported while the channel ramps is intermediate (the maintainer,
-                // 2026-09-22: a slider set to 100 % jumped back to 0.5 % and crept up): keep the
-                // shown level - the one sent, or the last settled one - until the ramp is over,
-                // then take what the channel reports
-                if (LEVEL_KEYS.has(key) && working(c.values)) {
-                    pendingLevel.set(`${ref}|${key}`, value);
-                    values[key] = c.values[key];
-                } else if ((key === 'WORKING' || key === 'PROCESS') && !working(values)) {
-                    for (const k of LEVEL_KEYS) {
-                        const p = pendingLevel.get(`${ref}|${k}`);
-                        if (p !== undefined) {
-                            values[k] = p;
-                            pendingLevel.delete(`${ref}|${k}`);
-                        }
-                    }
-                }
-                m.set(ref, {...c, values});
-                channels = m;
-            });
+            // a read that failed is tried again with the next snapshot
+            if (rpcError) loadedRefs = '';
+            // one stream for the interfaces of every channel loaded so far, from where the values
+            // were read; a page with the same interfaces keeps it
+            const ifaces = [...new Set([...next.values()].map((c) => c.iface))].sort();
+            if (ifaces.join(' ') !== streamFor && untrack(() => shown)) {
+                closeEvents();
+                streamFor = ifaces.join(' ');
+                streamState = '';
+                closeEvents = openEvents(ifaces, onEvent, {
+                    lastEventId: r.eventId,
+                    onResync: reloadValues,
+                    onState: (s) => (streamState = s),
+                    // refused: nothing is tried again by the stream; the next load of values opens one
+                    onRefused: () => (streamFor = ''),
+                });
+            }
         } catch (e) {
             rpcError = (e as Error).message;
+            loadedRefs = '';
         }
     }
     onMount(() => () => closeEvents());
+    // occulited B-53: lite-rpc's stream only while the app is shown - not while another page of the
+    // shell is (the pages stay mounted, task 177) or the window is hidden, so the account's streams
+    // (rpc.streams_per_session) and the browser's connections are the shown windows'. After
+    // HIDE_GRACE, so a quick look at another window keeps it; shown again, the values are read again
+    // and the stream opened from where they were read.
+    const HIDE_GRACE = 10_000;
+    let docVisible = $state(typeof document === 'undefined' || document.visibilityState !== 'hidden');
+    const shown = $derived(life.active && docVisible);
+    let parked = false;
+    onMount(() => {
+        const f = () => (docVisible = document.visibilityState !== 'hidden');
+        document.addEventListener('visibilitychange', f);
+        return () => document.removeEventListener('visibilitychange', f);
+    });
+    $effect(() => {
+        if (shown) {
+            if (parked) {
+                parked = false;
+                untrack(reloadValues);
+            }
+            return;
+        }
+        const timer = setTimeout(() => {
+            parked = true;
+            closeEvents();
+            closeEvents = () => undefined;
+            streamFor = '';
+            streamState = '';
+        }, HIDE_GRACE);
+        return () => clearTimeout(timer);
+    });
     function modelOf(ref: string): Model | undefined {
         return channels.get(ref)?.model;
     }
@@ -758,7 +857,7 @@
         {#if !snap && !error}
             <Loading />
         {:else if snap}
-            <h1 class="app-title" data-app-title>{title}{#if view.kind === 'node' && problemNodes.has(`${view.enumId}/${view.path}`)}<span class="app-dot" role="img" aria-label={t('Something in here reports a problem')} title={t('Something in here reports a problem')}></span>{/if}</h1>
+            <h1 class="app-title" data-app-title>{title}{#if view.kind === 'node' && problemNodes.has(`${view.enumId}/${view.path}`)}<span class="app-dot" role="img" aria-label={t('Something in here reports a problem')} title={t('Something in here reports a problem')}></span>{/if}{#if notLive}<span class="app-notlive" data-app-notlive={notLive} title={notLiveWhy}>{t('not live')}: {notLiveReason}</span>{/if}</h1>
             {#if view.kind === 'messages'}
                 <p class="ol-muted">{t('The service messages are listed on the Status page for now; confirming and muting them here follows.')} <a href="/#service-messages" use:link>{t('Status')}</a></p>
             {:else if tiles.length === 0}
@@ -780,7 +879,7 @@
                             <div class="app-tile-head">
                                 {#if bs.length}
                                     <button type="button" class="app-badges" aria-label={t('{n} messages', {n: String(bs.length)})} title={bs.map((b) => t(b.label)).join(', ')} onclick={(ev) => { ev.stopPropagation(); showBadges(x.ref, x.o.name || channelSub(x.ref)); }} onpointerdown={(ev) => ev.stopPropagation()} data-app-badges={bs.length}>
-                                        {#each bs.slice(0, 3) as b (b.key)}<span class="app-badge" class:app-badge-strike={b.strike}><Icon name={b.icon} size={14} /></span>{/each}
+                                        {#each bs.slice(0, 3) as b (b.key)}<span class="app-badge" class:app-badge-strike={b.strike} class:app-badge-mild={b.mild} data-app-badge={b.key}><Icon name={b.icon} size={14} /></span>{/each}
                                         {#if bs.length > 3}<span class="app-badge app-badge-more">+{bs.length - 3}</span>{/if}
                                     </button>
                                 {/if}
@@ -858,7 +957,11 @@
     .app-badges { display: inline-flex; align-items: center; gap: 4px; background: none; border: 0; padding: 2px; cursor: pointer; color: var(--hmm-warn); align-self: flex-start; }
     .app-badge { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 50%; background: var(--hmm-bg-hover, rgba(127, 127, 127, 0.12)); }
     .app-badge-strike::after { content: ''; position: absolute; left: 4px; right: 4px; top: 50%; border-top: 2px solid currentColor; transform: rotate(-35deg); }
+    .app-badge-mild { color: var(--hmm-fg-muted); }
     .app-badge-more { font-size: 0.75em; font-weight: 600; width: auto; padding: 0 5px; }
+    /* task 19: quiet - the title's size is not its own, nor a colour that alarms */
+    .app-notlive { margin-left: 12px; font-size: 0.6em; font-weight: normal; color: var(--hmm-fg-muted); white-space: nowrap; vertical-align: middle; cursor: help; }
+    .app-notlive::before { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid currentColor; margin-right: 5px; vertical-align: 1px; }
     .app-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--hmm-warn); margin-left: 8px; flex: 0 0 auto; }
     .app-circle { width: 40px; height: 40px; border-radius: 50%; border: 2px solid var(--hmm-border-muted); display: inline-flex; align-items: center; justify-content: center; color: var(--hmm-fg-muted); background: none; padding: 0; }
     .app-circle.on { color: var(--hmm-warn); border-color: var(--hmm-warn); }

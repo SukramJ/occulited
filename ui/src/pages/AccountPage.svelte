@@ -73,8 +73,8 @@
     }
     onMount(loadKeys);
     const confirmTexts = {
-        title: t('Confirm with your password'),
-        message: t('Adding or removing a passkey asks for your password every time.'),
+        title: t('Add or remove a passkey'),
+        message: t('Adding or removing a passkey is confirmed every time.'),
         provider: t('Adding or removing a passkey asks for a fresh login at the identity provider.'),
         impossible: t('This account has no password and no identity provider is configured, so it cannot confirm.'),
     };

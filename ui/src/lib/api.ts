@@ -32,6 +32,16 @@ function storedSid(): string {
     }
 }
 
+/** What every call of the shell carries as its credential beside the cookie: the header credential,
+ *  and the session as Bearer when the shell holds it. For the calls that are not made through
+ *  `api` - a stream read with fetch() (occulited B-47). */
+export function credentialHeaders(): Record<string, string> {
+    const headers: Record<string, string> = {...REQUEST_HEADER};
+    const sid = storedSid();
+    if (sid) headers['Authorization'] = `Bearer ${sid}`;
+    return headers;
+}
+
 async function request<T>(method: string, path: string, body?: unknown, extra?: Record<string, string>, cache?: RequestCache): Promise<T> {
     const headers: Record<string, string> = {...REQUEST_HEADER, ...extra};
     // lighttpd's mod_proxy answers 411 to a body-less POST/PUT without Content-Length: always send

@@ -61,7 +61,20 @@
 
     // releases_error (B-21): a release list the last check could not read - the versions shown are from before it
     interface ReleasesError { code: string; repo: string; message: string; at: string; retry_minutes?: number }
-    let catalogue = $state<{addons: Entry[]; checked?: string; releases_error?: ReleasesError} | null>(null);
+    // occulited B-52: a check that failed - the published catalogue not fetched, no manifest read,
+    // nothing loaded - with the host and the reason, and how many in a row since when
+    interface CheckError { at: string; message: string; host?: string; failures: number; since: string }
+    interface CatalogView {
+        addons: Entry[]; checked?: string; releases_error?: ReleasesError;
+        /** B-52: `bundled` while the list is the image's own copy alone, `published` once a check reached GitHub */
+        source?: 'published' | 'bundled'; bundled_date?: string; check_error?: CheckError;
+    }
+    let catalogue = $state<CatalogView | null>(null);
+    // B-52: what went wrong reading the catalogue - never silent. catalogError: the system did not
+    // answer the list (the page shows the installed addons alone); checkError: the check's request
+    // itself failed (the system's check_error says why when it got that far)
+    let catalogError = $state('');
+    let checkError = $state('');
     let installedVersions = $state<Record<string, string>>({});
     let arch = $state('');
     let addons = $state<Addon[] | null>(null);
@@ -110,15 +123,7 @@
         } catch (e) {
             error = (e as Error).message;
         }
-        try {
-            const r = await api.get<{catalog: {addons: Entry[]; checked?: string; releases_error?: ReleasesError}; installed: Record<string, string>; arch: string; daily?: boolean}>(`/api/system/v1/catalog${refresh ? '?refresh=1' : ''}`);
-            catalogue = r.catalog;
-            daily = r.daily ?? null;
-            installedVersions = r.installed;
-            arch = r.arch;
-        } catch {
-            catalogue = catalogue ?? {addons: []}; // no catalogue on this system: the installed addons alone
-        }
+        await loadCatalogue(refresh);
         try {
             const r = await api.get<{services: Service[]}>('/api/system/v1/services');
             services = Object.fromEntries(r.services.filter((s) => s.kind === 'addon').map((s) => [s.id, s]));
@@ -134,6 +139,27 @@
             ports = Object.fromEntries((await api.get<FwAddon[]>('/api/system/v1/firewall/addons')).map((a) => [a.id, a.ports.length]));
         } catch {
             ports = {};
+        }
+    }
+    async function loadCatalogue(refresh: boolean): Promise<void> {
+        try {
+            const r = await api.get<{catalog: CatalogView; installed: Record<string, string>; arch: string; daily?: boolean}>(`/api/system/v1/catalog${refresh ? '?refresh=1' : ''}`);
+            catalogue = r.catalog;
+            daily = r.daily ?? null;
+            installedVersions = r.installed;
+            arch = r.arch;
+            catalogError = '';
+            if (refresh) checkError = '';
+        } catch (e) {
+            if (refresh) {
+                // the check failed as a request: say so, and show the list as the system holds it now
+                checkError = (e as Error).message;
+                await loadCatalogue(false);
+                return;
+            }
+            // 501: this system has no catalogue - the installed addons alone, nothing to report
+            catalogError = (e as {status?: number}).status === 501 ? '' : (e as Error).message;
+            catalogue = catalogue ?? {addons: []};
         }
     }
     const life = pageLife();
@@ -160,6 +186,9 @@
         for (const e of catalogue?.addons ?? []) {
             const a = e.id ? byId.get(e.id) ?? null : null;
             const id = cardId(e);
+            // B-52: two entries whose manifests name one id would be one key twice - the list would
+            // not render at all; the first entry wins, as the system's merge does for a repository
+            if (seen.has(id)) continue;
             seen.add(id);
             if (a) seen.add(a.id);
             out.push({id, name: tx(e.name) || e.id || repoName(e), entry: e, addon: a, update: a && e.update_available && e.latest ? e.latest.version : ''});
@@ -185,6 +214,13 @@
         return hay.includes(filter.toLowerCase());
     }));
     const pending = $derived(cards.filter((c) => c.update));
+    // B-52: a first visit - no check has reached GitHub yet - and what failed, in the user's words
+    const firstVisit = $derived(!!catalogue && !catalogue.checked && catalogue.source !== 'published');
+    // the system's own words for a check cut off by its time limit, translated; other causes are the network's
+    const checkMessage = (m: string): string => (m === 'the check did not finish in time' ? t('the check did not finish in time') : m);
+    const failure = $derived(checkError || (catalogue?.check_error ? checkMessage(catalogue.check_error.message) : '') || catalogError);
+    const when = (iso: string) => new Date(iso).toLocaleString(lang);
+    const day = (iso: string) => new Date(iso).toLocaleDateString(lang);
     const archs = (e: Entry) => e.requires?.architectures ?? [];
     const supportsArch = (e: Entry) => archs(e).length === 0 || archs(e).includes(arch) || archs(e).includes('any');
     // the logo (openccu-lite task 100): what the manifest declares, in the theme's variant - the
@@ -573,8 +609,44 @@
         {#if admin && pending.length > 1}
             <button class="hmm-button primary" onclick={updateAll} disabled={installBusy} data-update-all>{t('Update all')} ({pending.length})</button>
         {/if}
-        <span class="ol-muted ad-meta">{arch}{catalogue.checked ? ` · ${t('checked {when}', {when: new Date(catalogue.checked).toLocaleString(lang)})}` : ` · ${t('not checked yet')}`}</span>
+        <span class="ol-muted ad-meta" data-catalog-meta>
+            {arch}
+            {#if catalogue.check_error}
+                · <span class="ol-warn" data-check-failed title={catalogue.check_error.message}>{t('check failed {when}', {when: when(catalogue.check_error.at)})}</span>{#if catalogue.checked}{' · '}{t('last checked {when}', {when: when(catalogue.checked)})}{/if}
+            {:else if catalogue.checked}
+                · {t('checked {when}', {when: when(catalogue.checked)})}
+            {:else if catalogue.source === 'bundled' && catalogue.bundled_date}
+                · {t('built-in list of {date}', {date: day(catalogue.bundled_date)})}
+            {:else}
+                · {t('not checked yet')}
+            {/if}
+        </span>
     </div>
+    {#if firstVisit || failure}
+        <!-- occulited B-52: the catalogue comes from GitHub, and a first visit is told so with a
+             button that loads it; a failed load or check says why and offers it again -->
+        <div class="ol-notice ad-catalog-load" class:ad-failed={!!failure} data-catalog-load={failure ? 'failed' : 'first'} data-warn-for="catalog-check" role={failure ? 'alert' : undefined}>
+            {#if firstVisit}
+                <p class="ad-catalog-what">
+                    {t('The addon catalogue is loaded from GitHub.')}
+                    {#if catalogue.source === 'bundled' && catalogue.bundled_date}
+                        {t('Until then this page shows the built-in list of {date}: most addons only by their repository, without version and description, until the catalogue is loaded.', {date: day(catalogue.bundled_date)})}
+                    {/if}
+                </p>
+            {/if}
+            {#if failure}
+                <p class="ad-catalog-error" data-catalog-error>
+                    {catalogError && !checkError && !catalogue.check_error ? t('The catalogue could not be read from the system: {error}', {error: failure}) : t('Loading the catalogue failed: {error}', {error: failure})}
+                    {#if catalogue.check_error && catalogue.check_error.failures > 1}
+                        <span class="ol-muted">{t('({n} checks in a row since {since})', {n: catalogue.check_error.failures, since: when(catalogue.check_error.since)})}</span>
+                    {/if}
+                </p>
+            {/if}
+            <button class="hmm-button primary ad-load-now" onclick={checkUpdates} disabled={refreshing || installBusy} aria-busy={refreshing} data-catalog-load-now>
+                {#if refreshing}<span class="ad-spinner" aria-hidden="true"></span>{t('Loading the catalogue…')}{:else if failure}{t('Try again')}{:else}{t('Load the catalogue now')}{/if}
+            </button>
+        </div>
+    {/if}
     {#if catalogue.releases_error}
         {@const re = catalogue.releases_error}
         <div class="ol-notice ol-warn" data-releases-error={re.code}>
@@ -582,6 +654,8 @@
             {#if releasesProblemKind(re.code, re.retry_minutes)}<ReleasesProblem code={re.code} minutes={re.retry_minutes} />{:else}{re.message}{/if}
         </div>
     {/if}
+    <!-- B-52: one card that cannot render must not blank the whole list without a word -->
+    <svelte:boundary onerror={(e) => console.error('addons: the list could not be rendered', e)}>
     {#if shown.length === 0}
         <div class="ol-notice">{installedOnly && !filter ? t('No addons installed. Install a frontend such as homematic-manager to pair devices.') : t('Nothing matches the filter.')}</div>
     {/if}
@@ -759,6 +833,13 @@
             </div>
         {/each}
     </div>
+        {#snippet failed(err, reset)}
+            <div class="ol-notice error" data-cards-error>
+                {t('The list of addons could not be shown: {error}', {error: (err as Error)?.message ?? String(err)})}
+                <button class="hmm-button" onclick={reset}>{t('Try again')}</button>
+            </div>
+        {/snippet}
+    </svelte:boundary>
     <!-- task 157: the addons' declared ports and their switches -->
     <AddonPorts {admin} />
     {#if admin}
@@ -791,6 +872,15 @@
     .ad-filter { min-width: 12em; max-width: 100%; }
     .ad-switch { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
     .ad-meta { margin-left: auto; font-size: var(--hmm-font-size-small); }
+    /* B-52: the first visit's and a failed check's notice, its button with a spinner */
+    .ad-catalog-load { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+    .ad-catalog-load p { margin: 0; flex: 1 1 22em; min-width: 0; overflow-wrap: anywhere; }
+    .ad-catalog-load.ad-failed { border-color: var(--hmm-warn); border-left-width: 4px; }
+    .ad-catalog-error { font-weight: 600; }
+    .ad-load-now { display: inline-flex; align-items: center; gap: 8px; }
+    .ad-spinner { width: 1em; height: 1em; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: ad-spin 0.8s linear infinite; }
+    @keyframes ad-spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { .ad-spinner { animation-duration: 2.4s; } }
     .ad-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
     @media (max-width: 1100px) { .ad-cards { grid-template-columns: minmax(0, 1fr); } }
     .ad-card { padding: 16px 18px; }
@@ -798,7 +888,10 @@
     .ad-head { display: flex; align-items: center; gap: 14px; min-width: 0; }
     /* the logos are wide wordmarks (width="240", height="48"): a strip, fitted, never stretched */
     .ad-logo { flex: 0 0 auto; display: flex; align-items: center; height: 56px; max-width: 140px; }
-    .ad-logo :global(img) { display: block; max-width: 140px; max-height: 56px; width: auto; height: auto; object-fit: contain; }
+    /* occulited B-43: a definite height, the width following by the ratio - an SVG with a viewBox
+       and no width/height (OpenCCU-Loom's icon) has no size of its own and came out 0×0 with both
+       auto; a wordmark wider than 140 px is contained in the strip */
+    .ad-logo :global(img) { display: block; height: 56px; width: auto; max-width: 140px; object-fit: contain; }
     .ad-letter {
         display: flex; align-items: center; justify-content: center; width: 48px; height: 48px;
         border-radius: var(--hmm-radius-card); background: var(--hmm-accent-bg); color: var(--hmm-accent);

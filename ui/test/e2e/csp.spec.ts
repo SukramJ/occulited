@@ -34,7 +34,9 @@ test('every page loads without a CSP violation, under the header the system send
     for (const p of PAGES) {
         await page.goto(p);
         await page.locator('#app > *').first().waitFor();
-        await page.waitForLoadState('networkidle').catch(() => undefined);
+        // a moment for the page's own requests and scripts (not networkidle: the shell's stream
+        // worker's script, occulited B-53, never ends for Playwright)
+        await page.waitForTimeout(500);
     }
     // the shell's assets carry it too (a script or style loaded under a policy), an addon page does not
     const asset = await request.get('/app.webmanifest');

@@ -2,18 +2,38 @@
 // even in a valid session. The account's password when it has one; a fresh login at the identity
 // provider when it signs in there - the page leaves then, and comes back with the ticket in the
 // fragment (#confirm=… or #confirm-error=…), which returned() reads.
+//
+// The password is the signed-in account's own login password, never the one an act sets
+// (occulited task 20, openccu-lite#5): every caller asks through confirmTicket, whose dialog says
+// so and names the account in the field's label, and hands the name to password managers as a
+// hidden username beside a current-password field.
 import {api, ApiError} from './api';
-import {ask, askText} from './dialog.svelte';
+import {auth} from './auth.svelte';
+import {ask, askText, type AskOptions} from './dialog.svelte';
 import {t} from './i18n.svelte';
 
 export interface ConfirmTexts {
     title: string;
-    /** why the password is asked, under the password field */
+    /** what the act does, one sentence; the dialog adds whose password confirms it */
     message: string;
     /** why the page goes to the identity provider, before it goes */
     provider: string;
     /** the account can confirm neither way */
     impossible: string;
+}
+
+/**
+ * The password question of a confirmation (task 20, variant C): the act's sentence, then "Confirm
+ * with your login password.", the field labelled with the account's name. wrong puts the refusal
+ * of the last try above it.
+ */
+export function passwordQuestion(texts: Pick<ConfirmTexts, 'title' | 'message'>, user: string, wrong = false): AskOptions {
+    return {
+        title: texts.title,
+        message: (wrong ? t('The password was wrong.') + '\n\n' : '') + `${texts.message} ${t('Confirm with your login password.')}`,
+        input: {type: 'password', label: user ? t('Login password ({user})', {user}) : t('Login password'), username: user || undefined},
+        confirm: t('Confirm'),
+    };
 }
 
 /**
@@ -35,12 +55,7 @@ export async function confirmTicket(path: string, texts: ConfirmTexts, beforeLea
     for (;;) {
         let password = '';
         if (how.method === 'password') {
-            const pw = await askText({
-                title: texts.title,
-                message: (wrong ? t('The password was wrong.') + '\n\n' : '') + texts.message,
-                input: {type: 'password', label: t('Password')},
-                confirm: t('Confirm'),
-            });
+            const pw = await askText(passwordQuestion(texts, auth.user, wrong));
             if (pw === null) return null;
             password = pw;
         }

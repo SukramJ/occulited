@@ -175,9 +175,13 @@
         {#each p.options.message.split('\n\n') as para, i (i)}<p>{para}</p>{/each}
         {#if outcome}<div class="ol-notice ol-dialog-outcome" class:error={outcome.error} role="status">{outcome.text}</div>{/if}
         {#if p.options.input}
+            <!-- task 20: a re-authentication's password is the account's own: the account as a hidden
+                 username beside a current-password field, so a password manager offers its entry
+                 (outside the label, which would otherwise name the hidden field) -->
+            {#if p.options.input.type === 'password' && p.options.input.username}<input type="text" hidden readonly autocomplete="username" value={p.options.input.username} data-username />{/if}
             <label class="ol-dialog-field">
                 {#if p.options.input.label}<span>{p.options.input.label}</span>{/if}
-                <input class="hmm-input" type={p.options.input.type ?? 'text'} bind:value={text} bind:this={field} placeholder={p.options.input.placeholder ?? ''} autocomplete={p.options.input.type === 'password' ? 'new-password' : 'off'} />
+                <input class="hmm-input" type={p.options.input.type ?? 'text'} bind:value={text} bind:this={field} placeholder={p.options.input.placeholder ?? ''} autocomplete={p.options.input.type === 'password' ? (p.options.input.username ? 'current-password' : 'new-password') : 'off'} />
             </label>
         {/if}
         {#if select && !multi}

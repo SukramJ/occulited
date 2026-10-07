@@ -44,7 +44,7 @@ test('a fresh system: both destinations named, both unticked, each box writes it
     const calls: string[] = [];
     page.on('request', (r) => calls.push(`${r.method()} ${new URL(r.url()).pathname}${new URL(r.url()).search}`));
     await page.goto('/welcome');
-    await expect(page.getByRole('heading', {name: '1 · Automatic checks'})).toBeVisible();
+    await expect(page.getByRole('heading', {name: '2 · Automatic checks'})).toBeVisible();
     await expect(page.getByText('This system connects to the internet only when you ask it to.', {exact: false})).toBeVisible();
     const step = page.locator('[data-welcome-outbound]');
     const gh = step.locator('[data-outbound="github"]');
@@ -77,7 +77,7 @@ test('a fresh system: both destinations named, both unticked, each box writes it
     await expect(gh).not.toBeChecked();
 
     // the other steps are still there, and Done leaves the page
-    await expect(page.getByRole('heading', {name: '2 · Devices from a CCU or OpenCCU'})).toBeVisible();
+    await expect(page.getByRole('heading', {name: '3 · Devices from a CCU or OpenCCU'})).toBeVisible();
     await page.getByRole('button', {name: 'Done'}).click();
     await expect(page).toHaveURL(/\/$/);
 });
@@ -98,7 +98,7 @@ test('German: the step and both destinations', async ({page}) => {
     await fresh(page);
     await page.addInitScript(() => localStorage.setItem('ol.language', 'de'));
     await page.goto('/welcome');
-    await expect(page.getByRole('heading', {name: '1 · Automatische Prüfungen'})).toBeVisible();
+    await expect(page.getByRole('heading', {name: '2 · Automatische Prüfungen'})).toBeVisible();
     const step = page.locator('[data-welcome-outbound]');
     await expect(step).toContainText('GitHub (api.github.com, raw.githubusercontent.com): täglich nach einer neuen Systemversion suchen');
     await expect(step).toContainText('eQ-3 (ccu3-update.homematic.com): täglich nach neuer Firmware');
@@ -127,7 +127,7 @@ test('the devices step: no device paired - the import from a backup, and that it
     const calls: string[] = [];
     page.on('request', (r) => calls.push(new URL(r.url()).pathname));
     await page.goto('/welcome');
-    await expect(page.getByRole('heading', {name: '2 · Devices from a CCU or OpenCCU'})).toBeVisible();
+    await expect(page.getByRole('heading', {name: '3 · Devices from a CCU or OpenCCU'})).toBeVisible();
     await expect(page.getByText('This does not restore a backup: it takes over only the paired devices, with their keys and names, from the backup of a CCU or OpenCCU into this system.')).toBeVisible();
     // the ReGa import by address is gone, and with it the Names page it pointed to
     await expect(page.getByPlaceholder('CCU address')).toHaveCount(0);
@@ -159,7 +159,7 @@ test('German: the devices step says Sie', async ({page}) => {
     await paired(page, {'BidCos-RF': 0});
     await page.addInitScript(() => localStorage.setItem('ol.language', 'de'));
     await page.goto('/welcome');
-    await expect(page.getByRole('heading', {name: '2 · Geräte von einer CCU oder OpenCCU'})).toBeVisible();
+    await expect(page.getByRole('heading', {name: '3 · Geräte von einer CCU oder OpenCCU'})).toBeVisible();
     await expect(page.getByText('Das stellt keine Sicherung wieder her: Aus der Sicherung einer CCU oder OpenCCU werden nur die angelernten Geräte mit ihren Schlüsseln und Namen in dieses System übernommen. Danach startet das System neu.')).toBeVisible();
     await expect(page.getByRole('link', {name: 'Angelernte Geräte, Schlüssel und Namen aus einer Sicherung übernehmen'})).toHaveAttribute('href', '/system/backup#restore');
     await expect(page.getByText('Namen-Seite')).toHaveCount(0);

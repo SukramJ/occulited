@@ -7,6 +7,7 @@
     import {onMount} from 'svelte';
     import {api} from './api';
     import {pageLife} from './pagelife.svelte';
+    import {subscribeShell} from './shellstream/client';
     import {t} from './i18n.svelte';
     import {link} from './router.svelte';
     import Notice from './Notice.svelte';
@@ -22,7 +23,6 @@
     let requests = $state<Request[]>([]);
     let busy = $state('');
     let err = $state('');
-    let stream: EventSource | null = null;
     const life = pageLife();
 
     async function load() {
@@ -33,25 +33,25 @@
             /* 501 on a system without pairing, 403 for a non-administrator: no card */
         }
     }
+    // the topic pairing of the shell's stream (occulited B-53: one stream for every window of the
+    // browser), while the page is shown
+    $effect(() => {
+        if (!life.active) return;
+        return subscribeShell('pairing', (data) => {
+            try {
+                requests = JSON.parse(data).requests ?? [];
+            } catch {
+                /* the poll repairs it */
+            }
+        });
+    });
     onMount(() => {
         void load();
-        if (typeof EventSource !== 'undefined') {
-            stream = new EventSource('/api/auth/v1/pairing/stream');
-            stream.addEventListener('pairing', (ev) => {
-                try {
-                    requests = JSON.parse((ev as MessageEvent).data).requests ?? [];
-                } catch {
-                    /* the poll repairs it */
-                }
-            });
-        }
         const poll = setInterval(() => life.active && load(), 15000);
         const stopReturn = life.onReturn(() => void load());
         return () => {
             clearInterval(poll);
             stopReturn();
-            stream?.close();
-            stream = null;
         };
     });
 

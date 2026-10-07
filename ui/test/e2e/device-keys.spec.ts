@@ -84,12 +84,12 @@ test('the key sheet asks for the password every time and shows every key as its 
     await page.goto('/system/keys');
     await page.getByRole('button', {name: 'Print the key sheet…'}).click();
     const dialog = page.getByRole('dialog');
-    await expect(dialog).toContainText('Enter your password to confirm; it is asked every time.');
-    await dialog.getByLabel('Password').fill('wrong');
+    await expect(dialog).toContainText('The sheet holds every HmIP device key in clear. Confirm with your login password.');
+    await dialog.getByLabel('Login password (admin)').fill('wrong');
     await dialog.getByRole('button', {name: 'Confirm'}).click();
     // a wrong password asks again and keeps the session
     await expect(dialog).toContainText('The password was wrong.');
-    await dialog.getByLabel('Password').fill('labpass1');
+    await dialog.getByLabel('Login password (admin)').fill('labpass1');
     await dialog.getByRole('button', {name: 'Confirm'}).click();
     const sheet = page.locator('[data-sheet="keys"]');
     await expect(sheet).toBeVisible();
@@ -104,7 +104,7 @@ test('the key sheet asks for the password every time and shows every key as its 
     await expect(sheet).toHaveCount(0);
     // nothing is remembered: the next sheet asks again
     await page.getByRole('button', {name: 'Print the key sheet…'}).click();
-    await expect(dialog).toContainText('Enter your password to confirm');
+    await expect(dialog).toContainText('Confirm with your login password.');
     await dialog.getByRole('button', {name: 'Cancel'}).click();
     await expect(page.locator('[data-sheet="keys"]')).toHaveCount(0);
 });

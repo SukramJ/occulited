@@ -115,9 +115,12 @@ for (const box of [
         });
         await page.route('**/api/system/v1/health', (r) => (halted ? r.abort('connectionrefused') : r.continue()));
         await page.goto('/');
+        // the menu asks the box what it is when it opens: its answer, and a moment to take it in
+        // (not networkidle: the shell's stream worker's script, occulited B-53, never ends for Playwright)
+        const asked = page.waitForResponse((r) => r.url().endsWith('/api/system/v1/system-update'));
         const menu = await openMenu(page);
-        // the menu has asked the box what it is by the time it is open
-        await page.waitForLoadState('networkidle');
+        await asked;
+        await page.waitForTimeout(300);
         await menu.locator('[data-action="halt"]').click();
         const dialog = page.getByRole('dialog', {name: 'Halt', exact: true});
         await expect(dialog).toContainText(box.question);

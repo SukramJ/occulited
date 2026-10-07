@@ -109,6 +109,48 @@ test('the Addons page: the manifest logo on an installed card, the catalogue\'s 
     await expect(card(page, 'mh').locator('.ad-letter')).toHaveText('H');
 });
 
+// occulited B-43: OpenCCU-Loom's icon.svg has a viewBox and no width or height - no intrinsic size -
+// and its card's logo slot laid it out 0×0 (the <img> loaded, nothing showed). The stub's SVGs are
+// of that form on purpose; every slot that shows an addon image must give it a size: the card's
+// logo a height of 56 px with the width following up to 140 px, the dropdown, the tab and the
+// Services row their square.
+test('a viewBox-only SVG has a size in every slot: the card\'s logo, the dropdown, the tab, the Services row', async ({page, baseURL}) => {
+    await prepare(page, baseURL!);
+    const svg = await (await page.request.get('/api/system/v1/addons/iobroker/images/logo?v=1.2.0')).text();
+    expect(svg, 'the stub serves the viewBox-only form').toMatch(/^<svg [^>]*viewBox="0 0 120 48"/);
+    expect(svg).not.toMatch(/^<svg [^>]*\s(width|height)=/);
+    const box = async (sel: ReturnType<Page['locator']>) => {
+        await expect(sel).toBeVisible();
+        await expect.poll(() => sel.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth > 0)).toBe(true);
+        const b = (await sel.boundingBox())!;
+        return {w: Math.round(b.width), h: Math.round(b.height)};
+    };
+    await page.goto('/addons');
+    // wide SVG logos (ioBroker's 120×48, XML-API's): 56 high, the width by their ratio, at most 140
+    expect(await box(card(page, 'iobroker').locator('.ad-logo img'))).toEqual({w: 140, h: 56});
+    expect(await box(card(page, 'mosquitto').locator('.ad-logo img'))).toEqual({w: 140, h: 56});
+    expect(await box(card(page, 'xml-api').locator('.ad-logo img'))).toEqual({w: 140, h: 56});
+    // a square SVG icon (TM Devices' 48×48) is a 56 px square
+    expect(await box(card(page, 'tm-devices').locator('.ad-logo img'))).toEqual({w: 56, h: 56});
+    // a wide raster logo with a size of its own (RedMatic's 1020×199 PNG) still fits the slot: 140 wide, contained
+    const red = await box(card(page, 'redmatic').locator('.ad-logo img'));
+    expect(red.w).toBe(140);
+    expect(red.h).toBeLessThanOrEqual(56);
+    // the slot is as wide as its image, so the title beside it starts after the logo
+    const slot = (await card(page, 'tm-devices').locator('.ad-logo').boundingBox())!;
+    expect(Math.round(slot.width)).toBe(56);
+    // the dropdown's 18 px, the tab's 14 px, the Services row's 16 px square
+    await button(page).click();
+    const iob = row(page, 'ioBroker');
+    expect(await box(iob.locator('.ol-addonicon img'))).toEqual({w: 18, h: 18});
+    await iob.locator('.ol-pin').click();
+    await page.keyboard.press('Escape');
+    const tab = shownTabs(page).filter({hasText: 'ioBroker'}).locator('img');
+    expect(await box(tab)).toEqual({w: 14, h: 14});
+    await page.goto('/system/services');
+    expect(await box(page.locator('tr[data-service="addon-mosquitto"] .sv-id img.sv-icon'))).toEqual({w: 16, h: 16});
+});
+
 test('the Services page: an addon unit\'s row carries the addon\'s icon', async ({page, baseURL}) => {
     await prepare(page, baseURL!);
     await page.goto('/system/services');

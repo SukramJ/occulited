@@ -4,6 +4,8 @@
     import {ask} from '../lib/dialog.svelte';
     import {t} from '../lib/i18n.svelte';
     import {link, navigate} from '../lib/router.svelte';
+    import {openedAs, validHostname} from '../lib/hostname';
+    import {certificateText, renameText, type AcmeNames, type CertNames, type Rename} from '../lib/rename';
 
     interface FwState { enabled: boolean }
     interface FeedState { feed?: {enabled: boolean} | null }
@@ -51,10 +53,31 @@
     // the HM-MOD-RPI-PCB keeps multimacd for HmIP (D-101): the text promises no multiplexer-free path there
     let isPCB = $state(false);
     const hoMultimacdStays = $derived(isPCB);
-    const steps = $derived(3 + (hoOffer ? 1 : 0) + (lkStep ? 1 : 0));
+    // openccu-lite task 327 (#4): the system's name, offered first - a fresh install is called
+    // openccu-lite-<the end of its MAC>, and a rename now costs nothing (no passkey, no certificate
+    // anyone trusts yet). The Network page's path: a hostname-only POST, which renews the DHCP lease
+    // under the new name. Not in a container (the host names it) and not while a network change
+    // waits for its confirmation.
+    interface NetSettings { hostname: string; mode: 'dhcp' | 'static'; address?: string; netmask?: string; gateway?: string; dns: string[] }
+    interface NetView { settings: NetSettings; writable: boolean; host_managed: boolean; pending: unknown }
+    let netv = $state<NetView | null>(null);
+    let hostName = $state('');
+    let hnNotice = $state('');
+    let hnCert = $state('');
+    let hnError = $state('');
+    let hnOldPage = $state('');
+    const hnStep = $derived(!!netv && netv.writable && !netv.host_managed && !netv.pending);
+    const hnValid = $derived(validHostname(hostName.trim()));
+    const hnChanged = $derived(!!netv && hostName.trim() !== netv.settings.hostname);
+    const first = $derived(hnStep ? 1 : 0);
+    const steps = $derived(first + 3 + (hoOffer ? 1 : 0) + (lkStep ? 1 : 0));
     const blocked = $derived(lkBlocked || hoBlocked);
 
     onMount(async () => {
+        try {
+            netv = await api.get<NetView>('/api/system/v1/network');
+            hostName = netv.settings.hostname;
+        } catch { /* not an administrator, or an older daemon: no step */ }
         try { lk = await api.get<LocalKeyView>('/api/system/v1/radio/hmip/local-key?devices=1'); } catch { /* no HmIP, or not an administrator */ }
         try { fwEnabled = (await api.get<FwState>('/api/system/v1/firmware')).enabled; } catch { /* no fetcher */ }
         try { relEnabled = (await api.get<FeedState>('/api/system/v1/system-update')).feed?.enabled ?? false; } catch { /* no feed */ }
@@ -70,6 +93,35 @@
             isPCB = ((conn as {modules?: {hardware: string; roles?: string[]}[]}).modules ?? []).some((m) => m.hardware === 'HM-MOD-RPI-PCB' && (m.roles ?? []).length > 0);
         } catch { /* not an administrator, or no occulited radio stack: no step */ }
     });
+
+    async function renameSystem() {
+        const name = hostName.trim();
+        if (!netv || !validHostname(name) || name === netv.settings.hostname) return;
+        // task 262: passkeys are bound to the full name - none on a fresh system, but the warning stays where one exists
+        let registered = false;
+        try { registered = (await api.get<{registered: boolean}>('/api/auth/v1/webauthn')).registered; } catch { /* an older daemon */ }
+        if (registered && !(await ask({title: t('Rename the system?'), message: t('Passkeys are bound to the system\'s name. After the rename no registered passkey works any more: accounts sign in with their password until new passkeys are added. Rename anyway?'), confirm: t('Rename'), danger: true}))) return;
+        busy = 'hn';
+        hnNotice = hnCert = hnError = hnOldPage = '';
+        const s: NetSettings = {...netv.settings, hostname: name};
+        if (s.mode === 'dhcp') { delete s.address; delete s.netmask; delete s.gateway; }
+        try {
+            const r = await api.post<{applied: boolean; pending: unknown; rename?: Rename; certificate?: CertNames; acme_names?: AcmeNames}>('/api/system/v1/network', s);
+            if (r.rename) {
+                hnNotice = renameText(r.rename);
+                hnCert = certificateText(r.rename, r.certificate, r.acme_names);
+                if (openedAs(location.hostname, r.rename.previous)) hnOldPage = t('This page was opened under the old name. Open it as {name} once the router knows the new one.', {name: r.rename.hostname});
+                netv = {...netv, settings: {...netv.settings, hostname: r.rename.hostname}};
+            } else if (r.pending) {
+                // not a rename alone: the Network page holds the confirmation
+                hnError = t('The change waits for its confirmation on the Network page.');
+            }
+        } catch (e) {
+            hnError = (e as Error).message;
+        } finally {
+            busy = '';
+        }
+    }
 
     async function setFw(on: boolean) {
         busy = 'fw';
@@ -167,7 +219,7 @@
 </script>
 
 <h1>{t('Welcome')}</h1>
-<p>{steps === 5 ? t('The administrator exists. Five things worth deciding now; each can be changed later on its page.') : steps === 4 ? t('The administrator exists. Four things worth deciding now; each can be changed later on its page.') : t('The administrator exists. Three things worth deciding now; each can be changed later on its page.')}</p>
+<p>{steps === 6 ? t('The administrator exists. Six things worth deciding now; each can be changed later on its page.') : steps === 5 ? t('The administrator exists. Five things worth deciding now; each can be changed later on its page.') : steps === 4 ? t('The administrator exists. Four things worth deciding now; each can be changed later on its page.') : t('The administrator exists. Three things worth deciding now; each can be changed later on its page.')}</p>
 
 <!-- openccu-lite task 319: the three statements of the update packages' EULA preamble, without the licence text -->
 <section class="about" data-welcome-about aria-labelledby="welcome-about">
@@ -178,14 +230,31 @@
     <p class="ol-muted">{t('The system is licensed under the Apache License 2.0; its parts carry their own licences.')} <a href="https://github.com/hobbyquaker/openccu-lite/blob/main/LICENSE" target="_blank" rel="noopener noreferrer" data-about="license">{t('The licence')}</a> · <a href="/licenses" use:link data-about="licenses">{t('Licenses')}</a></p>
 </section>
 
-<h2>1 · {t('Automatic checks')}</h2>
+{#if hnStep && netv}
+    <section data-welcome-hostname>
+    <h2>1 · {t('The system\'s name')}</h2>
+    <p>{t('The system tells the router this name, and the router lists it so; where the router resolves names, the system can be reached by it. A fresh system is called openccu-lite and the end of its network address (MAC). A rename is easiest now: later it also orphans passkeys and certificates made for the old name.')}</p>
+    <div class="ol-actions hn-row">
+        <label class="hn-field"><span>{t('Hostname')}</span>
+            <input class="hmm-input" bind:value={hostName} disabled={busy !== ''} maxlength="63" autocomplete="off" spellcheck="false" aria-invalid={hnChanged && !hnValid} data-welcome-hostname-input onkeydown={(e) => { if (e.key === 'Enter' && hnChanged && hnValid) void renameSystem(); }} /></label>
+        <button class="hmm-button" disabled={busy !== '' || !hnChanged || !hnValid} onclick={renameSystem} data-action="welcome-rename">{t('Rename')}</button>
+    </div>
+    {#if hnChanged && !hnValid}<p class="ol-muted hn-rule" data-welcome-hostname-invalid>{t('Letters, digits and hyphens, at most 63 characters; no hyphen at the start or the end.')}</p>{/if}
+    {#if netv.settings.mode !== 'dhcp' && !hnNotice}<p class="ol-muted" data-welcome-hostname-static>{t('A static address: the name is set on the system, there is no DHCP server to tell. Enter it in the router or the DNS server by hand.')}</p>{/if}
+    {#if hnNotice}<div class="ol-notice" data-notice="welcome-rename">{hnNotice}{#if hnOldPage} {hnOldPage}{/if}</div>{/if}
+    {#if hnCert}<div class="ol-notice" data-notice="welcome-rename-certificate">{hnCert} <a href="/system/certificates" use:link>{t('Open certificate settings')}</a></div>{/if}
+    {#if hnError}<div class="ol-notice error" data-notice="welcome-rename-error">{hnError} <a href="/system/network" use:link>{t('Network')}</a></div>{/if}
+    </section>
+{/if}
+
+<h2>{first + 1} · {t('Automatic checks')}</h2>
 <p>{t('This system connects to the internet only when you ask it to. Two checks can run daily instead; each is named here with where it connects, each is off, and each can be changed later on its page.')}</p>
 <div class="ol-actions outbound" data-welcome-outbound>
     <label><input type="checkbox" checked={ghOn} onchange={(e) => setGitHub((e.currentTarget as HTMLInputElement).checked)} disabled={busy !== ''} data-outbound="github" /> {t('GitHub (api.github.com, raw.githubusercontent.com): check daily for a new system release and refresh the addon catalogue; the installed addons\' own update checks run with it.')}</label>
     <label><input type="checkbox" checked={fwEnabled} onchange={(e) => setFw((e.currentTarget as HTMLInputElement).checked)} disabled={busy !== ''} data-outbound="eq3" /> {t('eQ-3 (ccu3-update.homematic.com): check daily for new firmware of the paired device types and download it — the same server a CCU asks. Installing stays your decision.')}</label>
 </div>
 
-<h2>2 · {t('Devices from a CCU or OpenCCU')}</h2>
+<h2>{first + 2} · {t('Devices from a CCU or OpenCCU')}</h2>
 {#if firstBoot && !firstBoot.error}
     <div class="ol-notice">{t('This system was updated from a CCU: its names, rooms and functions were read from the ReGa database on this first boot — {o} named devices and channels, {r} rooms, {f} functions ({u} still carried the default name and were left out). Programs and system variables did not come across; nothing here could run them.', {o: firstBoot.objects, r: firstBoot.rooms, f: firstBoot.functions, u: firstBoot.unnamed})}</div>
 {:else if firstBoot?.error}
@@ -203,7 +272,7 @@
 
 {#if hoOffer}
     <section data-welcome-hmip-only>
-    <h2>3 · {t('HmIP only?')}</h2>
+    <h2>{first + 3} · {t('HmIP only?')}</h2>
     {#if hoPaired}
         <p data-welcome-ho-paired>{t('BidCos-RF has {n} paired devices and stays on. It can be turned off later on the Interfaces page.', {n: bidcosDevices?.devices ?? 0})} <a href="/system/interfaces#connections" use:link>{t('Interfaces')}</a></p>
     {:else}
@@ -220,7 +289,7 @@
 {/if}
 
 {#if lkStep}
-    <h2>{hoOffer ? 4 : 3} · {t('The HmIP network key')}</h2>
+    <h2>{first + (hoOffer ? 4 : 3)} · {t('The HmIP network key')}</h2>
     <p>{t("HmIP devices share one network key. Normally it is locked in the radio module, and eQ-3's key server is needed to move it to another radio module and to pair a device without its key. It can be kept on this system instead: it is then offline-capable, and a later radio swap never needs the internet. No HmIP device is paired yet, so nothing has to be taught in again for this.")}</p>
     <div class="ol-actions lk-choice" role="radiogroup" aria-label={t('The HmIP network key')}>
         <label><input type="radio" name="lk" value="local" bind:group={lkChoice} disabled={busy !== ''} /> {t('Generate a local key now')}</label>
@@ -250,4 +319,10 @@
     .outbound, .ho-choice { flex-direction: column; align-items: flex-start; gap: 8px; }
     .outbound label { margin-right: 0; display: flex; gap: 8px; align-items: baseline; }
     .outbound input { flex: none; }
+    /* the name and its button on one line, the field taking what the phone leaves */
+    .hn-row { align-items: flex-end; flex-wrap: wrap; gap: 8px; }
+    .hn-field { display: flex; flex-direction: column; gap: var(--ol-label-gap); margin-right: 0; flex: 1 1 16em; max-width: 24em; }
+    .hn-field span { color: var(--hmm-fg-muted); }
+    .hn-field input { width: 100%; }
+    .hn-rule { margin-top: 4px; }
 </style>

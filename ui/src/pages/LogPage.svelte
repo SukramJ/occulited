@@ -15,6 +15,7 @@
     import {onscreen} from '../lib/popover';
     import {download} from '../lib/download';
     import {OCCULITED_AREAS} from '../lib/loglevels';
+    import {LASTING_MAX, LASTING_MIN} from '../lib/lasting';
     import {bootParam, bootSpanMs, durationLabel, findBoot, isEarlierBoot, kernelParam, lineStamp, logPath, runParam, settingsParam, sourceParam, type BootInfo, type BootList, type LogSettingsTab, type LogSource} from '../lib/logpage';
     import {countLabel, joinPages, LOG_KEEP, LOG_LOAD_AHEAD, LOG_PAGE, rowAt, rowOffsets, rowWindow} from '../lib/logvirtual';
 
@@ -505,6 +506,7 @@
     // the run replaced whole: the tail (a load), or the head (the jump to the start)
     function replaceRun(r: LogAnswer, head: boolean) {
         lines = r.lines;
+        reconnects = new Map();
         source = r.source ?? 'syslog';
         takeIn(r.lines);
         // a log that could not be read (dmesg refused, journalctl failed) says so
@@ -626,22 +628,47 @@
     // stream is lost; it is batched into the run a few times a second, not line by line.
     let inbox: LogLine[] = [];
     let inboxTimer: ReturnType<typeof setTimeout> | null = null;
+    // occulited task 19 (maintainer, 2026-10-06): Follow stays on when the stream breaks - a restart
+    // of occulited, lighttpd's 502 meanwhile, the network. The stream is opened again after 1 s, then
+    // twice as long each time up to 30 s (lasting.ts' steps), from the last line on screen, so no
+    // line comes twice; where it was broken the log says "reconnected" with the time.
+    let followRetry: ReturnType<typeof setTimeout> | undefined;
+    let followWait = LASTING_MIN;
+    let broken = false; // the stream broke, and the next one that opens says so
+    let reconnects = $state.raw(new Map<LogLine, string>()); // the line after which a stream opened again
     function openStream() {
         closeStream();
         const p = params();
         p.set('limit', '0');
         const last = lines?.at(-1)?.cursor;
         if (last) p.set('after', last);
-        stream = new EventSource(`/api/system/v1/log/stream?${p}`);
-        stream.onmessage = (ev) => {
+        const s = new EventSource(`/api/system/v1/log/stream?${p}`);
+        stream = s;
+        s.onopen = () => {
+            followWait = LASTING_MIN;
+            if (!broken) return;
+            broken = false;
+            const at = lines?.at(-1);
+            if (at) reconnects = new Map(reconnects).set(at, new Date().toLocaleTimeString(locale));
+        };
+        s.onmessage = (ev) => {
             const l = JSON.parse(ev.data) as LogLine;
             note(l);
             inbox.push(l);
             if (!inboxTimer) inboxTimer = setTimeout(flushInbox, 40);
         };
-        stream.onerror = () => {
+        s.onerror = () => {
+            if (stream !== s) return;
+            // the lines that arrived stay, and the next stream starts after them; the browser's own
+            // reconnect would ask from the first stream's start again
+            flushInbox();
             closeStream();
-            follow = false;
+            broken = true;
+            followRetry = setTimeout(() => {
+                followRetry = undefined;
+                if (follow && !stream && life.active && source === 'journald' && !earlier && !newer) openStream();
+            }, followWait);
+            followWait = Math.min(followWait * 2, LASTING_MAX);
         };
     }
     function flushInbox() {
@@ -660,6 +687,8 @@
         });
     }
     function closeStream() {
+        clearTimeout(followRetry);
+        followRetry = undefined;
         stream?.close();
         stream = null;
         if (inboxTimer) clearTimeout(inboxTimer);
@@ -1012,6 +1041,7 @@
                 {:else}
                     <span class="ol-msg">{l.message}</span>
                 {/if}
+                {#if reconnects.has(l)}<span class="lg-reconnected ol-muted" class:lg-reconnected-up={newestFirst} data-log-reconnected>{t('reconnected')} · {reconnects.get(l)}</span>{/if}
             </div>
         {/each}
         <div class="lg-pad" style:height="{padBottom}px" aria-hidden="true"></div>
@@ -1021,6 +1051,10 @@
 
 <style>
     /* task 79: the trace lines - the triangle before, the copy button after the message */
+    /* task 19: where Follow's stream broke and was opened again - its own line inside the row it follows */
+    .ol-journal :global(.ol-line:has(.lg-reconnected)) { flex-wrap: wrap; }
+    .lg-reconnected { flex: 0 0 100%; order: 99; text-align: center; font-size: var(--hmm-font-size-small); padding-top: 3px; border-top: 1px dashed var(--hmm-border-muted); }
+    .lg-reconnected.lg-reconnected-up { order: -1; padding: 0 0 3px; border-top: 0; border-bottom: 1px dashed var(--hmm-border-muted); }
     .lg-trace-toggle, .lg-trace-copy { background: none; border: 0; color: var(--hmm-fg-muted); cursor: pointer; padding: 0 4px; font: inherit; line-height: inherit; }
     .lg-trace-toggle:hover, .lg-trace-copy:hover { color: var(--hmm-fg); }
     .lg-trace-folded { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

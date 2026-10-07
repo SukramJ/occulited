@@ -10,6 +10,7 @@
     import {onMount} from 'svelte';
     import {api, type ServiceMessagesView, type ServiceMessage} from './api';
     import {pageLife} from './pagelife.svelte';
+    import {subscribeShell} from './shellstream/client';
     import {t} from './i18n.svelte';
     import Help from './Help.svelte';
     import Icon from './Icon.svelte';
@@ -18,7 +19,6 @@
     // 501: no store on this system (development, or an image without the RPC process) - the
     // section says nothing rather than something wrong
     let unsupported = $state(false);
-    let stream: EventSource | null = null;
     const life = pageLife();
 
     async function load() {
@@ -28,30 +28,25 @@
             if ((e as {status?: number}).status === 501) unsupported = true;
         }
     }
-    function open() {
-        if (stream || typeof EventSource === 'undefined') return;
-        stream = new EventSource('/api/system/v1/service-messages/stream');
-        stream.addEventListener('messages', (ev) => {
+    // the topic service-messages of the shell's stream (occulited B-53: one stream for every window
+    // of the browser), while the page is shown; the poll below covers a gap
+    $effect(() => {
+        if (!life.active) return;
+        return subscribeShell('service-messages', (data) => {
             try {
-                view = JSON.parse((ev as MessageEvent).data);
+                view = JSON.parse(data);
             } catch {
                 /* a torn line: the next one or the poll repairs it */
             }
         });
-        stream.onerror = () => {
-            // the browser reconnects on its own; the poll below covers the gap
-        };
-    }
+    });
     onMount(() => {
         void load();
-        open();
         const poll = setInterval(() => life.active && load(), 30000);
         const stopReturn = life.onReturn(() => void load());
         return () => {
             clearInterval(poll);
             stopReturn();
-            stream?.close();
-            stream = null;
         };
     });
 

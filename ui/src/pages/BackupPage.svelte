@@ -63,7 +63,7 @@
         try {
             const confirm = await confirmTicket(BACKUP_PLAIN_PATH, {
                 title: t('Download unencrypted'),
-                message: t('An unencrypted backup asks for your password every time.'),
+                message: t('An unencrypted backup holds every key of this system in plain and is confirmed every time.'),
                 provider: t('An unencrypted backup asks who you are every time: you sign in at the identity provider once more and come back here.'),
                 impossible: t('This account has no password and no identity provider is configured, so it cannot confirm the download.'),
             });

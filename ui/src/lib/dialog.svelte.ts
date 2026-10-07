@@ -22,8 +22,12 @@ export interface AskOptions {
     cancel?: string;
     /** a destructive act: the confirming button in the warning colour */
     danger?: boolean;
-    /** askText: an input under the message; `initial` is what a rename starts from */
-    input?: {label?: string; type?: 'text' | 'password'; placeholder?: string; minLength?: number; initial?: string};
+    /**
+     * askText: an input under the message; `initial` is what a rename starts from. `username` on a
+     * password input says whose password it is (task 20): a hidden username field beside it and the
+     * field as current-password, so a password manager offers that account's entry
+     */
+    input?: {label?: string; type?: 'text' | 'password'; placeholder?: string; minLength?: number; initial?: string; username?: string};
     /**
      * askSelect / askMultiSelect: a list under the message, grouped by `group` and the depth of
      * an entry drawn as indentation (the Metadata editor's "move to" and "assign to"). The list

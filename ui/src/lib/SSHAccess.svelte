@@ -65,13 +65,13 @@
     function texts(title: string, what: string): ConfirmTexts {
         return {
             title,
-            message: t('{what} Enter your password to confirm; it is asked every time.', {what}),
+            message: what,
             provider: t('{what} It asks who you are every time: you sign in at the identity provider once more and come back here.', {what}),
             impossible: t('This account has no password and no identity provider is configured, so it cannot confirm this.'),
         };
     }
     const keyTexts = () => texts(t('Add an SSH key'), t('A key in root\'s authorized_keys logs in as root without a password.'));
-    const pwTexts = () => texts(t('Set root\'s password'), t('The password logs in as root over SSH.'));
+    const pwTexts = () => texts(t('Set root\'s password'), t('The new password logs in as root over SSH.'));
 
     async function toggle() {
         if (!ssh) return;

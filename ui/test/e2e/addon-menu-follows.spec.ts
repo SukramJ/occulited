@@ -1,9 +1,9 @@
 import {type Page, type Route} from '@playwright/test';
-import {expect, test} from './fixtures';
+import {expect, shellStreamInWindow, test} from './fixtures';
 
 // openccu-lite B-297: the Addons menu and the pinned tabs follow an uninstall and an install
 // without a reload - in the tab that did it (the Addons page says so when its work is done) and in
-// every other one (the system's addon revision, GET /api/system/v1/addons/stream). Each spec
+// every other one (the system's addon revision, the topic addons of GET /api/system/v1/stream). Each spec
 // answers the addon routes itself, so nothing depends on the stub's shared state.
 
 const menu = (page: Page) => page.locator('.ol-menu').first();
@@ -33,7 +33,8 @@ async function addons(page: Page, baseURL: string, state: {gone: boolean; revisi
         state.uninstalls = (state.uninstalls ?? 0) + 1;
         return r.fulfill({json: {ok: true, output: '', system_removed: []}});
     });
-    await page.route('**/api/system/v1/addons/stream', (r) =>
+    await shellStreamInWindow(page);
+    await page.route('**/api/system/v1/stream?*', (r) =>
         r.fulfill({status: 200, headers: {'Content-Type': 'text/event-stream'}, body: `retry: 100\nevent: addons\ndata: ${JSON.stringify({revision: state.revision})}\n\n`}),
     );
 }
