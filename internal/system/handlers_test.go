@@ -316,3 +316,37 @@ func TestIsLocalHost(t *testing.T) {
 		}
 	}
 }
+
+// occulited B-44: a callback registered without a scheme ("127.0.0.1:2126", as hmipserver's
+// VirtualDevices listed one on a lab system) has its host taken all the same - a loopback or own
+// address is internal, a name or address elsewhere external, as with a scheme
+func TestIsLocalCallback(t *testing.T) {
+	ownAddrCache.Lock()
+	ownAddrCache.set, ownAddrCache.at = map[string]bool{"127.0.0.1": true, "192.0.2.8": true}, time.Now()
+	ownAddrCache.Unlock()
+	t.Cleanup(func() {
+		ownAddrCache.Lock()
+		ownAddrCache.set = nil
+		ownAddrCache.Unlock()
+	})
+	for url, want := range map[string]bool{
+		"http://127.0.0.1:2126": true, "xmlrpc_bin://127.0.0.1:31999": true, "http://[::1]:2001/x": true,
+		"127.0.0.1:2126": true, "[::1]:2001": true, "[::1]:2001/path": true, "::1": true, "localhost:2126": true,
+		"localhost": true, "127.0.0.1": true, "192.0.2.8:2053": true,
+		"198.51.100.9:2049": false, "[2001:db8::9]:2001": false, "ha.example.org:2126": false, "http://ha.example.org:2126": false,
+		"": false,
+	} {
+		if got := isLocalCallback(url); got != want {
+			t.Errorf("isLocalCallback(%q) = %v", url, got)
+		}
+	}
+
+	// the lab's case: the same id with and without the scheme, both internal
+	r := rootWith(t, map[string]string{
+		"var/HMSERVER.handlers": "http://127.0.0.1:2126\thm2mqtt_hm_VirtualDevices\n127.0.0.1:2126\thm2mqtt_hm_VirtualDevices\n",
+	})
+	s, ok := r.SubscriberSummary("VirtualDevices")
+	if !ok || s.Total != 2 || s.Internal != 2 || s.External != 0 {
+		t.Errorf("summary %+v", s)
+	}
+}

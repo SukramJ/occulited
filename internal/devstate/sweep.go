@@ -215,6 +215,43 @@ func (s *Store) sweepOne(ctx context.Context, src Source, iface string, publish 
 	}
 }
 
+// Reconcile takes one channel's VALUES as another reader of the interface got them - the
+// service-message store's sweep of the maintenance channels and its re-read of a sticky message
+// (occulited B-46: rfd resets STICKY_UNREACH on its acknowledgement without an event, so the
+// entry here said true until the interface restarted). Only what differs from the store is taken:
+// a kept datapoint with another value, one the store has not confirmed or does not know. Each
+// becomes a sweep's report - on the bus through publish (nil: none), in the history - and at is
+// when the read began, so an event that came in after it stays the newer report. It returns how
+// many entries it changed.
+func (s *Store) Reconcile(iface, channel string, vals map[string]any, at time.Time, publish func(rpcsub.Message)) int {
+	dps := make([]string, 0, len(vals))
+	for dp := range vals {
+		if s.tracked(dp) {
+			dps = append(dps, dp)
+		}
+	}
+	sort.Strings(dps)
+	n := 0
+	for _, dp := range dps {
+		s.mu.Lock()
+		en := s.m[key(iface, channel, dp)]
+		same := en != nil && en.confirmed && equal(en.value, Normalize(vals[dp]))
+		s.mu.Unlock()
+		if same {
+			continue
+		}
+		o := s.observe(iface, channel, dp, vals[dp], at, SourceSweep)
+		if !o.changed {
+			continue
+		}
+		n++
+		if publish != nil {
+			publish(stateMessage(o.e, at))
+		}
+	}
+	return n
+}
+
 func (s *Store) setSweep(iface string, st SweepStatus) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

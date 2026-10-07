@@ -245,3 +245,32 @@ func TestOutboundSwitchesDefaultOffAndSettleOnce(t *testing.T) {
 		t.Fatalf("unwritable: err=%v unset=%v %+v", err, c.OutboundUnset, c.Firmware)
 	}
 }
+
+// occulited task 19: lite-rpc's streams per token or session - absent is 3, a value in 1-16 is
+// taken as stored, and one out of bounds gives the default with false (main logs it); the file
+// keeps the key through a load and a save
+func TestStreamsPerSession(t *testing.T) {
+	for _, c := range []struct {
+		stored, want int
+		ok           bool
+	}{{0, 3, true}, {1, 1, true}, {2, 2, true}, {16, 16, true}, {17, 3, false}, {-1, 3, false}} {
+		n, ok := RPCConfig{StreamsPerSession: c.stored}.StreamsPerSessionLimit()
+		if n != c.want || ok != c.ok {
+			t.Errorf("%d: %d %v, want %d %v", c.stored, n, ok, c.want, c.ok)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "occulited.json")
+	if err := os.WriteFile(path, []byte(`{"rpc": {"streams_per_session": 4}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, ok := c.RPC.StreamsPerSessionLimit(); n != 4 || !ok {
+		t.Fatalf("loaded: %d %v", n, ok)
+	}
+	if n, _ := Default().RPC.StreamsPerSessionLimit(); n != DefaultStreamsPerSession {
+		t.Fatalf("default: %d", n)
+	}
+}

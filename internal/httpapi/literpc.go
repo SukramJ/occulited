@@ -26,10 +26,11 @@ import (
 // 2026-09-22, D-117: the switch of D-95 is gone - the App reads and writes through it).
 //
 // Browser sessions (D-79, D-115): a token is a program's and passes as it is. An account session
-// that came in a cookie must prove the box's own origin (Sec-Fetch-Site same-origin, or an
-// Origin that is this host) - that stops cross-site WebSocket hijacking and CSRF on the stream -
-// and a request (POST) needs the session in the Authorization header as well (D-78's header
-// credential; the shell sends it), so the cookie alone cannot call methods. Nothing here is
+// that came in a cookie must prove the box's own origin (Sec-Fetch-Site same-origin, an Origin
+// that is this host, or - from a browser that says neither - the API's header credential
+// X-Occulite-Request, see originRefusal) - that stops cross-site WebSocket hijacking and CSRF on
+// the stream - and a request (POST) needs the session in the Authorization header as well (D-78's
+// header credential; the shell sends it), so the cookie alone cannot call methods. Nothing here is
 // accepted from the query string (?sid=), tokens included.
 
 const liteRPCPrefix = "/api/rpc/v1"
@@ -174,6 +175,17 @@ func browserRefusal(r *http.Request, sess *auth.Session, write bool) string {
 }
 
 // originRefusal is the cookie-alone rule: the box's own origin, as the browser says it.
+//
+// What a browser says depends on where the page lives (occulited B-47, measured with Chromium
+// 153): Sec-Fetch-Site goes out from a secure context only - HTTPS, localhost - and Origin on a
+// WebSocket handshake, a CORS request to another origin and a POST, but not on a same-origin GET.
+// So a page of this system opened over plain http://<address>/ - how most installations are
+// reached - says nothing at all on its stream's GET, and neither does a no-cors GET (an <img>, a
+// navigation) from another port of the same host, which carries the cookie too. The two are told
+// apart by the API's header credential (X-Occulite-Request, task 259): a page of another origin
+// cannot put a header of its own on a request without a CORS preflight, and nothing here answers
+// one, so the request never leaves that browser. The header counts only where the browser says
+// nothing: a Sec-Fetch-Site or an Origin that names another place refuses whatever else is sent.
 func originRefusal(r *http.Request) string {
 	switch sfs := r.Header.Get("Sec-Fetch-Site"); sfs {
 	case "same-origin", "none":
@@ -188,7 +200,10 @@ func originRefusal(r *http.Request) string {
 		}
 		return "the stream is opened from this system's own pages only (Origin: " + o + ")"
 	}
-	return "the stream needs the session in the Authorization header, or a browser that says its origin"
+	if r.Header.Get(RequestHeader) != "" {
+		return ""
+	}
+	return "the stream needs the session in the Authorization header, or a browser that says its origin (over plain HTTP: the header " + RequestHeader + ")"
 }
 
 // requestHost is the host the browser addressed: what lighttpd forwarded, or the Host header.
@@ -501,7 +516,8 @@ func (a *SystemAPI) liteStreams(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, 200, map[string]any{"streams": []literpc.Stream{}, "limits": map[string]int{"per_token": literpc.PerSubject, "total": literpc.Total}})
 		return
 	}
-	writeJSON(w, 200, map[string]any{"streams": a.LiteRPC.Streams(), "limits": map[string]int{"per_token": literpc.PerSubject, "total": literpc.Total}})
+	per, total := a.LiteRPC.Limits()
+	writeJSON(w, 200, map[string]any{"streams": a.LiteRPC.Streams(), "limits": map[string]int{"per_token": per, "total": total}})
 }
 
 // liteStreamClose is DELETE /streams/{id}: the page's x.
@@ -538,6 +554,7 @@ func (a *SystemAPI) liteRPCView() liteView {
 		return v
 	}
 	v.Available = true
+	v.Streams.PerToken, v.Streams.Total = a.LiteRPC.Limits()
 	v.Streams.Open = len(a.LiteRPC.Streams())
 	return v
 }

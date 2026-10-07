@@ -416,6 +416,7 @@ func (s *RadioConnections) Load(ctx context.Context) {
 		_ = writeJSONFile(filepath.Join(s.StateDir, "last.json"), &stale)
 		_ = os.Remove(filepath.Join(s.StateDir, "running.json"))
 		s.log().Warn("radio connections: a change was running when occulited stopped; starting the radio daemons")
+		s.openGate(nil, false) // B-307: the interrupted change's hold on the radio units
 		if s.Services != nil {
 			for _, u := range append([]string{RadioDetectionUnit}, radioUnits...) {
 				if _, err := s.Services.Control(ctx, u, "start"); err != nil {
@@ -791,6 +792,17 @@ func (s *RadioConnections) applyWith(a *ConnApply, restore func() error) {
 	defer cancel()
 	var err error
 	defer func() { s.finish(a, err) }()
+	// openccu-lite B-307: from here until its own starts are done no radio unit starts from
+	// outside the change - an addon's Wants=, the addon supervisor, a Restart= would start it on
+	// the old plan's files, or before multimacd. startAll lets each unit through right before its
+	// start and opens the gate after the last; opened on every way out as well. The marker's own
+	// deadline is the change's timeout and a minute.
+	if gerr := s.closeGate(timeout + time.Minute); gerr != nil {
+		s.line(a, "the radio units could not be held against starts from outside the change: "+gerr.Error())
+	} else {
+		defer s.openGate(a, false)
+		s.line(a, "radio units held against starts from outside the change")
+	}
 	// the daemons stop in the reverse of the boot order: the run refuses while one holds a module
 	for i := len(radioUnits) - 1; i >= 0; i-- {
 		if _, cerr := s.Services.Control(ctx, radioUnits[i], "stop"); cerr != nil {
@@ -830,6 +842,9 @@ func (s *RadioConnections) applyWith(a *ConnApply, restore func() error) {
 func (s *RadioConnections) startAll(ctx context.Context, a *ConnApply) error {
 	var first error
 	for _, u := range radioUnits {
+		// B-307: the gate lets the unit through right before the change starts it, in boot order -
+		// an outside start of rfd or hmipserver stays held until multimacd is up
+		s.releaseGate(u)
 		if _, err := s.Services.Control(ctx, u, "start"); err != nil {
 			s.line(a, "starting "+u+" failed: "+err.Error())
 			if first == nil {
@@ -839,7 +854,38 @@ func (s *RadioConnections) startAll(ctx context.Context, a *ConnApply) error {
 		}
 		s.line(a, u+" started (or skipped: not needed by the plan)")
 	}
+	s.openGate(a, true)
+	s.startHeldBack(ctx, a)
 	return first
+}
+
+// gatedOthers are the radio units the change does not stop itself but the gate holds all the same
+// (B-307): one that ended during the change and whose Restart= the gate refused is started again.
+var gatedOthers = []string{"hs485d", "hmlangw"}
+
+func (s *RadioConnections) startHeldBack(ctx context.Context, a *ConnApply) {
+	for _, u := range startHeldBack(ctx, s.Services, s.Root, gatedOthers) {
+		if u.err != nil {
+			s.line(a, "starting "+u.unit+" (held back during the change) failed: "+u.err.Error())
+			continue
+		}
+		s.line(a, u.unit+" started: its start during the change was held back")
+	}
+}
+
+func (s *RadioConnections) closeGate(limit time.Duration) error { return closeRadioGate(s.Root, limit) }
+
+func (s *RadioConnections) releaseGate(unit string) { releaseRadioGate(s.Root, unit, s.log()) }
+
+// openGate removes the marker; logged (a != nil and say) the first time it actually goes.
+func (s *RadioConnections) openGate(a *ConnApply, say bool) {
+	gone, err := openRadioGate(s.Root, s.log())
+	switch {
+	case err != nil && a != nil:
+		s.line(a, "the radio units' hold could not be lifted: "+err.Error())
+	case gone && say && a != nil:
+		s.line(a, "the change's starts are done: radio units may start from outside it again")
+	}
 }
 
 // summary is one line per plan: which daemon runs on what.

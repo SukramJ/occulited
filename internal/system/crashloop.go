@@ -83,7 +83,9 @@ type CrashLoops struct {
 	Procs func(cgroup string) bool
 	// Restart restarts an addon's unit (addon-<id>); nil = no supervision.
 	Restart func(ctx context.Context, unit string) error
-	// Paused says whether an addon install or uninstall runs (SystemdAddons.Busy, occulited B-30):
+	// Paused says whether an addon install or uninstall runs (SystemdAddons.Busy, occulited B-30)
+	// or a radio connection change or coprocessor flash (openccu-lite B-307: an addon's restart
+	// would pull the stopped radio daemons in; main.go joins the two with AnyBusy):
 	// meanwhile the core units are still observed, the addons' units are left alone and nothing is
 	// restarted, and the first sample after the job counts an ended daemon afresh (its backoff
 	// from then), so the job's own stop and start are never taken for a crash. nil = never.

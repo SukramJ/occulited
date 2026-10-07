@@ -2331,6 +2331,34 @@
         ],
         "type": "object"
       },
+      "CatalogCheckFailure": {
+        "properties": {
+          "at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "failures": {
+            "type": "integer"
+          },
+          "host": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "since": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "at",
+          "failures",
+          "message",
+          "since"
+        ],
+        "type": "object"
+      },
       "CatalogCheckNotice": {
         "properties": {
           "at": {
@@ -2559,6 +2587,23 @@
               "null"
             ]
           },
+          "bundled_date": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "check_error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogCheckFailure"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "checked": {
             "format": "date-time",
             "type": [
@@ -2578,6 +2623,9 @@
                 "type": "null"
               }
             ]
+          },
+          "source": {
+            "type": "string"
           }
         },
         "required": [
@@ -33771,6 +33819,51 @@
         ]
       }
     },
+    "/api/system/v1/stream": {
+      "get": {
+        "operationId": "getSystemStream",
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "A stream of server-sent events; the messages are in the AsyncAPI document."
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "bearer": [
+              "system:read"
+            ]
+          },
+          {
+            "cookie": [
+              "system:read"
+            ]
+          }
+        ],
+        "summary": "The shell's stream: addons, service messages and pairing requests as server-sent events",
+        "tags": [
+          "system/stream"
+        ],
+        "x-occulite-scopes": [
+          "system:read"
+        ]
+      }
+    },
     "/api/system/v1/system-update": {
       "delete": {
         "operationId": "deleteSystemSystemUpdate",
@@ -36510,6 +36603,10 @@
     {
       "description": "The routes under `/api/system/v1/storage`.",
       "name": "system/storage"
+    },
+    {
+      "description": "The routes under `/api/system/v1/stream`.",
+      "name": "system/stream"
     },
     {
       "description": "The routes under `/api/system/v1/system-update`.",

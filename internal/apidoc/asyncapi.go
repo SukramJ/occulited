@@ -112,7 +112,7 @@ func (a *Analyzer) AsyncAPI(info Info, home string, channels []Channel) (map[str
 				"bearer": map[string]any{"type": "http", "scheme": "bearer",
 					"description": "A session id or an API token; the channel's scope is in x-occulite-scopes."},
 				"cookie": map[string]any{"type": "httpApiKey", "in": "cookie", "name": "occulite_session",
-					"description": "The web UI's session cookie; lite-rpc's streams also want the request from the system's own origin."},
+					"description": "The web UI's session cookie; lite-rpc's streams also want the request from the system's own origin: Sec-Fetch-Site same-origin, an Origin that is this host, or - from a page over plain HTTP, where a browser sends neither - the header X-Occulite-Request, which an EventSource cannot set (system-api.md, lite-rpc's credentials)."},
 			},
 		},
 	}

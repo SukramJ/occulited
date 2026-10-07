@@ -158,6 +158,27 @@
         }
       ],
       "title": "The service messages, the whole view again on every change"
+    },
+    "shellStream": {
+      "address": "/api/system/v1/stream",
+      "description": "Query parameter topics: addons, service-messages, pairing (comma-separated or repeated; at least one). Each topic sends the event of its own stream at once and again on every change; pairing needs auth:admin besides system:read. The public mode may open it with topics=service-messages alone.",
+      "messages": {
+        "addons": {
+          "$ref": "#/components/messages/shellStreamAddons"
+        },
+        "messages": {
+          "$ref": "#/components/messages/shellStreamMessages"
+        },
+        "pairing": {
+          "$ref": "#/components/messages/shellStreamPairing"
+        }
+      },
+      "servers": [
+        {
+          "$ref": "#/servers/http"
+        }
+      ],
+      "title": "The shell's stream (occulited B-53): the addons' revision, the service messages and the pairing requests in one connection"
     }
   },
   "components": {
@@ -1227,6 +1248,92 @@
           "type": "object"
         },
         "summary": "The view of GET /api/system/v1/service-messages"
+      },
+      "shellStreamAddons": {
+        "contentType": "application/json",
+        "name": "addons",
+        "payload": {
+          "properties": {
+            "revision": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "revision"
+          ],
+          "type": "object"
+        },
+        "summary": "topic addons: as GET /api/system/v1/addons/stream"
+      },
+      "shellStreamMessages": {
+        "contentType": "application/json",
+        "name": "messages",
+        "payload": {
+          "properties": {
+            "count": {
+              "type": "integer"
+            },
+            "errors": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "feed": {
+              "$ref": "#/components/schemas/RpcsubView"
+            },
+            "messages": {
+              "items": {
+                "$ref": "#/components/schemas/ServiceMessageView"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "swept": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          "required": [
+            "count",
+            "errors",
+            "messages",
+            "swept"
+          ],
+          "type": "object"
+        },
+        "summary": "topic service-messages: as GET /api/system/v1/service-messages/stream"
+      },
+      "shellStreamPairing": {
+        "contentType": "application/json",
+        "name": "pairing",
+        "payload": {
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "requests": {
+              "items": {
+                "$ref": "#/components/schemas/PairingView"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "enabled",
+            "requests"
+          ],
+          "type": "object"
+        },
+        "summary": "topic pairing: as GET /api/auth/v1/pairing/stream"
       }
     },
     "schemas": {
@@ -1558,7 +1665,7 @@
         "type": "http"
       },
       "cookie": {
-        "description": "The web UI's session cookie; lite-rpc's streams also want the request from the system's own origin.",
+        "description": "The web UI's session cookie; lite-rpc's streams also want the request from the system's own origin: Sec-Fetch-Site same-origin, an Origin that is this host, or - from a page over plain HTTP, where a browser sends neither - the header X-Occulite-Request, which an EventSource cannot set (system-api.md, lite-rpc's credentials).",
         "in": "cookie",
         "name": "occulite_session",
         "type": "httpApiKey"
@@ -1806,6 +1913,36 @@
         }
       ],
       "summary": "The service messages, the whole view again on every change",
+      "x-occulite-scopes": [
+        "system:read"
+      ]
+    },
+    "receiveShellStream": {
+      "action": "receive",
+      "channel": {
+        "$ref": "#/channels/shellStream"
+      },
+      "description": "Query parameter topics: addons, service-messages, pairing (comma-separated or repeated; at least one). Each topic sends the event of its own stream at once and again on every change; pairing needs auth:admin besides system:read. The public mode may open it with topics=service-messages alone.",
+      "messages": [
+        {
+          "$ref": "#/channels/shellStream/messages/addons"
+        },
+        {
+          "$ref": "#/channels/shellStream/messages/messages"
+        },
+        {
+          "$ref": "#/channels/shellStream/messages/pairing"
+        }
+      ],
+      "security": [
+        {
+          "$ref": "#/components/securitySchemes/bearer"
+        },
+        {
+          "$ref": "#/components/securitySchemes/cookie"
+        }
+      ],
+      "summary": "The shell's stream (occulited B-53): the addons' revision, the service messages and the pairing requests in one connection",
       "x-occulite-scopes": [
         "system:read"
       ]

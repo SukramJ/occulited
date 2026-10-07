@@ -101,6 +101,34 @@ type View struct {
 	// ReleasesError is why the last check could not read a release list (B-21): the versions and
 	// update hints shown are the ones from before it. Nil when the last check read them all.
 	ReleasesError *CheckNotice `json:"releases_error,omitempty"`
+	// Source says where the entries come from (B-52): "published" when a published catalogue
+	// file - fetched by a check, or the copy the last one kept - is part of the list, "bundled"
+	// when the list is the image's own copy alone (no check has reached the published file yet),
+	// "" when there are no entries.
+	Source string `json:"source,omitempty"`
+	// BundledDate is the date of the image's copy (its file's time), for "the built-in list of".
+	BundledDate *time.Time `json:"bundled_date,omitempty"`
+	// CheckError is why the last check failed (B-52): the published catalogue file could not be
+	// fetched, no addon's manifest could be read, or nothing loaded at all. Nil after a check that
+	// worked. Checked stays the time of the last check that worked.
+	CheckError *CheckFailure `json:"check_error,omitempty"`
+}
+
+// CheckFailure is a check of the catalogue that failed (B-52): the user's or the daily one.
+type CheckFailure struct {
+	At      time.Time `json:"at"`
+	Message string    `json:"message"`        // what failed, naming the host
+	Host    string    `json:"host,omitempty"` // the host that could not be reached, when it is one
+	// Failures counts the checks in a row that failed, Since is when the first of them did.
+	Failures int       `json:"failures"`
+	Since    time.Time `json:"since"`
+}
+
+// Persistent says whether the check keeps failing (B-52): three checks in a row, or failures
+// over a day - two daily runs. The Status page warns then; one failed check is the Addons
+// page's alone.
+func (f *CheckFailure) Persistent() bool {
+	return f != nil && (f.Failures >= 3 || f.At.Sub(f.Since) >= 24*time.Hour)
 }
 
 // CheckNotice is a release list the last check could not read (B-21).
@@ -194,6 +222,8 @@ type cacheFile struct {
 	// ReleasesError is the last check's unread release list (B-21), kept across a restart so that
 	// the page still says why its versions are old.
 	ReleasesError *CheckNotice `json:"releases_error,omitempty"`
+	// CheckError is the last check's failure (B-52), kept across a restart like ReleasesError.
+	CheckError *CheckFailure `json:"check_error,omitempty"`
 }
 
 // Service loads the catalogue, fetches manifests and installs from them.
@@ -227,6 +257,7 @@ type Service struct {
 	cache    cacheFile
 	loaded   bool
 	adapters map[string]*manifest.Manifest // the bundled adapter manifests by id
+	bundled  *time.Time                    // the time of the image's copy of the catalogue file
 	releases map[string]releaseCache
 	timings  map[string]float64 // addon id -> install seconds
 	phaseAt  time.Time          // when the current phase began
@@ -283,6 +314,15 @@ func (s *Service) loadLocked() {
 	}
 	s.loaded = true
 	s.adapters = loadAdapters(s.BundledManifests)
+	for _, u := range s.URLs {
+		if p, ok := strings.CutPrefix(u, "file://"); ok {
+			if fi, err := os.Stat(p); err == nil {
+				t := fi.ModTime()
+				s.bundled = &t
+			}
+			break
+		}
+	}
 	s.cache = cacheFile{Entries: map[string]cached{}}
 	if s.CacheFile == "" {
 		return
@@ -324,14 +364,23 @@ func (s *Service) saveLocked() {
 // published file is fetched again and the copy kept. It fetches no manifest: that is Refresh's.
 // An error only when no catalogue file could be loaded.
 func (s *Service) Fetch(ctx context.Context, force bool) (*View, error) {
+	if _, err := s.loadFiles(ctx, force); err != nil {
+		return nil, err
+	}
+	return s.view(), nil
+}
+
+// loadFiles is Fetch without the view: err when no catalogue file loaded, pubErr when a published
+// file could not be fetched (force only) while others - its kept copy, the bundled one - stood in.
+func (s *Service) loadFiles(ctx context.Context, force bool) (pubErr, err error) {
 	s.mu.Lock()
 	s.loadLocked()
 	have := s.catalog != nil
 	s.mu.Unlock()
 	if force || !have {
-		cat, sources, err := s.loadCatalog(ctx, force)
+		cat, sources, pubErr, err := s.loadCatalog(ctx, force)
 		if err != nil {
-			return nil, err
+			return pubErr, err
 		}
 		s.mu.Lock()
 		s.catalog, s.sources = cat, sources
@@ -339,8 +388,70 @@ func (s *Service) Fetch(ctx context.Context, force bool) (*View, error) {
 			s.saveLocked() // the fetched copies, for the next start
 		}
 		s.mu.Unlock()
+		return pubErr, nil
 	}
-	return s.view(), nil
+	return nil, nil
+}
+
+// sourceError is a published catalogue file that could not be fetched, by the host that failed
+// (B-52): "raw.githubusercontent.com: dial tcp: lookup …: no such host", not Go's quoted URL.
+type sourceError struct {
+	host string
+	err  error
+}
+
+func (e *sourceError) Error() string { return e.host + ": " + e.err.Error() }
+func (e *sourceError) Unwrap() error { return e.err }
+
+// newSourceError names the host of u and the cause of err without the URL Go's client puts in.
+func newSourceError(u string, err error) *sourceError {
+	host := u
+	if p, perr := url.Parse(u); perr == nil && p.Host != "" {
+		host = p.Host
+	}
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		err = ue.Err
+	}
+	return &sourceError{host: host, err: err}
+}
+
+// noteCheckLocked records a check's outcome (B-52): nil clears the failure, an error counts it.
+// A cancelled check (the user left the page) is no outcome. s.mu held.
+func (s *Service) noteCheckLocked(err error, now time.Time) {
+	if err == nil {
+		s.cache.CheckError = nil
+		return
+	}
+	if errors.Is(err, context.Canceled) {
+		return
+	}
+	f := &CheckFailure{At: now, Message: err.Error(), Failures: 1, Since: now}
+	if errors.Is(err, context.DeadlineExceeded) {
+		f.Message = "the check did not finish in time"
+	}
+	var se *sourceError
+	if errors.As(err, &se) {
+		f.Host = se.host
+	}
+	if prev := s.cache.CheckError; prev != nil {
+		f.Failures, f.Since = prev.Failures+1, prev.Since
+	}
+	s.cache.CheckError = f
+	slog.Warn("catalog: the check failed", "err", f.Message, "failures", f.Failures, "since", f.Since)
+}
+
+// CheckError is the last check's failure (B-52) or nil, from what the system holds; it never
+// goes out (the Status warning reads it).
+func (s *Service) CheckError() *CheckFailure {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.loadLocked()
+	if s.cache.CheckError == nil {
+		return nil
+	}
+	c := *s.cache.CheckError
+	return &c
 }
 
 // Cached is the view from what the system holds already - the catalogue file of the last Fetch and
@@ -360,15 +471,28 @@ func (s *Service) Cached() *View {
 // loadCatalog merges every configured URL, the first entry per repository winning. A file:// URL
 // is read from disk; a published one is fetched only with network and its copy kept in the cache,
 // else the kept copy stands in - also when the fetch fails - and a URL without one is skipped.
-func (s *Service) loadCatalog(ctx context.Context, network bool) (*Catalog, map[string]string, error) {
+func (s *Service) loadCatalog(ctx context.Context, network bool) (*Catalog, map[string]string, error, error) {
 	merged := &Catalog{Format: Format}
 	sources := map[string]string{}
 	seen := map[string]bool{}
-	var firstErr error
+	var firstErr, pubErr error
 	loaded := 0
 	for _, u := range s.URLs {
 		cat, err := s.loadOne(ctx, u, network)
-		if err != nil {
+		if err != nil && !strings.HasPrefix(u, "file://") {
+			// B-52: a published file the check could not fetch is the check's failure, whatever
+			// stands in for it - and it is logged even when nothing earlier was kept
+			se := newSourceError(u, err)
+			if pubErr == nil {
+				pubErr = se
+			}
+			if cat != nil {
+				slog.Warn("catalog: the catalogue file could not be fetched, the last copy stands in", "catalog", u, "err", se)
+			} else {
+				slog.Warn("catalog: the catalogue file could not be fetched and no copy of it is kept", "catalog", u, "err", se)
+			}
+		}
+		if cat == nil && err != nil {
 			if firstErr == nil {
 				firstErr = fmt.Errorf("%s: %w", u, err)
 			}
@@ -394,13 +518,13 @@ func (s *Service) loadCatalog(ctx context.Context, network bool) (*Catalog, map[
 		}
 	}
 	if loaded == 0 && firstErr != nil {
-		return nil, nil, firstErr
+		return nil, nil, pubErr, firstErr
 	}
-	return merged, sources, nil
+	return merged, sources, pubErr, nil
 }
 
 // loadOne is one catalogue URL under loadCatalog's rule; nil without an error is a published file
-// without a kept copy.
+// without a kept copy. A published file whose fetch failed answers its kept copy with the error.
 func (s *Service) loadOne(ctx context.Context, u string, network bool) (*Catalog, error) {
 	if strings.HasPrefix(u, "file://") {
 		return s.fetchCatalog(ctx, u)
@@ -413,11 +537,7 @@ func (s *Service) loadOne(ctx context.Context, u string, network bool) (*Catalog
 	}
 	cat, err := s.fetchCatalog(ctx, u)
 	if err != nil {
-		if kept != nil {
-			slog.Warn("catalog: the catalogue file could not be fetched, the last copy stands in", "catalog", u, "err", err)
-			return kept, nil
-		}
-		return nil, err
+		return kept, err
 	}
 	s.mu.Lock()
 	if s.cache.Catalogs == nil {
@@ -515,10 +635,21 @@ func (s *Service) view() *View {
 		}
 		v.ReleasesError = &c
 	}
+	if f := s.cache.CheckError; f != nil {
+		c := *f
+		v.CheckError = &c
+	}
+	v.BundledDate = s.bundled
 	if s.catalog == nil {
 		return v
 	}
 	for _, e := range s.catalog.Addons {
+		if v.Source != "published" {
+			v.Source = "bundled"
+			if !strings.HasPrefix(s.sources[entryKey(e.Git)], "file://") {
+				v.Source = "published"
+			}
+		}
 		it := Item{Git: e.Git, ManifestPath: e.Manifest, Untested: e.Untested, Adapter: e.Adapter()}
 		if c, ok := s.cache.Entries[entryKey(e.Git)]; ok {
 			it.Manifest, it.Tag, it.Error = c.Manifest, c.Tag, c.Error
@@ -581,35 +712,71 @@ func RepoName(git string) string {
 // latest release tag (or the adapter beside the catalogue), the star counts, the latest releases;
 // all of it cached. An entry whose fetch fails keeps its last manifest and records the error;
 // the call fails only when no catalogue file loads. One refresh at a time; a second caller waits.
+//
+// B-52: a check that fails says so - the published catalogue file not fetched (the kept or the
+// bundled copy stands in), no addon's manifest read, nothing loaded at all, or the check cut off -
+// in the view's CheckError, kept across a restart; checked stays the last check that worked.
 func (s *Service) Refresh(ctx context.Context) error {
 	s.refreshing.Lock()
 	defer s.refreshing.Unlock()
-	if _, err := s.Fetch(ctx, true); err != nil {
+	pubErr, err := s.loadFiles(ctx, true)
+	if err != nil {
+		s.noteCheck(err)
 		return err
 	}
 	s.mu.Lock()
 	cat, sources := s.catalog, s.sources
 	s.cache.ReleasesError = nil // this check says anew what it could not read
 	s.mu.Unlock()
+	tried, failed := 0, 0
+	var firstFailed string
 	for _, e := range cat.Addons {
 		if ctx.Err() != nil {
+			s.noteCheck(ctx.Err())
 			return ctx.Err()
 		}
-		c := s.fetchManifest(ctx, e, sources[entryKey(e.Git)])
+		src := sources[entryKey(e.Git)]
+		c := s.fetchManifest(ctx, e, src)
 		s.mu.Lock()
 		s.cache.Entries[entryKey(e.Git)] = c
 		s.mu.Unlock()
+		// the addons' own repositories: an adapter is read beside the catalogue file, so it says
+		// nothing about whether GitHub answers for them (a rate limit leaves the adapters readable)
+		if !e.Adapter() {
+			tried++
+			if c.Error != "" {
+				failed++
+				if firstFailed == "" {
+					firstFailed = RepoName(e.Git) + ": " + c.Error
+				}
+			}
+		}
 		if c.Manifest != nil && c.Manifest.Release != nil {
 			s.refreshStars(ctx, c.Manifest.Release.GitHub)
 		}
 	}
 	s.RefreshReleases(ctx)
+	failure := pubErr
+	if failure == nil && tried > 0 && failed == tried {
+		failure = fmt.Errorf("no addon's manifest could be read (%s)", firstFailed)
+	}
 	now := time.Now()
 	s.mu.Lock()
-	s.cache.Checked = &now
+	if failure == nil {
+		s.cache.Checked = &now
+	}
+	s.noteCheckLocked(failure, now)
 	s.saveLocked()
 	s.mu.Unlock()
 	return nil
+}
+
+// noteCheck records a check's outcome and writes the cache.
+func (s *Service) noteCheck(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.noteCheckLocked(err, time.Now())
+	s.saveLocked()
 }
 
 // fetchManifest reads one entry's manifest: an adapter from beside the catalogue file it came
@@ -854,21 +1021,28 @@ func (s *Service) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-first:
-			if !daily() {
-				continue
-			}
-			if _, err := s.Fetch(ctx, true); err == nil {
-				s.dailyReleases(ctx)
+			if daily() {
+				s.daily(ctx)
 			}
 		case <-time.After(24*time.Hour + time.Duration(rand.Int64N(int64(2*time.Hour)))):
-			if !daily() {
-				continue
-			}
-			if _, err := s.Fetch(ctx, true); err == nil {
-				s.dailyReleases(ctx)
+			if daily() {
+				s.daily(ctx)
 			}
 		}
 	}
+}
+
+// daily is one of Run's refreshes: the catalogue files, then the releases. Whether the published
+// file could be fetched is the check's outcome (B-52): a failure counts towards the Status warning,
+// a fetch that works ends the run of failures (checked stays the user's last full check).
+func (s *Service) daily(ctx context.Context) {
+	pubErr, err := s.loadFiles(ctx, true)
+	if err != nil {
+		s.noteCheck(err)
+		return
+	}
+	s.noteCheck(pubErr)
+	s.dailyReleases(ctx)
 }
 
 // dailyReleases is Run's release refresh: it says anew what it could not read (B-21), and the

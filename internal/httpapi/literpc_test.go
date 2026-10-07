@@ -286,19 +286,28 @@ func TestLiteRPCStream(t *testing.T) {
 	if ev != "event" || !strings.Contains(data, `"key":"STATE"`) || !strings.Contains(data, `"lc":"`) || !strings.Contains(data, `"confirmed":true`) || !strings.HasPrefix(id, strings.Split(id, "-")[0]+"-") {
 		t.Fatalf("event: %s %s %s", id, ev, data)
 	}
-	// the list shows it; the second stream of the token is fine, the third is 429
+	// the list shows it with the limits in force; the second and third stream of the token are
+	// fine, the fourth is 429 (3 per token or session by default, occulited task 19)
 	st, out, _ := do(t, rig.srv, "GET", "/api/rpc/v1/streams", "", nil)
 	streams := out["streams"].([]any)
 	if st != 200 || len(streams) != 1 || streams[0].(map[string]any)["transport"] != "sse" || streams[0].(map[string]any)["subject"].(map[string]any)["name"] != "ro" {
 		t.Fatalf("streams: %d %v", st, out)
 	}
+	if l := out["limits"].(map[string]any); l["per_token"] != float64(3) || l["total"] != float64(16) {
+		t.Fatalf("limits: %v", l)
+	}
 	resp2, _ := open("/api/rpc/v1/events", nil)
 	defer resp2.Body.Close()
 	resp3, _ := open("/api/rpc/v1/events", nil)
-	if resp3.StatusCode != 429 {
+	defer resp3.Body.Close()
+	if resp3.StatusCode != 200 {
 		t.Fatalf("third stream: %d", resp3.StatusCode)
 	}
-	resp3.Body.Close()
+	resp4, _ := open("/api/rpc/v1/events", nil)
+	if resp4.StatusCode != 429 {
+		t.Fatalf("fourth stream: %d", resp4.StatusCode)
+	}
+	resp4.Body.Close()
 	// the page's x on the first: the response ends
 	sid := streams[0].(map[string]any)["id"].(string)
 	if st, _, _ := do(t, rig.srv, "DELETE", "/api/rpc/v1/streams/"+sid, "", nil); st != 204 {
@@ -344,7 +353,31 @@ func TestLiteRPCStream(t *testing.T) {
 	if resp, _ := open("/api/rpc/v1/events", map[string]string{"Origin": "http://evil.example"}); resp.StatusCode != 403 {
 		t.Fatalf("foreign origin: %d", resp.StatusCode)
 	}
+	// occulited B-47: a page of this system over plain HTTP says neither Sec-Fetch-Site nor Origin
+	// on a GET; the header credential, which another origin's page cannot send, stands in - but
+	// never against what the browser does say
+	if resp, _ := open("/api/rpc/v1/events", map[string]string{"X-Occulite-Request": "1", "Sec-Fetch-Site": "same-site"}); resp.StatusCode != 403 {
+		t.Fatalf("the header from another port of this host: %d", resp.StatusCode)
+	}
+	if resp, _ := open("/api/rpc/v1/events", map[string]string{"X-Occulite-Request": "1", "Origin": "http://evil.example"}); resp.StatusCode != 403 {
+		t.Fatalf("the header with a foreign origin: %d", resp.StatusCode)
+	}
+	if resp, _ := open("/api/rpc/v1/events?sid="+adminSess.ID, map[string]string{"X-Occulite-Request": "1"}); resp.StatusCode != 400 {
+		t.Fatalf("a session in the query string: %d", resp.StatusCode)
+	}
 	time.Sleep(60 * time.Millisecond) // the closed streams release their slots
+	respH, rH := open("/api/rpc/v1/events", map[string]string{"Cookie": "x=y", "X-Occulite-Request": "1"})
+	if _, ev, _ := sseNext(t, rH); respH.StatusCode != 200 || ev != "hello" {
+		t.Fatalf("plain HTTP, the cookie and the header credential: %d %s", respH.StatusCode, ev)
+	}
+	respH.Body.Close()
+	// the session as a bearer, as the shell's fetch sends it: no word about the origin needed
+	respB, rB := open("/api/rpc/v1/events", map[string]string{"Authorization": "Bearer " + adminSess.ID})
+	if _, ev, _ := sseNext(t, rB); respB.StatusCode != 200 || ev != "hello" {
+		t.Fatalf("the session in the Authorization header: %d %s", respB.StatusCode, ev)
+	}
+	respB.Body.Close()
+	time.Sleep(60 * time.Millisecond)
 	resp6, r6 := open("/api/rpc/v1/events", map[string]string{"Sec-Fetch-Site": "same-origin"})
 	if _, ev, _ := sseNext(t, r6); resp6.StatusCode != 200 || ev != "hello" {
 		t.Fatalf("same-origin: %d %s", resp6.StatusCode, ev)
@@ -376,6 +409,71 @@ func TestLiteRPCStream(t *testing.T) {
 	}
 	resp8.Body.Close()
 	_ = json.Valid
+}
+
+// occulited B-47: the browser rule of the lite-rpc paths, case by case - what each kind of
+// credential needs on a read (the stream, the state store) and on a request (POST). The header
+// sets are the ones Chromium 153 was seen to send (the comment at originRefusal).
+func TestBrowserRefusal(t *testing.T) {
+	const host = "192.0.2.10"
+	public := &auth.Session{User: "guest", Method: auth.MethodPublic, Scopes: auth.Scopes{auth.ScopeRPCOperate}}
+	bearer := "Bearer " + adminSess.ID
+	for _, c := range []struct {
+		name   string
+		sess   *auth.Session
+		method string
+		hdr    map[string]string
+		pass   bool
+	}{
+		// a program's token: never asked for an origin
+		{"token, nothing else", tokenRead, "GET", nil, true},
+		{"token, a foreign origin", tokenRead, "GET", map[string]string{"Origin": "http://evil.example"}, true},
+		{"token, a request", tokenOperate, "POST", nil, true},
+		// the cookie alone on a read
+		{"https or localhost: Sec-Fetch-Site same-origin", adminSess, "GET", map[string]string{"Sec-Fetch-Site": "same-origin"}, true},
+		{"a typed address: Sec-Fetch-Site none", adminSess, "GET", map[string]string{"Sec-Fetch-Site": "none"}, true},
+		{"https, another site", adminSess, "GET", map[string]string{"Sec-Fetch-Site": "cross-site"}, false},
+		{"https, another port of this host", adminSess, "GET", map[string]string{"Sec-Fetch-Site": "same-site"}, false},
+		{"a WebSocket from this system's page", adminSess, "GET", map[string]string{"Origin": "http://" + host}, true},
+		{"a WebSocket from another port of this host", adminSess, "GET", map[string]string{"Origin": "http://" + host + ":1880"}, false},
+		{"a WebSocket or an EventSource from another site", adminSess, "GET", map[string]string{"Origin": "http://evil.example"}, false},
+		{"plain http, this system's page without the header (an EventSource), or an <img> from another port", adminSess, "GET", nil, false},
+		{"plain http, this system's page with the header credential", adminSess, "GET", map[string]string{"X-Occulite-Request": "1"}, true},
+		// the header never outweighs what the browser says
+		{"the header, but Sec-Fetch-Site cross-site", adminSess, "GET", map[string]string{"X-Occulite-Request": "1", "Sec-Fetch-Site": "cross-site"}, false},
+		{"the header, but a foreign Origin", adminSess, "GET", map[string]string{"X-Occulite-Request": "1", "Origin": "http://evil.example"}, false},
+		// the session in the Authorization header
+		{"the session as a bearer, nothing else", adminSess, "GET", map[string]string{"Authorization": bearer}, true},
+		{"another session as a bearer beside the cookie: the cookie's rule", adminSess, "GET", map[string]string{"Authorization": "Bearer someoneelse0000000000000000000"}, false},
+		// a request: the cookie alone never calls a method, whatever the origin
+		{"a request on the cookie, same-origin", adminSess, "POST", map[string]string{"Sec-Fetch-Site": "same-origin"}, false},
+		{"a request on the cookie with the header credential", adminSess, "POST", map[string]string{"X-Occulite-Request": "1", "Origin": "http://" + host}, false},
+		{"a request with the session as a bearer", adminSess, "POST", map[string]string{"Authorization": bearer}, true},
+		// the public principal has no session to put in a header: the origin rule, reads and requests
+		{"public, plain http, a read without the header", public, "GET", nil, false},
+		{"public, plain http, a read with the header credential", public, "GET", map[string]string{"X-Occulite-Request": "1"}, true},
+		{"public, plain http, a request (a POST says its Origin)", public, "POST", map[string]string{"X-Occulite-Request": "1", "Origin": "http://" + host}, true},
+		{"public, a request from another site", public, "POST", map[string]string{"Origin": "http://evil.example"}, false},
+		{"public, https, another site", public, "GET", map[string]string{"Sec-Fetch-Site": "cross-site"}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := httptest.NewRequest(c.method, "http://"+host+"/api/rpc/v1/events", nil)
+			for k, v := range c.hdr {
+				r.Header.Set(k, v)
+			}
+			msg := browserRefusal(r, c.sess, c.method == "POST")
+			if (msg == "") != c.pass {
+				t.Fatalf("pass = %v, want %v (%q)", msg == "", c.pass, msg)
+			}
+		})
+	}
+	// behind lighttpd the host the browser addressed is the forwarded one
+	r := httptest.NewRequest("GET", "http://127.0.0.1:2121/api/rpc/v1/events/ws", nil)
+	r.Header.Set("X-Forwarded-Host", host)
+	r.Header.Set("Origin", "http://"+host)
+	if msg := browserRefusal(r, adminSess, false); msg != "" {
+		t.Fatalf("the forwarded host: %q", msg)
+	}
 }
 
 // task 194: the bulk read - what the bus brought, filtered and paged, with the stream's resume

@@ -416,7 +416,14 @@ func run(opts daemonOptions) error {
 	// task 192: /version tells a pairing client the key-server mode and the count of device keys
 	metaAPI.HmIPPairing = func() radio.Pairing { return system.HmIPPairing(root) }
 	// what a client can use (tasks 194, 195, 219): the capability object of /version
-	metaAPI.Capabilities = func() map[string]any { return httpapi.Capabilities(httpapi.PairingEnabled(*cfgPath)) }
+	// task 19: lite-rpc's streams per token or session, from occulited.json at the start
+	streamsPerSession, ok := cfg.RPC.StreamsPerSessionLimit()
+	if !ok {
+		log.Warn("occulited.json: rpc.streams_per_session is out of bounds (1-16), the default stands", "value", cfg.RPC.StreamsPerSession, "default", streamsPerSession)
+	}
+	metaAPI.Capabilities = func() map[string]any {
+		return httpapi.Capabilities(httpapi.PairingEnabled(*cfgPath), streamsPerSession)
+	}
 	// the addons' rc.d layer (task 187): the nav, the update check and - without systemd - the
 	// read-only addon list; SystemdAddons runs the same scripts in a scope below
 	scripts := system.AddonScripts{Root: root, HTTP: trustStore.HTTPClient(trust.StoreOcculited, 0)} // task 231: an addon's own update URL
@@ -616,6 +623,12 @@ func run(opts daemonOptions) error {
 	rpcSub := rpcsub.New(rpcsub.Config{Listen: cfg.RPC.CallbackListen, Interfaces: filepath.Join(*rootDir, "etc/config/InterfacesList.xml"), Log: area("radio"), Trace: tracer, Enrich: devState.Enrich,
 		Taken: system.Root(*rootDir).HoldsRegistration})
 	rpcSub.Attach(sampler, serviceMsgs, devState)
+	// B-46: what the service-message store reads from a maintenance channel goes to the state
+	// store and, where it differs, onto the bus - an acknowledged STICKY_UNREACH comes without an
+	// event, and /state and the stream's clients said "still unreachable" until a restart
+	serviceMsgs.Report = func(iface, channel string, values map[string]any, at time.Time) {
+		devState.Reconcile(iface, channel, values, at, rpcSub.Publish)
+	}
 	// occulited task 13: the sampler makes the interface cards' events/min of the subscriber's counts
 	sampler.Feed = rpcSub.Status
 	// the daily addon update check (what checkAddonUpdates.sh did into a ReGa variable)
@@ -794,6 +807,11 @@ func run(opts daemonOptions) error {
 	radioConn.Load(context.Background())
 	// task 149 (D-103): local key mode - the HmIP network key on the box
 	radioBusy := func() bool { return radioConn.Busy() || radioFW.Status().Running != nil }
+	if crashLoops != nil {
+		// openccu-lite B-307: the addon supervisor waits out a radio change as it waits out an
+		// addon job - an addon's restart would pull the stopped radio daemons in mid-change
+		crashLoops.Paused = system.AnyBusy(crashLoops.Paused, radioBusy)
+	}
 	hmipRestarts := &system.HmIPRestartLock{} // B-198: one lock for every hmipserver rewrite and restart
 	localKey := &system.HmIPLocalKey{Root: root, Services: services, StateDir: filepath.Join(cfg.StateDir, "hmip-local-key"), Plan: radioConn.BootPlan, Busy: radioBusy, Restarts: hmipRestarts, Log: area("hmip-local-key")}
 	// openccu-lite B-285: the snapshot before HmIP-RF moves to another module, and the way back
@@ -917,7 +935,7 @@ func run(opts daemonOptions) error {
 	}, OnSystemUpdateToggle: func(on bool) error {
 		cfg.SystemUpdate.Enabled = on
 		return config.Save(*cfgPath, cfg)
-	}, WebBase: "http://" + cfg.Listen, MetaRecovered: loaded.RecoveredFromBackup, NetTx: netTx, IPv6: ipv6Tx, Run: run, RunStdin: runStdin, Firewall: fwm, Health: sampler, Updates: updates, FirstBoot: firstBoot, ChangeKey: changeKey, SetLogLevel: setLogLevel, InitInterface: initInterface, AddonCtl: addonCtl, InstallToken: installToken, Feed: feed, Cert: certSvc, RadioFirmware: radioFW, RadioConnections: radioConn, HmIPLocalKey: localKey, HmIPDeviceKeys: deviceKeys, ImportRecord: importRecord, NamesImport: metaAPI.ImportNamesFromSBK, ConfirmTicket: users.RedeemConfirmed, FirewallRules: fwRules, HTTPS: httpsCfg, ClassicRPC: &system.ClassicRPCConfig{Root: root, Run: run, Systemd: root.HasSystemd()}, WiFi: wifiService(root, root.HasSystemd()), Power: &system.Power{Root: root, Systemd: root.HasSystemd(), Run: run}, RadioInterfaces: radioIfs, Storage: storage, Clock: &system.ClockCheck{Root: root}, BootTiming: bootTiming, Version: version, Commit: commit}
+	}, WebBase: "http://" + cfg.Listen, MetaRecovered: loaded.RecoveredFromBackup, NetTx: netTx, IPv6: ipv6Tx, Run: run, RunStdin: runStdin, Firewall: fwm, Health: sampler, Updates: updates, FirstBoot: firstBoot, ChangeKey: changeKey, SetLogLevel: setLogLevel, InitInterface: initInterface, AddonCtl: addonCtl, InstallToken: installToken, Feed: feed, Cert: certSvc, RadioFirmware: radioFW, RadioConnections: radioConn, RadioBusy: radioBusy, HmIPLocalKey: localKey, HmIPDeviceKeys: deviceKeys, ImportRecord: importRecord, NamesImport: metaAPI.ImportNamesFromSBK, ConfirmTicket: users.RedeemConfirmed, FirewallRules: fwRules, HTTPS: httpsCfg, ClassicRPC: &system.ClassicRPCConfig{Root: root, Run: run, Systemd: root.HasSystemd()}, WiFi: wifiService(root, root.HasSystemd()), Power: &system.Power{Root: root, Systemd: root.HasSystemd(), Run: run}, RadioInterfaces: radioIfs, Storage: storage, Clock: &system.ClockCheck{Root: root}, BootTiming: bootTiming, Version: version, Commit: commit}
 	// openccu-lite task 232: the server a purpose's pins are taken from - the OIDC issuer as the
 	// configuration file has it now, the ACME directory the settings point at
 	sysAPI.PinTarget = func(purpose string) string {
@@ -977,7 +995,14 @@ func run(opts daemonOptions) error {
 	sysAPI.RPC, sysAPI.ServiceMessages = rpcSub, serviceMsgs // task 75
 	// task 77: lite-rpc - the request paths and the stream on the bus, always on (D-117); streams
 	// re-check their credential through the auth API
-	liteSvc := literpc.New(literpc.Config{Sub: rpcSub, Log: area("rpc"), Trace: tracer})
+	liteSvc := literpc.New(literpc.Config{Sub: rpcSub, Log: area("rpc"), Trace: tracer, PerSubject: streamsPerSession,
+		// B-46: a write to a maintenance channel that passed through here (the acknowledgement of
+		// a sticky message) is read back a second later, as no event will tell
+		Wrote: func(iface string, c literpc.Call) {
+			if device, ok := maintenanceWrite(c); ok {
+				serviceMsgs.RecheckSoon(iface, device, time.Second)
+			}
+		}})
 	sysAPI.LiteRPC, sysAPI.Revalidate = liteSvc, authAPI.SessionOf
 	sysAPI.State = devState    // task 194: GET /api/rpc/v1/state
 	sysAPI.History = dpHistory // task 195: GET /api/rpc/v1/history
@@ -996,6 +1021,7 @@ func run(opts daemonOptions) error {
 	sysAPI.LAN = &eq3disc.Client{} // task 220: one client, so finds and writes take turns
 	sysAPI.Groups = &httpapi.GroupsAPI{Client: &hmgroups.Client{Base: fmt.Sprintf("http://127.0.0.1:%d", radio.HMServerPort(*rootDir)), Session: groupSession}, Session: groupSession, Meta: store, Log: area("rpc"), Interface: "VirtualDevices"}
 	sysAPI.Public = authAPI
+	sysAPI.PairingFeed = authAPI                       // occulited B-53: GET /stream's topic pairing
 	sysAPI.ConsoleResets = authAPI.Store.ConsoleResets // occulited task 14: the Status page's notice
 	sysAPI.RPCTrace = tracer                           // task 79
 	sysAPI.Names = func(ref string) (string, []string, bool) {
@@ -1958,6 +1984,17 @@ func discoveryVersion(v system.Version) string {
 		return v.Lite
 	}
 	return v.Version
+}
+
+// maintenanceWrite is the device of a setValue or putParamset on a maintenance channel
+// (<device>:0), ok false for any other call.
+func maintenanceWrite(c literpc.Call) (device string, ok bool) {
+	addr, ok := literpc.Address(c)
+	if !ok {
+		return "", false
+	}
+	device, ok = strings.CutSuffix(addr, ":0")
+	return device, ok && device != ""
 }
 
 // stateSource is the state store's sweep over the interface processes' own RPC (task 194).

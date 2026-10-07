@@ -291,6 +291,7 @@ var routeDocs = map[string]apidoc.Doc{
 	"GET /api/system/v1/sbom":                                            {Summary: "The image's software bill of materials (CycloneDX)"},
 	"GET /api/system/v1/service-messages":                                {Summary: "The service messages the system collects"},
 	"GET /api/system/v1/service-messages/stream":                         {Summary: "The service messages as server-sent events"},
+	"GET /api/system/v1/stream":                                          {Summary: "The shell's stream: addons, service messages and pairing requests as server-sent events"},
 	"GET /api/system/v1/services":                                        {Summary: "The managed services and addon services, with their state"},
 	"GET /api/system/v1/services/{id}/unit":                              {Summary: "A service's unit and its override"},
 	"PUT /api/system/v1/services/{id}/unit":                              {Summary: "Sets a service's unit override"},

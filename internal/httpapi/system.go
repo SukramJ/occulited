@@ -178,6 +178,9 @@ type SystemAPI struct {
 	// Public is the Control app's public mode (task 193): the auth API's switch, shown and set on
 	// the Remote access page; nil where there is no auth API.
 	Public PublicSwitch
+	// PairingFeed is the pairing requests for GET /stream's topic pairing (occulited B-53); nil =
+	// the topic sends nothing. main gives it the auth API.
+	PairingFeed PairingFeed
 	// Revalidate re-checks a request's credential while its stream is open (every heartbeat);
 	// nil = never re-checked. main gives it the auth API's session lookup.
 	Revalidate func(r *http.Request) *auth.Session
@@ -245,6 +248,9 @@ type SystemAPI struct {
 	RadioFirmware *system.RadioFirmware
 	// RadioConnections: the connection per interface process (task 129 phase 3).
 	RadioConnections *system.RadioConnections
+	// RadioBusy says whether a connection change or a coprocessor flash holds the radio stack: an
+	// addon start through the API waits meanwhile (openccu-lite B-307); nil = never.
+	RadioBusy func() bool
 	// FirewallRules: task 157's firewall; nil = the rule routes answer 501.
 	FirewallRules *system.FirewallRules
 	// HmIPLocalKey: task 149's local key mode; nil = the routes answer 501.
@@ -389,6 +395,7 @@ func (a *SystemAPI) Register(mux *http.ServeMux) {
 	route(mux, auth.ScopeSystemWrite, "PUT "+p+"/services/{id}/unit", a.unitOverridePut)
 	route(mux, auth.ScopeSystemRead, "GET "+p+"/addons", a.addons)
 	route(mux, auth.ScopeSystemRead, "GET "+p+"/addons/stream", a.addonsStream)                       // openccu-lite B-297
+	route(mux, auth.ScopeSystemRead, "GET "+p+"/stream", a.shellStream)                               // occulited B-53: the shell's streams in one
 	route(mux, auth.ScopeAddonsWrite, "POST "+p+"/addons/{id}/reinstall-dismiss", a.reinstallDismiss) // openccu-lite task 146
 	route(mux, auth.ScopeAddonsWrite, "POST "+p+"/addons/{id}/enable", a.addonEnable)
 	route(mux, auth.ScopeAddonsWrite, "POST "+p+"/addons/{id}/disable", a.addonDisable)
@@ -852,12 +859,34 @@ func (a *SystemAPI) control(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, apiError{Error: "cuts-ui", Message: r.PathValue("id") + " carries the web interface: stopping or disabling it here would take this page away. Restart it, or stop it over ssh."})
 		return
 	}
+	if !a.waitRadio(w, r, r.PathValue("id"), r.PathValue("action")) {
+		return
+	}
 	out, err := a.Services.Control(r.Context(), r.PathValue("id"), r.PathValue("action"))
 	if err != nil {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": "service-control", "message": err.Error(), "output": out})
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true, "output": out})
+}
+
+// waitRadio holds a start or restart of an addon's unit while a radio connection change or a
+// coprocessor flash runs (openccu-lite B-307): the radio daemons are stopped on purpose then, and
+// the addon would come up without its interfaces. False when the request ended while it waited
+// (answered here).
+func (a *SystemAPI) waitRadio(w http.ResponseWriter, r *http.Request, unit, action string) bool {
+	if a.RadioBusy == nil || !system.AddonStartAction(unit, action) {
+		return true
+	}
+	waited, err := system.WaitRadioIdle(r.Context(), a.RadioBusy)
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, apiError{Error: "radio-busy", Message: "a radio connection change or a coprocessor flash is running; the " + action + " of " + unit + " was not done: " + err.Error()})
+		return false
+	}
+	if waited > 0 {
+		reqLog(r).Info("addon start waited for the radio change", "unit", unit, "action", action, "waited", waited.Round(time.Millisecond))
+	}
+	return true
 }
 
 // unitEditor is what a service manager offers when a unit can be edited (task 27.4): systemd,
@@ -2904,6 +2933,9 @@ func (a *SystemAPI) setAddonEnabled(w http.ResponseWriter, r *http.Request, enab
 	if sd, ok := a.Manager.(*system.SystemdAddons); ok {
 		sd.Reload(r.Context()) // the generator sees the changed executable bit
 	}
+	if !a.waitRadio(w, r, serviceIDFor(a, id), action) {
+		return
+	}
 	if o, err := a.Services.Control(r.Context(), serviceIDFor(a, id), action); err != nil {
 		out["control_error"] = err.Error() + ": " + o
 	}
@@ -3341,6 +3373,9 @@ func (a *SystemAPI) addonCtl(w http.ResponseWriter, r *http.Request) {
 	case "start", "stop", "restart":
 	default:
 		writeJSON(w, http.StatusUnprocessableEntity, apiError{Error: "invalid", Message: "action must be start, stop or restart"})
+		return
+	}
+	if !a.waitRadio(w, r, "addon-"+id, body.Action) {
 		return
 	}
 	out, err := a.Services.Control(r.Context(), "addon-"+id, body.Action)

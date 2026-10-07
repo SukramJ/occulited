@@ -243,19 +243,22 @@ func newSubscriber(id, url string) InterfaceSubscriber {
 	return InterfaceSubscriber{ID: id, URL: url, Local: isLocalCallback(url), Own: strings.HasPrefix(id, rpcsub.IDPrefix)}
 }
 
-// isLocalCallback says whether a callback points back at this box. Only the host part is looked
-// at, and only the loopback literals: a callback naming the box's own LAN address is still a
-// client that reaches it over the network.
+// isLocalCallback says whether a callback points back at this box: its host part, as IsLocalHost
+// decides it. A callback without a scheme ("127.0.0.1:2126", as a client registered one with
+// hmipserver's VirtualDevices, occulited B-44) is read as host[:port][/path]: the daemon cannot
+// call it, but it is a registration from this box all the same, not an external one.
 func isLocalCallback(url string) bool {
-	_, rest, ok := strings.Cut(url, "://")
-	if !ok {
-		return false
+	rest := url
+	if _, r, ok := strings.Cut(url, "://"); ok {
+		rest = r
 	}
 	host, _, _ := strings.Cut(rest, "/")
-	if strings.HasPrefix(host, "[") { // [v6]:port
+	switch {
+	case strings.HasPrefix(host, "["): // [v6]:port
 		host = strings.TrimPrefix(host, "[")
 		host, _, _ = strings.Cut(host, "]")
-	} else {
+	case strings.Count(host, ":") > 1: // a bare v6 address, without a port to take off
+	default:
 		host, _, _ = strings.Cut(host, ":")
 	}
 	return IsLocalHost(host)

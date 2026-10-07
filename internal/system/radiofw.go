@@ -263,6 +263,7 @@ func (s *RadioFirmware) Load(ctx context.Context) {
 		s.saveLast(&stale)
 		_ = os.Remove(filepath.Join(s.StateDir, "running.json"))
 		s.log().Warn("radio firmware: a flash was running when occulited stopped; starting the radio daemons", "module", stale.Module)
+		_, _ = openRadioGate(s.Root, s.log()) // B-308: the interrupted flash's hold on the radio units
 		if s.Services != nil {
 			for _, u := range radioUnits {
 				if _, err := s.Services.Control(ctx, u, "start"); err != nil {
@@ -806,9 +807,13 @@ func (s *RadioFirmware) line(a *FlashAttempt, l string) { a.run.Info(l) }
 func (s *RadioFirmware) warn(a *FlashAttempt, l string) { a.run.Warn(l) }
 func (s *RadioFirmware) fail(a *FlashAttempt, l string) { a.run.Err(l) }
 
+// FlashLimit bounds one flash, from the stop to the stack's start (the gate's deadline is a
+// minute more).
+const FlashLimit = 15 * time.Minute
+
 // run is the background half: the sequence of 41.3, the failure handling of 41.5.
 func (s *RadioFirmware) run(a *FlashAttempt, cm coproModule) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), FlashLimit)
 	defer cancel()
 	err := s.attempt(ctx, a, cm)
 	if err != nil {
@@ -846,12 +851,28 @@ func (s *RadioFirmware) attempt(ctx context.Context, a *FlashAttempt, cm coproMo
 	if cm.Family == priv.CoproHMCFGUSB {
 		units = []string{"rfd"}
 	}
+	// openccu-lite B-308: from before the stop until the stack is back no radio unit starts from
+	// outside the flash (a user's systemctl, a Restart=) - it would open the module being flashed,
+	// or start on the files of the detection that runs after it. The stack's own starts below let
+	// each unit through first, in boot order; the gate opens after them and on every way out, and
+	// its deadline is the flash's limit and a minute.
+	gated := false
+	if gerr := closeRadioGate(s.Root, FlashLimit+time.Minute); gerr != nil {
+		s.warn(a, "the radio units could not be held against starts from outside the flash: "+gerr.Error())
+	} else {
+		gated = true
+		defer func() { _, _ = openRadioGate(s.Root, s.log()) }()
+		s.line(a, "radio units held against starts from outside the flash")
+	}
 	defer func() {
 		// 6. the stack comes back in boot order, on success and on failure alike: a stopped
 		// stack is worse than a failed flash
 		for _, u := range units {
 			if !containsUnit(stopped, u) {
 				continue
+			}
+			if gated {
+				releaseRadioGate(s.Root, u, s.log())
 			}
 			if _, cerr := s.Services.Control(ctx, u, "start"); cerr != nil {
 				s.fail(a, "starting "+u+" failed: "+cerr.Error())
@@ -861,6 +882,25 @@ func (s *RadioFirmware) attempt(ctx context.Context, a *FlashAttempt, cm coproMo
 				continue
 			}
 			s.line(a, u+" started")
+		}
+		if gated {
+			if gone, _ := openRadioGate(s.Root, s.log()); gone {
+				s.line(a, "the flash's starts are done: radio units may start from outside it again")
+			}
+			// a unit the flash did not stop whose Restart= the gate refused meanwhile
+			var others []string
+			for _, u := range radio.Daemons {
+				if !containsUnit(stopped, u) {
+					others = append(others, u)
+				}
+			}
+			for _, h := range startHeldBack(ctx, s.Services, s.Root, others) {
+				if h.err != nil {
+					s.warn(a, "starting "+h.unit+" (held back during the flash) failed: "+h.err.Error())
+				} else {
+					s.line(a, h.unit+" started: its start during the flash was held back")
+				}
+			}
 		}
 		if containsUnit(stopped, "multimacd") {
 			if s.waitFor(ctx, func() bool { return s.mmdNodesPresent() }) {

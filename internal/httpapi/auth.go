@@ -202,6 +202,9 @@ func publicPath(r *http.Request) bool {
 		return r.Method == http.MethodGet
 	case p == "/api/system/v1/service-messages", p == "/api/system/v1/service-messages/stream", p == "/api/auth/v1/me/preferences":
 		return r.Method == http.MethodGet
+	case p == "/api/system/v1/stream":
+		// occulited B-53: the shell's stream, with the service messages as its only topic
+		return r.Method == http.MethodGet && publicShellStream(r)
 	}
 	return false
 }

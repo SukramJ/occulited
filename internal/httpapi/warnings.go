@@ -242,6 +242,7 @@ func (a *SystemAPI) warningSources() []warnings.Source {
 		{IDs: []string{"radio-load"}, Eval: a.radioLoadWarning},
 		{IDs: []string{"radio-module-unusable", "radio-firmware"}, Eval: a.radioFirmwareWarnings},
 		{IDs: []string{"addon-update"}, Eval: a.addonUpdateWarning},
+		{IDs: []string{"catalog-check"}, Eval: a.catalogCheckWarning}, // occulited B-52
 		{IDs: []string{"rpc-stalled"}, Eval: a.rpcStallWarnings},
 		{IDs: []string{"firewall"}, Eval: a.firewallWarning},
 		{IDs: []string{"classic-rpc-open"}, Eval: a.classicRPCWarning},
@@ -1143,6 +1144,23 @@ func (a *SystemAPI) addonUpdateWarning(ctx context.Context) ([]warnings.Warning,
 	}
 	return []warnings.Warning{{ID: "addon-update", Variant: strings.Join(variant, ","), Severity: warnings.SeverityWarning, Href: "/addons",
 		Params: map[string]any{"count": len(list), "addons": list}}}, true
+}
+
+// catalog-check (occulited B-52): the addon catalogue's check keeps failing - three checks in a
+// row, or failures over a day (catalog.CheckFailure.Persistent); one failed check is the Addons
+// page's alone. The variant is "failing", so a silence lasts until a check works again. Read from
+// what the system holds, nothing is fetched for it.
+func (a *SystemAPI) catalogCheckWarning(context.Context) ([]warnings.Warning, bool) {
+	c, ok := a.Catalog.(interface{ CheckError() *catalog.CheckFailure })
+	if !ok || a.Catalog == nil {
+		return nil, true
+	}
+	f := c.CheckError()
+	if !f.Persistent() {
+		return nil, true
+	}
+	return []warnings.Warning{{ID: "catalog-check", Variant: "failing", Severity: warnings.SeverityWarning, Href: "/addons",
+		Params: map[string]any{"failures": f.Failures, "since": f.Since.UTC().Format(time.RFC3339), "detail": f.Message, "host": f.Host}}}, true
 }
 
 // radio-firmware and radio-module-unusable (openccu-lite task 137, D-89: the boot never flashes the

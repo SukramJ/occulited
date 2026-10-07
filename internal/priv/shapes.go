@@ -169,6 +169,7 @@ func (p Policy) programAllowed(name string, args []string) bool {
 // admits, written down again here because this is the boundary and that was the caller.
 var (
 	shapeHostRe     = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
+	shapeVendorRe   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 	shapeIfaceRe    = regexp.MustCompile(`^[a-z][a-z0-9._-]{0,14}$`)
 	shapeDatetimeRe = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}$`)
 	shapeKeyRe      = regexp.MustCompile(`^[0-9A-Za-z_]{5,128}$`)
@@ -302,7 +303,7 @@ func shellShape(p Policy, args []string) bool {
 // udhcpcShape is the one IPv4 client line eQ3StartNetwork builds and the daemon copies
 // (netwrite.go): the same hostname in -x and -F, the pid file named after the interface.
 func udhcpcShape(_ Policy, args []string) bool {
-	tpl := strings.Fields("-b -t 20 -T 3 -S -x hostname:<host> -i <iface> -F <host> -V eQ3-CCU3 -s /bin/dhcp.script -p <pidfile>")
+	tpl := strings.Fields("-b -t 20 -T 3 -S -x hostname:<host> -i <iface> -F <host> -V <vendor> -s /bin/dhcp.script -p <pidfile>")
 	if len(args) != len(tpl) {
 		return false
 	}
@@ -319,6 +320,11 @@ func udhcpcShape(_ Policy, args []string) bool {
 			}
 		case "<iface>":
 			if !shapeIface(iface) {
+				return false
+			}
+		case "<vendor>":
+			// the vendor class of /etc/dhcp-vendor-class (openccu-lite task 327): one word
+			if !shapeVendorRe.MatchString(args[i]) {
 				return false
 			}
 		case "<pidfile>":

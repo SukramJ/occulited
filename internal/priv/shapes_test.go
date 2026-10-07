@@ -108,6 +108,8 @@ func TestProgramShapes(t *testing.T) {
 		{"systemd-run", "--unit=occu-dhcp6-eth0.service --collect --quiet /sbin/udhcpc6 -f -S -t 5 -T 3 -O dns -O search -i eth0 -s /usr/libexec/occu/lite-dhcp6 -p /var/run/udhcpc6_eth0.pid"},
 		// the DHCP clients, the address, the routes, resolvconf, the hostname
 		{"/sbin/udhcpc", "-b -t 20 -T 3 -S -x hostname:openccu -i eth0 -F openccu -V eQ3-CCU3 -s /bin/dhcp.script -p /var/run/udhcpc_eth0.pid"},
+		// openccu-lite task 327: the vendor class of /etc/dhcp-vendor-class
+		{"/sbin/udhcpc", "-b -t 20 -T 3 -S -x hostname:openccu-lite-3f2a -i eth0 -F openccu-lite-3f2a -V openccu-lite -s /bin/dhcp.script -p /var/run/udhcpc_eth0.pid"},
 		{"/sbin/udhcpc6", "-b -S -t 5 -T 3 -O dns -O search -i eth0 -s /usr/libexec/occu/lite-dhcp6 -p /var/run/udhcpc6_eth0.pid"},
 		{"/sbin/ip", "-4 -o addr show dev eth0"},
 		{"/sbin/ip", "-4 addr flush dev eth0"},
@@ -258,6 +260,9 @@ func TestProgramShapes(t *testing.T) {
 		{"/sbin/udhcpc", "-b -i eth0 -s /usr/local/addons/x/evil.sh"},
 		{"/sbin/udhcpc", "-b -t 20 -T 3 -S -x hostname:openccu -i eth0 -F other -V eQ3-CCU3 -s /bin/dhcp.script -p /var/run/udhcpc_eth0.pid"},
 		{"/sbin/udhcpc", "-b -t 20 -T 3 -S -x hostname:openccu -i eth0 -F openccu -V eQ3-CCU3 -s /bin/dhcp.script -p /etc/config/rfd.conf"},
+		{"/sbin/udhcpc", "-b -t 20 -T 3 -S -x hostname:openccu -i eth0 -F openccu -V -s -s /bin/dhcp.script -p /var/run/udhcpc_eth0.pid"},
+		{"/sbin/udhcpc", "-b -t 20 -T 3 -S -x hostname:openccu -i eth0 -F openccu -V ../x -s /bin/dhcp.script -p /var/run/udhcpc_eth0.pid"},
+		{"/sbin/udhcpc", "-b -t 20 -T 3 -S -x hostname:openccu -i eth0 -F openccu -V $(id) -s /bin/dhcp.script -p /var/run/udhcpc_eth0.pid"},
 		{"/sbin/udhcpc6", "-f -S -t 5 -T 3 -O dns -O search -i eth0 -s /usr/local/addons/x/evil.sh -p /var/run/udhcpc6_eth0.pid"},
 		{"hostname", ""},
 		{"hostname", "-F /etc/passwd"},

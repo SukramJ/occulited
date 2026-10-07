@@ -197,6 +197,40 @@ func TestNetTxConfirmAndRevert(t *testing.T) {
 	}
 }
 
+// TestVendorClass (openccu-lite task 327): a DHCP client the daemon starts sends the vendor class
+// of /etc/dhcp-vendor-class, as eQ3StartNetwork and lite-network-reload do - openccu-lite on the
+// images - and a CCU3's without the file or with one that is not a single word.
+func TestVendorClass(t *testing.T) {
+	for _, c := range []struct{ file, want string }{
+		{"# the class\nDHCP_VENDOR_ID=openccu-lite\n", "openccu-lite"},
+		{"DHCP_VENDOR_ID=\"my-ccu.v2\"\n", "my-ccu.v2"},
+		{"DHCP_VENDOR_ID=a b\n", "eQ3-CCU3"},
+		{"DHCP_VENDOR_ID=-x\n", "eQ3-CCU3"},
+		{"", "eQ3-CCU3"},
+		{"-", "eQ3-CCU3"}, // no file
+	} {
+		files := map[string]string{"etc/config/netconfig": netconfigDHCP, "var/run/udhcpc_eth0.pid": "1233\n"}
+		if c.file != "-" {
+			files["etc/dhcp-vendor-class"] = c.file
+		}
+		r := rootWith(t, files)
+		if got := (NetApplier{Root: r}).vendorClass(); got != c.want {
+			t.Errorf("%q: %q, want %q", c.file, got, c.want)
+		}
+		// both the rename's restart (no systemd) and an address change start the client with it
+		rec := &recorder{}
+		a := NetApplier{Root: r, Iface: "eth0", Run: rec.run}
+		a.RenewLease(context.Background(), "attic")
+		if err := a.Apply(context.Background(), NetworkSettings{Hostname: "attic", Mode: "dhcp", DNS: []string{}}); err != nil {
+			t.Fatal(err)
+		}
+		want := "-F attic -V " + c.want + " -s /bin/dhcp.script"
+		if n := strings.Count(strings.Join(rec.Calls(), "\n"), want); n != 2 {
+			t.Errorf("%q: %d clients with %q in\n%s", c.file, n, want, strings.Join(rec.Calls(), "\n"))
+		}
+	}
+}
+
 // TestRenameDHCP (openccu-lite task 62): a hostname-only change on a DHCP setup asks the server
 // for a lease under the new name - through the unit's reload with systemd, by restarting udhcpc
 // without - and /etc/hosts keeps the lines that are not the host's own.

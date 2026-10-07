@@ -34,9 +34,11 @@ import (
 )
 
 const (
-	// PerSubject and Total are the stream limits (D-79): 2 per token or session, 16 in all,
-	// SSE and WebSocket counted together.
-	PerSubject = 2
+	// PerSubject and Total are the stream limits (D-79): 3 per token or session by default, 16
+	// in all, SSE and WebSocket counted together. The per-session limit is occulited.json's
+	// rpc.streams_per_session (occulited task 19: it was 2, and the Control app keeps a stream per
+	// window open - a wall tablet, a phone and a desktop under one account).
+	PerSubject = 3
 	Total      = 16
 	// Heartbeat is the SSE ": ping" and the WebSocket ping interval; a client treats 45 s of
 	// silence as a dead connection.
@@ -60,13 +62,19 @@ type Config struct {
 	Timeout time.Duration
 	Log     *slog.Logger
 	Now     func() time.Time
-	// PerSubject and Total override the limits (tests).
+	// PerSubject and Total override the limits: PerSubject from occulited.json's
+	// rpc.streams_per_session, Total in the tests. 0 = the default.
 	PerSubject, Total int
 	// Heartbeat overrides the interval (tests).
 	Heartbeat time.Duration
 	// Trace takes the calls, answers, stream deliveries and stream life as lines (task 79);
 	// nil = no trace.
 	Trace rpctrace.Tracing
+	// Wrote is told every setValue and putParamset an interface took (a multicall's inner
+	// calls one by one), after its answer: the interface processes send no event for some
+	// writes - the acknowledgement of a sticky service message, occulited B-46 - so whoever
+	// keeps such a value reads it again. nil = nobody.
+	Wrote func(iface string, c Call)
 }
 
 // sourceKey carries who calls and how (xmlrpc or json) from the HTTP layer to Forward's
@@ -148,6 +156,9 @@ func New(cfg Config) *Service {
 	}
 	return &Service{cfg: cfg, log: cfg.Log, streams: map[string]*Stream{}, client: &http.Client{Timeout: cfg.Timeout}}
 }
+
+// Limits are the stream limits in force: per token or session, and in total.
+func (s *Service) Limits() (perSubject, total int) { return s.cfg.PerSubject, s.cfg.Total }
 
 // Log is the service's logger, for the HTTP layer's lines.
 func (s *Service) Log() *slog.Logger { return s.log }
@@ -266,13 +277,33 @@ func Calls(c Call) []Call {
 	return out
 }
 
+// Address is the address a call names in its first parameter (setValue, putParamset, getValue
+// and the like), ok false when it has none or it is not a string.
+func Address(c Call) (string, bool) {
+	if len(c.Params) == 0 || c.Params[0] == nil {
+		return "", false
+	}
+	q := xmlrpc.Q(c.Params[0])
+	addr := q.String()
+	return addr, q.Err() == nil && addr != ""
+}
+
 // Forward sends one call to the interface and returns the daemon's value, a *Fault it
 // answered, or ErrDown. The request goes out in ISO-8859-1 as the daemons speak it (a
 // character outside Latin-1 becomes a numeric character reference, which is valid XML), the
 // answer is decoded by its declared charset.
 func (s *Service) Forward(ctx context.Context, i Interface, c Call) (v *xmlrpc.Value, err error) {
 	answer := s.traceCall(ctx, i, c)
-	defer func() { answer(v, err) }()
+	defer func() {
+		answer(v, err)
+		if err == nil && s.cfg.Wrote != nil {
+			for _, ic := range Calls(c) {
+				if ic.Method == "setValue" || ic.Method == "putParamset" {
+					s.cfg.Wrote(i.Name, ic)
+				}
+			}
+		}
+	}()
 	body, err := encodeCall(c)
 	if err != nil {
 		return nil, err

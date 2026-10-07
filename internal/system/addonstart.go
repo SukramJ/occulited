@@ -14,8 +14,8 @@ import (
 // retries within seconds and logs no errors while it waits. occulited writes that as one line to
 // /usr/local/etc/config/addon-policy/<id>.start, and the fork's occu-addons generator reads the
 // file at the next boot: such an addon's unit is ordered after the network, lighttpd and
-// occulited only, and merely Wants= its interface units (its needs, or rfd and hmipserver when it
-// declares none), so it starts before they are ready.
+// occulited only, not on its interface units, so it starts before they are ready. It does not
+// start them either (openccu-lite B-308: no addon unit has Wants= on an interface unit).
 //
 //	(no file)   the default ordering, after the addon's needs
 //	early       started early

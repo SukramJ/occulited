@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -498,6 +499,28 @@ func TestStreamDevicesAndOverflow(t *testing.T) {
 	}
 }
 
+// occulited task 19: 3 streams per token or session unless occulited.json says otherwise, and
+// Limits says the ones in force
+func TestLimitsDefault(t *testing.T) {
+	_, svc, _ := rig(t, Config{})
+	if per, total := svc.Limits(); per != 3 || total != 16 {
+		t.Fatalf("defaults: %d %d", per, total)
+	}
+	a := Subject{Kind: "session", Name: "a"}
+	for i := 0; i < 3; i++ {
+		if _, err := svc.Open(a, "sse", "", Filter{}); err != nil {
+			t.Fatalf("stream %d: %v", i+1, err)
+		}
+	}
+	if _, err := svc.Open(a, "sse", "", Filter{}); !errors.Is(err, ErrLimit) || !strings.Contains(err.Error(), "3 per token") {
+		t.Fatalf("fourth: %v", err)
+	}
+	_, svc5, _ := rig(t, Config{PerSubject: 5})
+	if per, _ := svc5.Limits(); per != 5 {
+		t.Fatalf("configured: %d", per)
+	}
+}
+
 func TestLimitsDisabledAndRevoked(t *testing.T) {
 	_, svc, _ := rig(t, Config{PerSubject: 2, Total: 3})
 	a := Subject{Kind: "token", Name: "a"}
@@ -786,6 +809,43 @@ func TestStreamCarries(t *testing.T) {
 			if got := (Stream{Filter: tc.f}).Carries(iface); got != want {
 				t.Errorf("%+v carries %s: %v", tc.f, iface, got)
 			}
+		}
+	}
+}
+
+// B-46: Wrote names every setValue and putParamset an interface took, a multicall's one by one,
+// and nothing else - not a read, not a call that failed.
+func TestWroteNamesTheWritesAnInterfaceTook(t *testing.T) {
+	var got []string
+	_, svc, _ := rig(t, Config{Wrote: func(iface string, c Call) {
+		a, _ := Address(c)
+		got = append(got, iface+" "+c.Method+" "+a)
+	}})
+	i, _ := svc.Lookup("HmIP-RF")
+	str := xmlrpc.NewString
+	call := func(c Call) {
+		t.Helper()
+		if _, err := svc.Forward(context.Background(), i, c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	call(Call{Method: "setValue", Params: []*xmlrpc.Value{str("ABC0000001:0"), str("STICKY_UNREACH"), xmlrpc.NewBool(false)}})
+	call(Call{Method: "getValue", Params: []*xmlrpc.Value{str("ABC0000001:0"), str("UNREACH")}})
+	inner := func(m string, ps ...interface{}) *xmlrpc.Value {
+		v, _ := xmlrpc.NewMap(map[string]interface{}{"methodName": m, "params": ps})
+		return v
+	}
+	call(Call{Method: "system.multicall", Params: []*xmlrpc.Value{{Array: &xmlrpc.Array{Data: []*xmlrpc.Value{inner("getValue", "ABC0000002:1", "STATE"), inner("setValue", "ABC0000002:0", "STICKY_UNREACH", false)}}}}})
+	// a fault is no write
+	if _, err := svc.Forward(context.Background(), i, Call{Method: "putParamset", Params: []*xmlrpc.Value{str("ABC0000001:0"), str("VALUES")}}); err == nil {
+		t.Fatal("the fake has no putParamset: a fault was expected")
+	}
+	if fmt.Sprint(got) != "[HmIP-RF setValue ABC0000001:0 HmIP-RF setValue ABC0000002:0]" {
+		t.Fatalf("wrote: %v", got)
+	}
+	for c, want := range map[*Call]string{{Method: "ping"}: "", {Method: "setValue", Params: []*xmlrpc.Value{{Array: &xmlrpc.Array{}}}}: ""} {
+		if a, ok := Address(*c); ok || a != want {
+			t.Errorf("Address(%+v) = %q, %v", c, a, ok)
 		}
 	}
 }

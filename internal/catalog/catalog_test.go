@@ -102,9 +102,14 @@ func TestRepositoryCatalogue(t *testing.T) {
 			t.Errorf("%s: no catalogue entry names it", n)
 		}
 	}
-	// homekit-ccu declares requires.rega: it is no exception to the ReGa scan
-	if ids := RegaFreeAdapterIDs(s.BundledManifests); strings.Join(ids, ",") != "ccu-jack,jp-hb-devices-addon" {
+	// homekit-ccu and CCU-Jack declare requires.rega: they are no exception to the ReGa scan.
+	// occulited B-32: CCU-Jack 2.13.0 waits for ReGaHss before it starts its interfaces, so the
+	// scan must flag an installed one and the page must warn before its install
+	if ids := RegaFreeAdapterIDs(s.BundledManifests); strings.Join(ids, ",") != "jp-hb-devices-addon" {
 		t.Errorf("%v", ids)
+	}
+	if m := s.Manifest("ccu-jack"); m == nil || !m.NeedsRega() {
+		t.Errorf("CCU-Jack needs the ReGa: %+v", m)
 	}
 	if s.Manifest("jp-hb-devices-addon") == nil || s.Manifest("nope") != nil {
 		t.Error("Manifest by id")

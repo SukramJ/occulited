@@ -159,6 +159,12 @@ func Hotplug(ctx context.Context, root string, d Detector, settle time.Duration,
 		return rep, err
 	}
 	defer unlock()
+	closed := false // the gate (B-307) is open again on every way out, a panic in the write included
+	defer func() {
+		if closed {
+			_ = OpenGate(root)
+		}
+	}()
 	for round := 0; round < 3; round++ {
 		d.sleep(settle)
 		for _, f := range BusyFiles {
@@ -224,6 +230,16 @@ func Hotplug(ctx context.Context, root string, d Detector, settle time.Duration,
 		} else {
 			logf("hotplug: restarting %s", strings.Join(aff, ", "))
 		}
+		// openccu-lite B-307: no start from outside (an addon's Wants=, a Restart=) on the old
+		// plan's files between the stop and the write
+		gated := len(aff) > 0
+		if gated {
+			if err := CloseGate(root, HotplugGateLimit); err != nil {
+				logf("hotplug: the radio units could not be gated: %v", err)
+				gated = false
+			}
+			closed = closed || gated
+		}
 		for i := len(aff) - 1; i >= 0; i-- {
 			if _, err := d.run()(ctx, "systemctl", "stop", "--", aff[i]+".service"); err != nil {
 				logf("hotplug: stopping %s: %v", aff[i], err)
@@ -231,10 +247,21 @@ func Hotplug(ctx context.Context, root string, d Detector, settle time.Duration,
 		}
 		_, werr := write(ctx, root, d, det, in, p, logf)
 		// the daemons come back whether the write worked or not; a unit the plan does not need
-		// is skipped by its condition
+		// is skipped by its condition. Each is let through the gate right before its start, in
+		// boot order, and the gate opens after the last.
 		for _, u := range aff {
+			if gated {
+				if err := ReleaseGate(root, u); err != nil {
+					logf("hotplug: releasing %s: %v", u, err)
+				}
+			}
 			if _, err := d.run()(ctx, "systemctl", "start", "--", u+".service"); err != nil {
 				logf("hotplug: starting %s: %v", u, err)
+			}
+		}
+		if gated {
+			if err := OpenGate(root); err != nil {
+				logf("hotplug: the radio units' gate could not be opened: %v", err)
 			}
 		}
 		rep.Restarted = append(rep.Restarted, aff...)

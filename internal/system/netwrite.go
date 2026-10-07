@@ -237,7 +237,7 @@ func (a NetApplier) RenewLease(ctx context.Context, hostname string) LeaseRenewa
 			_, _ = run(ctx, "kill", strconv.Itoa(pid))
 		}
 		var out []byte
-		out, err = run(ctx, "/sbin/udhcpc", "-b", "-t", "20", "-T", "3", "-S", "-x", "hostname:"+hostname, "-i", iface, "-F", hostname, "-V", "eQ3-CCU3", "-s", "/bin/dhcp.script", "-p", "/var/run/udhcpc_"+iface+".pid")
+		out, err = run(ctx, "/sbin/udhcpc", "-b", "-t", "20", "-T", "3", "-S", "-x", "hostname:"+hostname, "-i", iface, "-F", hostname, "-V", a.vendorClass(), "-s", "/bin/dhcp.script", "-p", "/var/run/udhcpc_"+iface+".pid")
 		if err != nil {
 			err = fmt.Errorf("udhcpc: %w: %s", err, strings.TrimSpace(string(out)))
 		}
@@ -258,6 +258,32 @@ func (a NetApplier) RenewLease(ctx context.Context, hostname string) LeaseRenewa
 	return res
 }
 
+// vendorRe is what a DHCP vendor class (option 60) may be: one word, as the helper's shape takes it.
+var vendorRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+
+// vendorClass is the DHCP vendor class (option 60) the box's own client sends:
+// DHCP_VENDOR_ID from /etc/dhcp-vendor-class, which eQ3StartNetwork, checkDHCP and
+// lite-network-reload read too - openccu-lite on the fork's images (B-243) - and a CCU3's
+// eQ3-CCU3, eQ3StartNetwork's default, without the file (openccu-lite task 327: a client this
+// daemon started sent eQ3-CCU3 while the images send openccu-lite).
+func (a NetApplier) vendorClass() string {
+	const fallback = "eQ3-CCU3"
+	b, err := os.ReadFile(a.Root.join("/etc/dhcp-vendor-class"))
+	if err != nil {
+		return fallback
+	}
+	v := ""
+	for _, line := range strings.Split(string(b), "\n") {
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "DHCP_VENDOR_ID="); ok {
+			v = strings.Trim(strings.TrimSpace(rest), `"'`)
+		}
+	}
+	if !vendorRe.MatchString(v) {
+		return fallback
+	}
+	return v
+}
+
 // Apply brings the interface to s. It is not transactional; NetTx wraps it.
 func (a NetApplier) Apply(ctx context.Context, s NetworkSettings) error {
 	if err := s.Validate(); err != nil {
@@ -273,7 +299,7 @@ func (a NetApplier) Apply(ctx context.Context, s NetworkSettings) error {
 	switch s.Mode {
 	case "dhcp":
 		_, _ = run(ctx, "/sbin/ip", "-4", "addr", "flush", "dev", iface)
-		out, err := run(ctx, "/sbin/udhcpc", "-b", "-t", "20", "-T", "3", "-S", "-x", "hostname:"+s.Hostname, "-i", iface, "-F", s.Hostname, "-V", "eQ3-CCU3", "-s", "/bin/dhcp.script", "-p", "/var/run/udhcpc_"+iface+".pid")
+		out, err := run(ctx, "/sbin/udhcpc", "-b", "-t", "20", "-T", "3", "-S", "-x", "hostname:"+s.Hostname, "-i", iface, "-F", s.Hostname, "-V", a.vendorClass(), "-s", "/bin/dhcp.script", "-p", "/var/run/udhcpc_"+iface+".pid")
 		if err != nil {
 			return fmt.Errorf("udhcpc: %w: %s", err, strings.TrimSpace(string(out)))
 		}

@@ -365,3 +365,55 @@ func TestWithTheDatabaseFile(t *testing.T) {
 	cancel2()
 	<-m2.Done()
 }
+
+// B-46: what another reader of the interface found on a channel is taken where it differs from
+// the store - rfd's acknowledged STICKY_UNREACH comes without an event - and goes on the bus as a
+// sweep's report; the same value is left alone, and an event after the read began stays.
+func TestReconcile(t *testing.T) {
+	var recorded []string
+	s := &Store{OnObserve: func(_, _, dp string, _ any, _ time.Time) { recorded = append(recorded, dp) }}
+	s.observe("BidCos-RF", "D:0", "STICKY_UNREACH", true, at(0), SourceEvent)
+	s.observe("BidCos-RF", "D:0", "UNREACH", false, at(0), SourceEvent)
+	recorded = nil
+	var pub []rpcsub.Message
+	publish := func(m rpcsub.Message) { pub = append(pub, m) }
+	n := s.Reconcile("BidCos-RF", "D:0", map[string]any{"STICKY_UNREACH": false, "UNREACH": false, "LOWBAT": false, "RSSI_DEVICE": -60}, at(60), publish)
+	if n != 2 || len(pub) != 2 || pub[0].Key != "LOWBAT" || pub[1].Key != "STICKY_UNREACH" {
+		t.Fatalf("changed %d, published %+v", n, pub)
+	}
+	m := pub[1]
+	if m.Type != "state" || m.Interface != "BidCos-RF" || m.Address != "D:0" || m.Value != false || m.Source != SourceSweep || m.TS != at(60).Format(time.RFC3339Nano) || m.PreviousForS == nil || *m.PreviousForS != 60 {
+		t.Fatalf("the state message: %+v", m)
+	}
+	if e, _ := s.Get("BidCos-RF", "D:0", "STICKY_UNREACH"); e.Value != false || !e.LC.Equal(at(60)) || e.Source != SourceSweep {
+		t.Fatalf("the entry: %+v", e)
+	}
+	// the value that was right keeps its report, and only what differed reached the history
+	if e, _ := s.Get("BidCos-RF", "D:0", "UNREACH"); !e.TS.Equal(at(0)) || e.Source != SourceEvent {
+		t.Fatalf("an equal value was touched: %+v", e)
+	}
+	if fmt.Sprint(recorded) != "[LOWBAT STICKY_UNREACH]" {
+		t.Fatalf("observed %v", recorded)
+	}
+	// the same again: nothing
+	if n := s.Reconcile("BidCos-RF", "D:0", map[string]any{"STICKY_UNREACH": false, "LOWBAT": false}, at(120), publish); n != 0 || len(pub) != 2 {
+		t.Fatalf("a second pass changed %d", n)
+	}
+	// an event that came in after the read began is the newer report
+	s.observe("BidCos-RF", "D:0", "STICKY_UNREACH", true, at(200), SourceEvent)
+	if n := s.Reconcile("BidCos-RF", "D:0", map[string]any{"STICKY_UNREACH": false}, at(190), publish); n != 0 {
+		t.Fatal("a read that began before the event overrode it")
+	}
+	if e, _ := s.Get("BidCos-RF", "D:0", "STICKY_UNREACH"); e.Value != true {
+		t.Fatalf("the entry after the late read: %+v", e)
+	}
+	// an entry restored from the file is confirmed by an equal value too
+	r := &Store{}
+	r.RestoreEntries(map[string]map[string][]byte{"BidCos-RF": {"D:0\x00LOWBAT": encode(&entry{value: false, ts: at(0), lc: at(0)})}})
+	if n := r.Reconcile("BidCos-RF", "D:0", map[string]any{"LOWBAT": false}, at(10), nil); n != 1 {
+		t.Fatalf("an unconfirmed entry was not confirmed: %d", n)
+	}
+	if e, _ := r.Get("BidCos-RF", "D:0", "LOWBAT"); !e.Confirmed {
+		t.Fatalf("%+v", e)
+	}
+}

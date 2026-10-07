@@ -19,11 +19,12 @@ import (
 type fakeIface struct {
 	mu     sync.Mutex
 	values map[string]map[string]any // channel -> key -> value
+	read   map[string]int            // channel -> how often its VALUES were read
 	srv    *httptest.Server
 }
 
 func newFakeIface(t *testing.T) *fakeIface {
-	f := &fakeIface{values: map[string]map[string]any{}}
+	f := &fakeIface{values: map[string]map[string]any{}, read: map[string]int{}}
 	d := &xmlrpc.BasicDispatcher{}
 	desc := func(addr, typ, parent string, ch int) *xmlrpc.Value {
 		m := map[string]interface{}{"ADDRESS": addr, "TYPE": typ, "PARENT": parent, "CHILDREN": []interface{}{}, "FIRMWARE": "1.0", "AVAILABLE_FIRMWARE": ""}
@@ -41,13 +42,15 @@ func newFakeIface(t *testing.T) *fakeIface {
 	})
 	d.HandleFunc("getParamsetDescription", func(*xmlrpc.Value) (*xmlrpc.Value, error) {
 		p := func(flags int) map[string]interface{} { return map[string]interface{}{"FLAGS": flags, "TYPE": "BOOL"} }
-		v, _ := xmlrpc.NewMap(map[string]interface{}{"UNREACH": p(9), "LOWBAT": p(9), "CONFIG_PENDING": p(9), "RSSI_DEVICE": p(1)})
+		// STICKY_UNREACH as rfd describes it: visible, service and sticky (FLAGS 25)
+		v, _ := xmlrpc.NewMap(map[string]interface{}{"UNREACH": p(9), "STICKY_UNREACH": p(25), "LOWBAT": p(9), "CONFIG_PENDING": p(9), "RSSI_DEVICE": p(1)})
 		return v, nil
 	})
 	d.HandleFunc("getParamset", func(args *xmlrpc.Value) (*xmlrpc.Value, error) {
 		ch := xmlrpc.Q(args).Idx(0).String()
 		f.mu.Lock()
 		defer f.mu.Unlock()
+		f.read[ch]++
 		vals := map[string]interface{}{}
 		for k, v := range f.values[ch] {
 			vals[k] = v
@@ -64,6 +67,12 @@ func (f *fakeIface) set(ch string, vals map[string]any) {
 	f.mu.Lock()
 	f.values[ch] = vals
 	f.mu.Unlock()
+}
+
+func (f *fakeIface) reads(ch string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.read[ch]
 }
 
 func (f *fakeIface) interfaces() []interfaces.Interface {
@@ -157,4 +166,153 @@ func TestSweepKeepsEntriesOfAnInterfaceThatDoesNotAnswer(t *testing.T) {
 	if l.Count != 1 || l.Errors["HmIP-RF"] == "" {
 		t.Fatalf("a dead interface took its messages with it: %+v", l)
 	}
+}
+
+// run starts the store's loop and stops it with the test.
+func run(t *testing.T, st *Store) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); st.Run(ctx) }()
+	t.Cleanup(func() { cancel(); <-done })
+}
+
+func eventually(t *testing.T, what string, ok func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); !ok(); time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("it never happened: %s", what)
+		}
+	}
+}
+
+// B-46: rfd resets STICKY_UNREACH when it is acknowledged and sends no event for it. While a
+// sticky message stands, its device's channel 0 is read again every Recheck - and only that
+// device's; what the reads find goes to Report.
+func TestAStickyMessageIsReadAgainUntilItIsAcknowledged(t *testing.T) {
+	fi := newFakeIface(t)
+	fi.set("ABC0000001:0", map[string]any{"UNREACH": false, "STICKY_UNREACH": true, "LOWBAT": false})
+	fi.set("ABC0000002:0", map[string]any{"UNREACH": false, "LOWBAT": true})
+	var mu sync.Mutex
+	reported := map[string][]any{}
+	changes := 0
+	st := &Store{Interfaces: fi.interfaces, Timeout: 5 * time.Second, Every: time.Hour, Recheck: 20 * time.Millisecond,
+		OnChange: func() { mu.Lock(); changes++; mu.Unlock() },
+		Report: func(iface, channel string, vals map[string]any, _ time.Time) {
+			mu.Lock()
+			reported[iface+" "+channel] = append(reported[iface+" "+channel], vals["STICKY_UNREACH"])
+			mu.Unlock()
+		}}
+	run(t, st)
+	eventually(t, "the sweep", func() bool { return st.List().Count == 2 })
+	eventually(t, "three reads of the device with the sticky message", func() bool { return fi.reads("ABC0000001:0") >= 4 })
+	if n := fi.reads("ABC0000002:0"); n != 1 {
+		t.Fatalf("the device without a sticky message was read %d times, the sweep reads it once", n)
+	}
+	mu.Lock()
+	if changes != 1 {
+		t.Fatalf("reads that found nothing new counted as %d changes", changes-1)
+	}
+	mu.Unlock()
+	// the acknowledgement: the value goes, no event comes
+	fi.set("ABC0000001:0", map[string]any{"UNREACH": false, "STICKY_UNREACH": false, "LOWBAT": false})
+	eventually(t, "the acknowledged message goes", func() bool { return keys(st.List()) == "ABC0000002:0:LOWBAT=start" })
+	mu.Lock()
+	got := reported["HmIP-RF ABC0000001:0"]
+	sweep := reported["HmIP-RF ABC0000002:0"]
+	if len(got) < 2 || got[0] != true || got[len(got)-1] != false || len(sweep) != 1 || changes != 2 {
+		t.Fatalf("reported %v, the sweep's %v, changes %d", got, sweep, changes)
+	}
+	mu.Unlock()
+	// nothing sticky stands: the reading ends (one read may have been on its way)
+	n := fi.reads("ABC0000001:0")
+	time.Sleep(150 * time.Millisecond)
+	if after := fi.reads("ABC0000001:0"); after > n+1 {
+		t.Fatalf("still reading after the acknowledgement: %d -> %d", n, after)
+	}
+}
+
+// B-46: UNREACH=false is the one event the device's return sends; the acknowledgement that
+// follows sends none, so the event plans a read a moment later.
+func TestAnEventThatClearsUnreachReadsTheDeviceSoon(t *testing.T) {
+	fi := newFakeIface(t)
+	fi.set("ABC0000001:0", map[string]any{"UNREACH": true, "STICKY_UNREACH": true})
+	st := &Store{Interfaces: fi.interfaces, Timeout: 5 * time.Second, Every: time.Hour, Recheck: time.Hour, RecheckAfter: 20 * time.Millisecond}
+	run(t, st)
+	eventually(t, "the sweep", func() bool { return st.List().Count == 2 })
+	fi.set("ABC0000001:0", map[string]any{"UNREACH": false, "STICKY_UNREACH": false})
+	st.Event(rpcsub.Event{Interface: "HmIP-RF", Address: "ABC0000001:0", Key: "UNREACH", Value: false, Time: time.Now()})
+	eventually(t, "the sticky message goes without an event of its own", func() bool { return st.List().Count == 0 })
+	if n := fi.reads("ABC0000001:0"); n != 2 {
+		t.Fatalf("%d reads: the sweep's and one after the event are two", n)
+	}
+	// an event that clears a message of a device without a sticky one plans nothing
+	fi.set("ABC0000002:0", map[string]any{"LOWBAT": true})
+	st.Event(rpcsub.Event{Interface: "HmIP-RF", Address: "ABC0000002:0", Key: "LOWBAT", Value: true, Time: time.Now()})
+	st.Event(rpcsub.Event{Interface: "HmIP-RF", Address: "ABC0000002:0", Key: "LOWBAT", Value: false, Time: time.Now()})
+	time.Sleep(100 * time.Millisecond)
+	if n := fi.reads("ABC0000002:0"); n != 1 {
+		t.Fatalf("a device without a sticky message was read again: %d", n)
+	}
+}
+
+// B-46: a write to a maintenance channel that passed through occulited is read back; the read
+// reconciles the whole channel by the sweep's rules and keeps the entries when it fails.
+func TestRecheckSoonReadsOneDevice(t *testing.T) {
+	fi := newFakeIface(t)
+	fi.set("ABC0000001:0", map[string]any{"LOWBAT": true, "CONFIG_PENDING": false})
+	fi.set("ABC0000002:0", map[string]any{"UNREACH": true})
+	st := &Store{Interfaces: fi.interfaces, Timeout: time.Second, Every: time.Hour, Recheck: time.Hour}
+	run(t, st)
+	eventually(t, "the sweep", func() bool { return st.List().Count == 2 })
+	fi.set("ABC0000001:0", map[string]any{"LOWBAT": false, "CONFIG_PENDING": true})
+	fi.set("ABC0000002:0", map[string]any{"UNREACH": false}) // not asked for: stays until its own event or the sweep
+	st.RecheckSoon("HmIP-RF", "ABC0000001", 0)
+	eventually(t, "the read", func() bool {
+		return keys(st.List()) == "ABC0000002:0:UNREACH=start ABC0000001:0:CONFIG_PENDING=start"
+	})
+	// an interface that does not answer keeps the device's messages
+	fi.srv.Close()
+	st.RecheckSoon("HmIP-RF", "ABC0000001", 0)
+	time.Sleep(100 * time.Millisecond)
+	if st.List().Count != 2 {
+		t.Fatalf("a failed read took messages with it: %q", keys(st.List()))
+	}
+}
+
+// Without a description the name decides what is sticky, as it decides what is a service message.
+func TestStickyByNameBeforeTheFirstSweep(t *testing.T) {
+	st := &Store{}
+	st.Event(rpcsub.Event{Interface: "BidCos-RF", Address: "JEQ9000001:0", Key: "STICKY_UNREACH", Value: true, Time: time.Now()})
+	st.Event(rpcsub.Event{Interface: "BidCos-RF", Address: "JEQ9000002:0", Key: "LOWBAT", Value: true, Time: time.Now()})
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if _, ok := st.due["BidCos-RF|JEQ9000001"]; !ok || len(st.due) != 1 {
+		t.Fatalf("planned reads: %v", st.due)
+	}
+}
+
+// A read asked for before any sweep got through (the interface was down at the start) works on
+// an empty store.
+func TestRecheckSoonBeforeTheFirstSweepGotThrough(t *testing.T) {
+	fi, down := newFakeIface(t), newFakeIface(t)
+	down.srv.Close()
+	up := false
+	var mu sync.Mutex
+	st := &Store{Timeout: time.Second, Every: time.Hour, Recheck: time.Hour, Interfaces: func() []interfaces.Interface {
+		mu.Lock()
+		defer mu.Unlock()
+		if !up {
+			return down.interfaces()
+		}
+		return fi.interfaces()
+	}}
+	run(t, st)
+	eventually(t, "the failed sweep", func() bool { return st.List().Errors["HmIP-RF"] != "" })
+	fi.set("ABC0000001:0", map[string]any{"UNREACH": true})
+	mu.Lock()
+	up = true
+	mu.Unlock()
+	st.RecheckSoon("HmIP-RF", "ABC0000001", 0)
+	eventually(t, "the read", func() bool { return keys(st.List()) == "ABC0000001:0:UNREACH=start" })
 }

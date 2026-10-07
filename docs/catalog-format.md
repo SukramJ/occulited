@@ -38,12 +38,15 @@ homepage, the release source, compatibility, the `runtime` block. Not anywhere: 
 - **The image carries a copy** of this file and of `catalog/manifests/` as `/etc/occulite/catalog.json` and
   `/etc/occulite/manifests/`, installed by the occulited package from the same commit as the binary. Until the
   user's first check the Addons page shows the entries by their repository name, with the adapter manifests'
-  details already there.
+  details already there, marked as *the built-in list of <date>*, and a notice that the catalogue is loaded from
+  GitHub with a *Load the catalogue now* button.
 - **The user's update check** (*Check for updates* on the Addons page) fetches this file from the configured URLs
   (`catalog.urls` in `occulited.json`; the published copy first, the bundled one as the fallback; the first entry
   per repository wins), then every entry's manifest at its latest release tag, the star counts and the latest
   releases. Everything is cached in occulited's state directory and shown from the cache; no fetch happens on a
-  page load or in the background (D-90).
+  page load or in the background (D-90). A check that cannot fetch the published file, or reads no addon's
+  manifest, is a failed check: the page says *check failed* with the host and the reason and offers a retry, the
+  list it had stays, and when the checks keep failing (three in a row, or over a day) the Status page warns.
 - **An install from the page** resolves the release from the manifest's `release`, downloads the asset, checks a
   `<asset>.sha256` sidecar when the release has one, and hands the archive to the same installer a manual upload
   takes. The package's own manifest is what gets applied; the fetched one stands in only when the package carries

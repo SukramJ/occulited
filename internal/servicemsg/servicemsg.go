@@ -15,10 +15,19 @@
 // same active value again changes nothing; an active value that changes to another active
 // value is a new message with a new since. What a sweep finds already active is "seen: start" -
 // the real start is earlier; what an event made active is "seen: event".
+//
+// A sticky message (the description's FLAGS & 0x10: STICKY_UNREACH, STICKY_SABOTAGE) is the one
+// kind no event clears: the interface process resets it when someone acknowledges it with
+// setValue and tells nobody (occulited B-46, measured on rfd). So while one stands, its device's
+// channel 0 is read again every minute, a few seconds after an event cleared another message of
+// the device, and right after a write to that channel passed through occulited - the interface
+// processes answer channel 0 from their cache, a read costs no airtime. What any read finds goes
+// to Report as well, so the state store and the stream's clients learn what no event told them.
 package servicemsg
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sort"
 	"strings"
@@ -58,15 +67,27 @@ type Store struct {
 	// takes it as its since instead of the sweep's time, so a fault that stood for three weeks
 	// does not read as "since the last restart". nil, or false: the sweep's time.
 	Since func(iface, address, dp string, value any) (time.Time, bool)
+	// Recheck is how often the channel 0 of a device with an active sticky message is read
+	// again; a minute by default.
+	Recheck time.Duration
+	// RecheckAfter is how soon it is read after an event cleared another message of the device;
+	// 5 seconds by default.
+	RecheckAfter time.Duration
+	// Report is told every channel 0 the store read, with the time its read began (may be nil):
+	// the state store takes what differs from its own entries and puts it on the bus.
+	Report func(iface, channel string, values map[string]any, at time.Time)
 
 	mu       sync.Mutex
 	active   map[string]Message // key: interface|address|channel:key
 	types    map[string]string  // interface|address -> device type, from the sweep
 	flags    map[string]map[string]bool
+	sticky   map[string]map[string]bool // interface|type|channel -> the sticky datapoints
+	due      map[string]time.Time       // interface|device -> when its channel 0 is read again
 	swept    time.Time
 	sweepErr map[string]string
 	sweeping bool
 	wake     chan struct{}
+	kick     chan struct{}
 }
 
 func (s *Store) now() time.Time {
@@ -131,6 +152,91 @@ func (s *Store) isService(iface, address, channel, dp string) bool {
 	return knownServiceKeys[dp] || strings.HasPrefix(dp, "ERROR_")
 }
 
+// isSticky says whether a datapoint keeps its value until it is acknowledged: by the
+// description's sticky flag when the type is known, by its name when it is not.
+func (s *Store) isSticky(iface, address, channel, dp string) bool {
+	typ := s.types[iface+"|"+address]
+	if f, ok := s.sticky[iface+"|"+typ+"|"+channel]; ok && typ != "" {
+		return f[dp]
+	}
+	return strings.HasPrefix(dp, "STICKY_")
+}
+
+// hasSticky says whether a device has an active sticky message (the caller holds the lock).
+func (s *Store) hasSticky(iface, device string) bool {
+	for _, m := range s.active {
+		if m.Interface == iface && m.Address == device && s.isSticky(iface, device, m.Channel, m.Key) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Store) recheck() time.Duration {
+	if s.Recheck > 0 {
+		return s.Recheck
+	}
+	return time.Minute
+}
+
+func (s *Store) recheckAfter() time.Duration {
+	if s.RecheckAfter > 0 {
+		return s.RecheckAfter
+	}
+	return 5 * time.Second
+}
+
+// soon makes a device's channel 0 due at the given time unless it is due earlier already; it
+// says whether the run loop's timer has to be set again (the caller holds the lock).
+func (s *Store) soon(iface, device string, at time.Time) bool {
+	k := iface + "|" + device
+	if cur, ok := s.due[k]; ok && !cur.After(at) {
+		return false
+	}
+	if s.due == nil {
+		s.due = map[string]time.Time{}
+	}
+	s.due[k] = at
+	return true
+}
+
+// plan gives every device with an active sticky message its next read, Recheck from now, unless
+// it has one; the return value is soon's (the caller holds the lock).
+func (s *Store) plan(now time.Time) bool {
+	added := false
+	for _, m := range s.active {
+		if _, ok := s.due[m.Interface+"|"+m.Address]; ok || !s.isSticky(m.Interface, m.Address, m.Channel, m.Key) {
+			continue
+		}
+		added = s.soon(m.Interface, m.Address, now.Add(s.recheck())) || added
+	}
+	return added
+}
+
+// nudge tells the run loop that the next read's time changed.
+func (s *Store) nudge() {
+	s.mu.Lock()
+	k := s.kick
+	s.mu.Unlock()
+	if k != nil {
+		select {
+		case k <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// RecheckSoon reads one device's channel 0 again after a moment: a write to it passed through
+// occulited (an acknowledgement over lite-rpc), and the interface process sends no event for it.
+func (s *Store) RecheckSoon(iface, device string, after time.Duration) {
+	s.mu.Lock()
+	ok := s.soon(iface, device, s.now().Add(after))
+	s.mu.Unlock()
+	if ok {
+		s.nudge()
+	}
+}
+
 // apply is one transition; it says whether the active set changed.
 func (s *Store) apply(iface, device, channel, dp string, value any, seen string, at time.Time) bool {
 	k := key(iface, device, channel, dp)
@@ -157,15 +263,28 @@ func (s *Store) apply(iface, device, channel, dp string, value any, seen string,
 // Event is the bus's: a datapoint change (rpcsub.Handler).
 func (s *Store) Event(e rpcsub.Event) {
 	device, channel := splitChannel(e.Address)
+	now := s.now()
 	s.mu.Lock()
 	if s.active == nil {
 		s.active = map[string]Message{}
 	}
 	changed := s.isService(e.Interface, device, channel, e.Key) && s.apply(e.Interface, device, channel, e.Key, e.Value, "event", e.Time)
+	replan := false
+	if changed {
+		// UNREACH went while STICKY_UNREACH stands: the device answers again, and the
+		// acknowledgement that follows will come without an event
+		if !Active(e.Value) && s.hasSticky(e.Interface, device) {
+			replan = s.soon(e.Interface, device, now.Add(s.recheckAfter()))
+		}
+		replan = s.plan(now) || replan
+	}
 	s.mu.Unlock()
 	if changed {
 		s.log().Info("service messages: changed by an event", "interface", e.Interface, "address", e.Address, "key", e.Key, "value", e.Value)
 		s.changed()
+	}
+	if replan {
+		s.nudge()
 	}
 }
 
@@ -198,7 +317,8 @@ func (s *Store) SweepSoon() {
 	}
 }
 
-// Run sweeps at start, on request and every Every, until ctx ends.
+// Run sweeps at start, on request and every Every, and reads the devices that are due in
+// between, until ctx ends.
 func (s *Store) Run(ctx context.Context) {
 	every := s.Every
 	if every == 0 {
@@ -206,25 +326,153 @@ func (s *Store) Run(ctx context.Context) {
 	}
 	s.mu.Lock()
 	s.wake = make(chan struct{}, 1)
-	w := s.wake
+	s.kick = make(chan struct{}, 1)
+	w, k := s.wake, s.kick
 	s.mu.Unlock()
 	t := time.NewTicker(every)
 	defer t.Stop()
 	s.Sweep(ctx)
 	for {
+		var due <-chan time.Time
+		var timer *time.Timer
+		if at, ok := s.nextDue(); ok {
+			timer = time.NewTimer(max(at.Sub(s.now()), 0))
+			due = timer.C
+		}
 		select {
 		case <-ctx.Done():
-			return
 		case <-t.C:
+			s.Sweep(ctx)
 		case <-w:
 			// requests come in bursts (a restart's up, then the reconnect): one sweep per second
 			time.Sleep(time.Second)
 			for len(w) > 0 {
 				<-w
 			}
+			s.Sweep(ctx)
+		case <-k:
+			// the next read's time changed: a new timer
+		case <-due:
+			s.readDue(ctx)
 		}
-		s.Sweep(ctx)
+		if timer != nil {
+			timer.Stop()
+		}
+		if ctx.Err() != nil {
+			return
+		}
 	}
+}
+
+// nextDue is the earliest read that is planned.
+func (s *Store) nextDue() (at time.Time, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, d := range s.due {
+		if !ok || d.Before(at) {
+			at, ok = d, true
+		}
+	}
+	return at, ok
+}
+
+// readDue reads every device whose time has come.
+func (s *Store) readDue(ctx context.Context) {
+	now := s.now()
+	s.mu.Lock()
+	var list []string
+	for k, at := range s.due {
+		if !at.After(now) {
+			list = append(list, k)
+			delete(s.due, k)
+		}
+	}
+	s.mu.Unlock()
+	sort.Strings(list)
+	for _, k := range list {
+		if ctx.Err() != nil {
+			return
+		}
+		iface, device, _ := strings.Cut(k, "|")
+		s.read(ctx, iface, device)
+	}
+}
+
+// read is the sweep for one device: its channel 0 is read and reconciled, by the sweep's rules.
+// A read that fails keeps the entries; a sticky message that still stands is read again in Recheck.
+func (s *Store) read(ctx context.Context, iface, device string) {
+	if s.Interfaces == nil {
+		return
+	}
+	timeout := s.Timeout
+	if timeout == 0 {
+		timeout = 10 * time.Second
+	}
+	channel := device + ":0"
+	at := s.now()
+	var vals map[string]any
+	i, err := interfaces.Find(s.Interfaces(), iface)
+	if err == nil {
+		vals, err = interfaces.ChannelValues(ctx, i, channel, timeout)
+	}
+	var changes []string
+	s.mu.Lock()
+	if s.active == nil {
+		s.active = map[string]Message{} // no sweep and no event has made it yet
+	}
+	if err == nil {
+		seen := map[string]bool{}
+		changes = s.take(iface, channel, vals, at, seen)
+		for k, m := range s.active {
+			if m.Interface == iface && m.Address == device && m.Channel == "0" && !seen[k] {
+				delete(s.active, k)
+				changes = append(changes, m.Key+" gone")
+			}
+		}
+	}
+	replan := s.plan(s.now())
+	s.mu.Unlock()
+	if replan {
+		s.nudge()
+	}
+	if err != nil {
+		s.log().Debug("service messages: a device's channel 0 could not be read again", "interface", iface, "address", channel, "err", err)
+		return
+	}
+	if s.Report != nil {
+		s.Report(iface, channel, vals, at)
+	}
+	if len(changes) > 0 {
+		sort.Strings(changes)
+		s.log().Info("service messages: changed by a read", "interface", iface, "address", channel, "changes", strings.Join(changes, " "))
+		s.changed()
+	}
+}
+
+// take reconciles the store with one channel's VALUES as a read found them (the caller holds the
+// lock): active and stored stays with its since, active and new is created as seen at start,
+// stored and no longer active goes. It marks the service datapoints the answer carried in seen
+// and returns what changed, for the log.
+func (s *Store) take(iface, addr string, vals map[string]any, now time.Time, seen map[string]bool) (changes []string) {
+	device, channel := splitChannel(addr)
+	for dp, v := range vals {
+		if !s.isService(iface, device, channel, dp) {
+			continue
+		}
+		k := key(iface, device, channel, dp)
+		seen[k] = true
+		at := now
+		if _, has := s.active[k]; !has && s.Since != nil {
+			// new to the store: the state store may know since when the value stands
+			if t, ok := s.Since(iface, addr, dp, v); ok && t.Before(now) {
+				at = t
+			}
+		}
+		if s.apply(iface, device, channel, dp, v, "start", at) {
+			changes = append(changes, fmt.Sprintf("%s=%v", dp, v))
+		}
+	}
+	return changes
 }
 
 // Sweep reads every device's maintenance channel and reconciles the store with it: active and
@@ -259,7 +507,7 @@ func (s *Store) Sweep(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		devs, flags, values, err := interfaces.MaintenanceValues(ctx, i, timeout)
+		devs, flags, sticky, values, err := interfaces.MaintenanceValues(ctx, i, timeout)
 		if err != nil {
 			errs[i.Name] = err.Error()
 			continue
@@ -274,6 +522,9 @@ func (s *Store) Sweep(ctx context.Context) {
 		if s.flags == nil {
 			s.flags = map[string]map[string]bool{}
 		}
+		if s.sticky == nil {
+			s.sticky = map[string]map[string]bool{}
+		}
 		seen := map[string]bool{}
 		for _, d := range devs {
 			s.types[i.Name+"|"+d.Address] = d.Type
@@ -281,30 +532,12 @@ func (s *Store) Sweep(ctx context.Context) {
 		for typ, f := range flags {
 			s.flags[i.Name+"|"+typ+"|0"] = f
 		}
+		for typ, f := range sticky {
+			s.sticky[i.Name+"|"+typ+"|0"] = f
+		}
 		for addr, vals := range values {
-			device, channel := splitChannel(addr)
-			for dp, v := range vals {
-				if !s.isService(i.Name, device, channel, dp) {
-					continue
-				}
-				k := key(i.Name, device, channel, dp)
-				seen[k] = true
-				if _, has := s.active[k]; has {
-					// active and stored: the since stays, the value follows only if it changed
-					if s.apply(i.Name, device, channel, dp, v, "start", now) {
-						changed = true
-					}
-					continue
-				}
-				at := now
-				if s.Since != nil {
-					if t, ok := s.Since(i.Name, addr, dp, v); ok && t.Before(now) {
-						at = t
-					}
-				}
-				if s.apply(i.Name, device, channel, dp, v, "start", at) {
-					changed = true
-				}
+			if len(s.take(i.Name, addr, vals, now, seen)) > 0 {
+				changed = true
 			}
 		}
 		// stored, and this interface's sweep did not find it active: gone
@@ -315,14 +548,25 @@ func (s *Store) Sweep(ctx context.Context) {
 			}
 		}
 		s.mu.Unlock()
+		// what the sweep read reaches the state store too: an event that never came cannot pin
+		// its entry (B-46)
+		if s.Report != nil {
+			for addr, vals := range values {
+				s.Report(i.Name, addr, vals, now)
+			}
+		}
 	}
 	s.mu.Lock()
 	s.swept, s.sweepErr = now, errs
 	n := len(s.active)
+	replan := s.plan(s.now())
 	s.mu.Unlock()
 	s.log().Debug("service messages: swept", "active", n, "errors", len(errs))
 	if changed {
 		s.changed()
+	}
+	if replan {
+		s.nudge()
 	}
 }
 

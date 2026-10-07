@@ -122,8 +122,30 @@ const oldDefaultSystemUpdateFeed = "https://api.github.com/repos/hobbyquaker/ope
 // subscriber back on (D-115) - never lighttpd's proxy target, so a LAN client cannot reach it.
 type RPCConfig struct {
 	CallbackListen string `json:"callback_listen,omitempty"`
+	// StreamsPerSession is lite-rpc's limit of open event streams per token or session (occulited
+	// task 19); absent = DefaultStreamsPerSession. See StreamsPerSessionLimit.
+	StreamsPerSession int `json:"streams_per_session,omitempty"`
 	// Trace is the RPC trace's switch (task 79): off, until (with the deadline) or permanent.
 	Trace TraceConfig `json:"trace"`
+}
+
+// DefaultStreamsPerSession and MaxStreamsPerSession bound rpc.streams_per_session: 3 by default
+// (occulited task 19; 2 before), at most lite-rpc's total of 16.
+const (
+	DefaultStreamsPerSession = 3
+	MaxStreamsPerSession     = 16
+)
+
+// StreamsPerSessionLimit is the per-session stream limit in force, and false when the stored value
+// was out of bounds (1-16) and the default stands in for it - the caller logs that.
+func (r RPCConfig) StreamsPerSessionLimit() (int, bool) {
+	switch {
+	case r.StreamsPerSession == 0:
+		return DefaultStreamsPerSession, true
+	case r.StreamsPerSession < 1 || r.StreamsPerSession > MaxStreamsPerSession:
+		return DefaultStreamsPerSession, false
+	}
+	return r.StreamsPerSession, true
 }
 
 // TraceConfig is the RPC trace's switch as stored: a timed trace keeps its deadline (RFC 3339),

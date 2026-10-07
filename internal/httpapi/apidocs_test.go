@@ -314,6 +314,16 @@ func streamChannels(t *testing.T, an *apidoc.Analyzer) []apidoc.Channel {
 			Summary: "Client pairing: the requests, the whole view again on every change", Messages: []apidoc.ChannelMessage{
 				{Name: "pairing", Summary: "The view of GET /api/auth/v1/pairing", Bodies: marshal(".(*AuthAPI).pairingStream")},
 			}},
+		{ID: "shellStream", Address: "/api/system/v1/stream", Scopes: scopes("GET /api/system/v1/stream"),
+			Summary: "The shell's stream (occulited B-53): the addons' revision, the service messages and the pairing requests in one connection",
+			Description: "Query parameter topics: addons, service-messages, pairing (comma-separated or repeated; at least one). " +
+				"Each topic sends the event of its own stream at once and again on every change; pairing needs auth:admin besides system:read. " +
+				"The public mode may open it with topics=service-messages alone.",
+			Messages: []apidoc.ChannelMessage{
+				{Name: "addons", Summary: "topic addons: as GET /api/system/v1/addons/stream", Bodies: marshal(".(*SystemAPI).addonsStream")},
+				{Name: "messages", Summary: "topic service-messages: as GET /api/system/v1/service-messages/stream", Bodies: marshal(".(*SystemAPI).serviceMessagesStream")},
+				{Name: "pairing", Summary: "topic pairing: as GET /api/auth/v1/pairing/stream", Bodies: marshal(".(*AuthAPI).pairingStream")},
+			}},
 	}
 }
 

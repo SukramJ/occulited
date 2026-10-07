@@ -697,17 +697,24 @@ func Reachability(ctx context.Context, i Interface, timeout time.Duration) (map[
 // CONFIG_PENDING, UPDATE_PENDING, the ERROR codes, SABOTAGE, FAULT_REPORTING all carry it).
 const serviceFlag = 8
 
+// stickyFlag marks a datapoint that keeps its value until someone acknowledges it (STICKY_UNREACH,
+// STICKY_SABOTAGE): the interface process resets it on a setValue and sends no event for that
+// (occulited B-46, measured on rfd), so only a read finds it acknowledged.
+const stickyFlag = 0x10
+
 // MaintenanceValues reads every device's channel 0 of one interface for the service-message
 // sweep (task 75): the devices, the service datapoints per device type (from the paramset
-// description of channel 0, once per type), and channel 0's VALUES per device. Under a second per
-// box measured; a device whose channel 0 does not answer is left out, an interface that does not
-// answer is the error. The CCU's own receivers (RCV) are skipped: they have no maintenance.
-func MaintenanceValues(ctx context.Context, i Interface, timeout time.Duration) (devices []Device, flags map[string]map[string]bool, values map[string]map[string]any, err error) {
+// description of channel 0, once per type) and which of them are sticky, and channel 0's VALUES
+// per device. Under a second per box measured; a device whose channel 0 does not answer is left
+// out, an interface that does not answer is the error. The CCU's own receivers (RCV) are skipped:
+// they have no maintenance.
+func MaintenanceValues(ctx context.Context, i Interface, timeout time.Duration) (devices []Device, flags, sticky map[string]map[string]bool, values map[string]map[string]any, err error) {
 	devices, errs := Devices(ctx, []Interface{i}, timeout)
 	if e := errs[i.Name]; e != nil {
-		return nil, nil, nil, e
+		return nil, nil, nil, nil, e
 	}
 	flags = map[string]map[string]bool{}
+	sticky = map[string]map[string]bool{}
 	values = map[string]map[string]any{}
 	for _, d := range devices {
 		if strings.Contains(strings.ToUpper(d.Type), "RCV") {
@@ -718,22 +725,26 @@ func MaintenanceValues(ctx context.Context, i Interface, timeout time.Duration) 
 			v, err := callWithin(ctx, i.caller, timeout, "getParamsetDescription", xmlrpc.NewString(channel), xmlrpc.NewString("VALUES"))
 			if err != nil {
 				if ctx.Err() != nil {
-					return nil, nil, nil, ctx.Err()
+					return nil, nil, nil, nil, ctx.Err()
 				}
 				continue // no description: the well-known names decide for this type
 			}
-			f := map[string]bool{}
+			f, st := map[string]bool{}, map[string]bool{}
 			for name, p := range xmlrpc.Q(v).Map() {
-				if p.TryKey("FLAGS").Int()&serviceFlag != 0 {
+				fl := p.TryKey("FLAGS").Int()
+				if fl&serviceFlag != 0 {
 					f[name] = true
 				}
+				if fl&stickyFlag != 0 {
+					st[name] = true
+				}
 			}
-			flags[d.Type] = f
+			flags[d.Type], sticky[d.Type] = f, st
 		}
 		v, err := callWithin(ctx, i.caller, timeout, "getParamset", xmlrpc.NewString(channel), xmlrpc.NewString("VALUES"))
 		if err != nil {
 			if ctx.Err() != nil {
-				return nil, nil, nil, ctx.Err()
+				return nil, nil, nil, nil, ctx.Err()
 			}
 			continue
 		}
@@ -743,7 +754,7 @@ func MaintenanceValues(ctx context.Context, i Interface, timeout time.Duration) 
 		}
 		values[channel] = vals
 	}
-	return devices, flags, values, nil
+	return devices, flags, sticky, values, nil
 }
 
 // InstallMode is the seconds the interface's install mode has left, 0 when it is off (task 149:
