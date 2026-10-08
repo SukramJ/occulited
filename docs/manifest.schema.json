@@ -90,7 +90,8 @@
           "description": "the settings page where the addon's Config-Url is not it"
         },
         "session_header": {"type": "boolean", "description": "this version reads X-Occulite-Session everywhere the shell opens it"},
-        "own_updater": {"type": "boolean", "description": "the addon still carries an update mechanism of its own"}
+        "own_updater": {"type": "boolean", "description": "the addon still carries an update mechanism of its own"},
+        "fullscreen": {"type": "boolean", "description": "the frontend offers its own way back to the system, so the shell may show it as the whole window once the user switches that on"}
       }
     },
     "runtime": {

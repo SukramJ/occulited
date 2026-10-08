@@ -51,6 +51,16 @@ func SettingsURL(root system.Root, id string) string {
 	return ""
 }
 
+// Fullscreen says whether the addon's stored manifest declares ui.fullscreen (occulited task 24,
+// openccu-lite #11): its frontend offers its own way back to the system, so the shell may show it
+// without the top bar once the user ticks that for the addon. Only the manifest the install
+// brought (D-119) counts - the old catalogue's policy block has no such field - and an addon
+// without one is never offered the choice.
+func Fullscreen(root system.Root, id string) bool {
+	m := root.ReadAddonManifest(id)
+	return m != nil && m.UI.Fullscreen
+}
+
 // addonSettingsURL is the settings page the shell frames for an addon: its Config-Url, else the
 // one it registered in hm_addons.cfg (AddonFrame.svelte takes them in that order).
 func addonSettingsURL(a system.Addon) string {

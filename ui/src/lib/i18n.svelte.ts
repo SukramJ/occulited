@@ -3025,6 +3025,13 @@ const CATALOGUE: Record<string, {de: string; en?: string}> = {
     'Control without the top bar': {de: 'Bedienung ohne die Kopfleiste'},
     'Show Control as the whole window': {de: 'Bedienung als ganzes Fenster zeigen'},
     'The tab bar and the icons stay away while Control is open; its menu keeps the way back to Status and to these settings.': {de: 'Die Reiterleiste und die Symbole bleiben weg, solange Bedienung offen ist; ihr Menü behält den Weg zurück zu Status und zu diesen Einstellungen.'},
+    // occulited task 24 (openccu-lite #11): an addon's frontend as the whole window, per addon that declares it
+    'An addon that brings a header and a menu of its own can be shown as the whole window, without the top bar. The choice is offered only for addons that declare it; the addon itself offers the way back to the system. Kept with your account.': {
+        de: 'Zusatzsoftware mit eigener Kopfzeile und eigenem Menü kann als ganzes Fenster gezeigt werden, ohne die Kopfleiste. Die Wahl gibt es nur für Zusatzsoftware, die das erklärt; den Weg zurück zum System bietet die Zusatzsoftware selbst. Wird mit dem Konto gespeichert.',
+    },
+    '{name} without the top bar': {de: '{name} ohne die Kopfleiste'},
+    'Show {name} as the whole window': {de: '{name} als ganzes Fenster zeigen'},
+    'The tab bar and the icons stay away while the addon is open; the addon itself offers the way back to the system.': {de: 'Die Reiterleiste und die Symbole bleiben weg, solange die Zusatzsoftware offen ist; den Weg zurück zum System bietet die Zusatzsoftware selbst.'},
     'Control is the everyday view - favorites, rooms, functions with their controls. These choices are kept with your account, so a phone and a desktop agree.': {de: 'Bedienung ist die Alltagsansicht - Favoriten, Räume, Gewerke mit ihren Bedienelementen. Diese Einstellungen werden mit dem Konto gespeichert, so sind sich Telefon und Desktop einig.'},
     // openccu-lite task 306: Control's tab out of the top bar
     'Control in the menu': {de: 'Bedienung im Menü'},

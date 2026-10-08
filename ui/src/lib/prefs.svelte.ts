@@ -5,7 +5,7 @@
 // and the browser keeps them then.
 import {api, ApiError} from './api';
 import {auth} from './auth.svelte';
-import {same, type AddonPref} from './addonorder';
+import {same, withFullscreen, type AddonPref} from './addonorder';
 
 /** task 193: where the UI opens for this account, and whether the App hides the shell's top bar;
  * openccu-lite task 306: whether Control's tab is out of the top bar (default: in it) */
@@ -22,7 +22,9 @@ const PATH = '/api/auth/v1/me/preferences';
 
 function clean(list: unknown): AddonPref[] {
     if (!Array.isArray(list)) return [];
-    return list.filter((p): p is {id: string; pinned?: boolean} => typeof p === 'object' && p !== null && typeof (p as {id?: unknown}).id === 'string').map((p) => ({id: p.id, pinned: p.pinned === true}));
+    return list
+        .filter((p): p is {id: string; pinned?: boolean; fullscreen?: boolean} => typeof p === 'object' && p !== null && typeof (p as {id?: unknown}).id === 'string')
+        .map((p) => (p.fullscreen === true ? {id: p.id, pinned: p.pinned === true, fullscreen: true} : {id: p.id, pinned: p.pinned === true}));
 }
 
 type Stored = {addons?: unknown; start_page?: unknown; app_fullscreen?: unknown; app_hidden?: unknown};
@@ -42,10 +44,11 @@ function fromBrowser(): Stored | null {
     }
 }
 
-/** the whole object, as a PUT replaces it (task 193: the App's choices travel with the pins) */
-type Body = {addons: {id: string; pinned?: true}[]; start_page?: StartPage; app_fullscreen?: true; app_hidden?: true};
+/** the whole object, as a PUT replaces it (task 193: the App's choices travel with the pins;
+ *  occulited task 24: an addon's whole-window flag rides on its entry) */
+type Body = {addons: {id: string; pinned?: true; fullscreen?: true}[]; start_page?: StartPage; app_fullscreen?: true; app_hidden?: true};
 function body(): Body {
-    const out: Body = {addons: prefs.addons.map((p) => (p.pinned ? {id: p.id, pinned: true} : {id: p.id}))};
+    const out: Body = {addons: prefs.addons.map((p) => ({id: p.id, ...(p.pinned ? {pinned: true as const} : {}), ...(p.fullscreen ? {fullscreen: true as const} : {})}))};
     if (prefs.startPage) out.start_page = prefs.startPage;
     if (prefs.appFullscreen) out.app_fullscreen = true;
     if (prefs.appHidden) out.app_hidden = true;
@@ -82,10 +85,20 @@ let chain: Promise<unknown> = Promise.resolve();
 
 /** Replaces the set of addon pins and order, in the shell at once and on the box after it. */
 export function setAddonPreferences(list: readonly AddonPref[]): void {
-    const next = list.map((p) => ({id: p.id, pinned: p.pinned}));
+    const next = list.map((p) => (p.fullscreen ? {id: p.id, pinned: p.pinned, fullscreen: true} : {id: p.id, pinned: p.pinned}));
     if (same(prefs.addons, next)) return;
     prefs.addons = next;
     save();
+}
+
+/** occulited task 24: one addon's frontend as the whole window, or not - a flag on its entry (Settings). */
+export function setAddonFullscreen(id: string, fullscreen: boolean): void {
+    setAddonPreferences(withFullscreen(prefs.addons, id, fullscreen));
+}
+
+/** whether the user ticked the whole window for an addon; the shell acts on it only for one whose manifest declares the choice */
+export function addonFullscreen(id: string): boolean {
+    return prefs.addons.some((p) => p.id === id && p.fullscreen === true);
 }
 
 /** task 193: the App's choices - the start page, the top bar hidden on the App; task 306: its tab hidden. */

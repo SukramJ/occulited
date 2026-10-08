@@ -1,7 +1,7 @@
 <script lang="ts">
     import './app.css';
     import {router, link, replace} from './lib/router.svelte';
-    import {prefs, loadPreferences, resetPreferences, effectiveStartPage} from './lib/prefs.svelte';
+    import {prefs, loadPreferences, resetPreferences, effectiveStartPage, addonFullscreen} from './lib/prefs.svelte';
     import {onPage, segmentOf, SETTINGS_BASE} from './lib/routes';
     import {opensFilter, shortcutLabel, systemPageAt, worstDot} from './lib/systemmenu';
     import {refreshDots, systemMenu, toggleSystemMenu} from './lib/systemmenu.svelte';
@@ -435,8 +435,18 @@
         void loadPreferences();
         return resetPreferences;
     });
+    // occulited task 24 (openccu-lite #11): an addon's frontend as the whole window too - when its
+    // manifest declares ui.fullscreen (GET /addons: the addon's promise of its own way back to /)
+    // and the user ticked it for the addon (Settings, kept with the account). The shell adds no way
+    // back of its own. Only the frontend at /nav/<id>: the addon's settings page and a new tab are
+    // not affected, nor a nav.d page that is no addon.
+    const navFull = $derived.by(() => {
+        if (navId === '' || !navEntry || navEntry.source !== 'addon') return false;
+        const id = navEntry.addon ?? navEntry.id;
+        return installed.some((a) => a.id === id && a.fullscreen === true) && addonFullscreen(id);
+    });
     // the App as the whole window: the top bar goes while the App is open (Settings)
-    const appFull = $derived(auth.authenticated && !auth.mustChangePassword && prefs.appFullscreen && onPage(router.path, '/app'));
+    const appFull = $derived(auth.authenticated && !auth.mustChangePassword && ((prefs.appFullscreen && onPage(router.path, '/app')) || navFull));
     // the start page: once, when the preferences arrive on the system's own address
     let startDone = false;
     $effect(() => {

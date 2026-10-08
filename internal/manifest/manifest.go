@@ -135,6 +135,11 @@ type UI struct {
 	// OwnUpdater: the addon still carries an update mechanism of its own, which the system's
 	// updates bypass; the page notes it.
 	OwnUpdater bool `json:"own_updater,omitempty"`
+	// Fullscreen (occulited task 24, openccu-lite #11): the addon's frontend brings a header and
+	// a menu of its own and offers its own way back to the system (a link to /), so the shell may
+	// show it as the whole window, without its top bar. The flag only makes the choice available:
+	// the user ticks it per addon on the Settings page, and it is off until then.
+	Fullscreen bool `json:"fullscreen,omitempty"`
 }
 
 // Runtime is what the addon needs when it runs under systemd as its own user (or as root).

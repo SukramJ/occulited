@@ -435,6 +435,9 @@ export interface Addon {
     lighttpd_rejected?: {reason: string; line?: number; statement?: string};
     /** task 66: the scopes of the addon's own API token, from its catalogue entry */
     api_scopes?: string[];
+    /** occulited task 24: the manifest declares ui.fullscreen - the frontend offers its own way back, so
+     *  Settings offers to show it as the whole window (the user's choice is the preference) */
+    fullscreen?: boolean;
     /** task 146: the program files are gone (a restore brings no .nobackup directory back); the dirs; the hint dismissed */
     payload_missing?: boolean;
     payload_missing_dirs?: string[];

@@ -2,8 +2,10 @@
     import {t, i18n, setLanguage} from '../lib/i18n.svelte';
     import {theme, setTheme, type Theme} from '../lib/theme.svelte';
     import Help from '../lib/Help.svelte';
-    import {prefs, setAppPreferences, type StartPage} from '../lib/prefs.svelte';
+    import {prefs, setAppPreferences, setAddonFullscreen, addonFullscreen, type StartPage} from '../lib/prefs.svelte';
     import {auth} from '../lib/auth.svelte';
+    import {api, type Addon} from '../lib/api';
+    import {pageLife} from '../lib/pagelife.svelte';
     import PublicControl from '../lib/PublicControl.svelte';
     import WarnEdge from '../lib/WarnEdge.svelte';
 
@@ -11,6 +13,25 @@
     // bar. How the box authenticates was here too until 2026-09-10; it is on System → Users now,
     // with the API tokens (task 132; on a Security page in between).
 
+    // occulited task 24 (openccu-lite #11): the installed, enabled addons whose manifest declares
+    // ui.fullscreen - each gets a card below, as Control has one. Read when the page is shown (a
+    // kept page: again on every return, so an addon installed meanwhile gets its card); the public
+    // principal has no addons.
+    const life = pageLife();
+    let fullAddons = $state<Addon[]>([]);
+    async function loadAddons(): Promise<void> {
+        if (!auth.authenticated || auth.public) return;
+        try {
+            const all = (await api.get<{addons: Addon[]}>('/api/system/v1/addons')).addons;
+            fullAddons = all.filter((a) => a.fullscreen === true && a.enabled !== false).sort((x, y) => (x.name || x.id).localeCompare(y.name || y.id, i18n.language, {sensitivity: 'base'}) || x.id.localeCompare(y.id));
+        } catch {
+            /* the section stays as it was */
+        }
+    }
+    $effect(() => {
+        void loadAddons();
+        return life.onReturn(() => void loadAddons());
+    });
 </script>
 
 <h1>{t('Settings')}</h1>
@@ -60,6 +81,23 @@
         <div class="ol-card-detail">{t('Off: the tab goes from the top bar. Control itself stays and opens at its address, /app.')}</div>
     </div>
 </div>
+
+<!-- occulited task 24 (openccu-lite #11): an addon whose manifest declares ui.fullscreen may be
+     shown as the whole window, as Control may. Off until ticked; kept with the account like the
+     pins (a flag on the addon's entry in the preferences). The shell adds no way back: the
+     declaration is the addon's promise of its own. -->
+{#if fullAddons.length > 0}
+    <h2>{t('Addons')}<Help>{t('An addon that brings a header and a menu of its own can be shown as the whole window, without the top bar. The choice is offered only for addons that declare it; the addon itself offers the way back to the system. Kept with your account.')}</Help></h2>
+    <div class="ol-cards">
+        {#each fullAddons as a (a.id)}
+            <div class="ol-card" data-setting="addon-fullscreen" data-addon={a.id}>
+                <div class="k">{t('{name} without the top bar', {name: a.name || a.id})}</div>
+                <label class="ol-check" style="margin-top:6px"><input type="checkbox" checked={addonFullscreen(a.id)} onchange={(e) => setAddonFullscreen(a.id, e.currentTarget.checked)} disabled={!prefs.loaded} /> {t('Show {name} as the whole window', {name: a.name || a.id})}</label>
+                <div class="ol-card-detail">{t('The tab bar and the icons stay away while the addon is open; the addon itself offers the way back to the system.')}</div>
+            </div>
+        {/each}
+    </div>
+{/if}
 
 <!-- openccu-lite task 223 (the maintainer, 2026-09-24): Control without a login, from the Remote
      access page - beside the Control choices, for an administrator, who alone may switch it -->

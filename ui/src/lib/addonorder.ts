@@ -9,6 +9,14 @@
 export interface AddonPref {
     id: string;
     pinned: boolean;
+    /** occulited task 24: the frontend is shown as the whole window (set only when true, so a
+     *  list without the choice reads as before) */
+    fullscreen?: boolean;
+}
+
+/** a copy of one entry, the whole-window flag only when it is set */
+function copy(p: AddonPref): AddonPref {
+    return p.fullscreen ? {id: p.id, pinned: p.pinned, fullscreen: true} : {id: p.id, pinned: p.pinned};
 }
 
 /**
@@ -24,7 +32,7 @@ export function arrange(ids: readonly string[], stored: readonly AddonPref[]): A
     for (const p of stored) {
         if (!present.has(p.id) || seen.has(p.id)) continue;
         seen.add(p.id);
-        out.push({id: p.id, pinned: p.pinned});
+        out.push(copy(p));
     }
     for (const id of ids) {
         if (seen.has(id)) continue;
@@ -34,14 +42,25 @@ export function arrange(ids: readonly string[], stored: readonly AddonPref[]): A
     return out;
 }
 
-/** The list with one addon's pin set. */
+/** The list with one addon's pin set; its whole-window flag stays. */
 export function withPin(list: readonly AddonPref[], id: string, pinned: boolean): AddonPref[] {
-    return list.map((p) => (p.id === id ? {id, pinned} : {...p}));
+    return list.map((p) => (p.id === id ? copy({...p, pinned}) : copy(p)));
+}
+
+/**
+ * occulited task 24: the list with one addon's frontend shown as the whole window, or not. An addon
+ * the list does not name yet joins the end unpinned, where the reconcile would place it anyway;
+ * switching the flag off for one it does not name changes nothing.
+ */
+export function withFullscreen(list: readonly AddonPref[], id: string, fullscreen: boolean): AddonPref[] {
+    const out = list.map((p) => (p.id === id ? copy({...p, fullscreen}) : copy(p)));
+    if (fullscreen && !list.some((p) => p.id === id)) out.push({id, pinned: false, fullscreen: true});
+    return out;
 }
 
 /** Whether two lists say the same, entry by entry. */
 export function same(a: readonly AddonPref[], b: readonly AddonPref[]): boolean {
-    return a.length === b.length && a.every((p, i) => p.id === b[i]!.id && p.pinned === b[i]!.pinned);
+    return a.length === b.length && a.every((p, i) => p.id === b[i]!.id && p.pinned === b[i]!.pinned && !!p.fullscreen === !!b[i]!.fullscreen);
 }
 
 /**

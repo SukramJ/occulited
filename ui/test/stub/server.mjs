@@ -1851,6 +1851,14 @@ function withEarlyAddons(jar, list) {
     const st = earlyStateOf(jar);
     return list.map((a) => (EARLY_ADDONS.includes(a.id) ? {...a, start_early_declared: true, ...(st.enabled && !st.off.includes(a.id) ? {start_early: true} : {})} : a));
 }
+// occulited task 24: the addon whose manifest declares ui.fullscreen - Homematic-Manager - marked in
+// the addon list only for a browser with the cookie stub-addon-fullscreen=1, so the other specs see
+// the Settings page they saw (no Addons section there without a declaring addon).
+const FULLSCREEN_ADDONS = ['mh'];
+function withFullscreenAddons(jar, list) {
+    if (jar['stub-addon-fullscreen'] !== '1') return list;
+    return list.map((a) => (FULLSCREEN_ADDONS.includes(a.id) ? {...a, fullscreen: true} : a));
+}
 // B-133: a frontend the addon's own server answers behind lighttpd's proxy (FRONTENDS) never gets
 // the alias - the box marks only a nav.d page under /addons/ that lives by the CCU convention
 function withLegacyNav(jar, entries) {
@@ -2623,7 +2631,7 @@ function variant(req, u, res) {
     if (key === 'GET /api/system/v1/addons') {
         const list = structuredClone(ADDONS);
         if (s) for (const a of list) if (s.versions[a.id]) a.version = s.versions[a.id];
-        sendJSON(res, {addons: withEarlyAddons(jar, withLegacyAddons(jar, warn ? [...list, ...structuredClone(WARN_ADDONS)] : list))});
+        sendJSON(res, {addons: withFullscreenAddons(jar, withEarlyAddons(jar, withLegacyAddons(jar, warn ? [...list, ...structuredClone(WARN_ADDONS)] : list)))});
         return true;
     }
     if (key === 'GET /api/system/v1/nav') {
@@ -3427,8 +3435,9 @@ const srv = http.createServer((req, res) => {
                     try { b = JSON.parse(body); } catch { return sendJSON(res, {error: 'invalid-body', message: 'not JSON'}, 422); }
                     if (!Array.isArray(b?.addons) || b.addons.some((a) => typeof a?.id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(a.id))) return sendJSON(res, {error: 'invalid-body', message: 'addons must be a list of {id, pinned?}'}, 422);
                     if (b.start_page !== undefined && !['', 'app', 'status'].includes(b.start_page)) return sendJSON(res, {error: 'invalid-body', message: 'invalid preferences: start_page is app or status'}, 422);
-                    // task 193: the App's choices travel with the pins
-                    const stored = {addons: b.addons.map((a) => (a.pinned === true ? {id: a.id, pinned: true} : {id: a.id})), ...(b.start_page ? {start_page: b.start_page} : {}), ...(b.app_fullscreen === true ? {app_fullscreen: true} : {}), ...(b.app_hidden === true ? {app_hidden: true} : {})};
+                    // task 193: the App's choices travel with the pins; occulited task 24: an addon's
+                    // whole-window flag rides on its entry
+                    const stored = {addons: b.addons.map((a) => ({id: a.id, ...(a.pinned === true ? {pinned: true} : {}), ...(a.fullscreen === true ? {fullscreen: true} : {})})), ...(b.start_page ? {start_page: b.start_page} : {}), ...(b.app_fullscreen === true ? {app_fullscreen: true} : {}), ...(b.app_hidden === true ? {app_hidden: true} : {})};
                     if (id) prefsStore.set(id, stored);
                     sendJSON(res, stored);
                 });

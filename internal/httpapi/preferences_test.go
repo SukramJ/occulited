@@ -46,6 +46,15 @@ func TestPreferencesRoutes(t *testing.T) {
 	if _, _, raw := do(t, srv, "GET", "/api/auth/v1/me/preferences", "", bob); raw != app+"\n" {
 		t.Fatalf("get app choices: %s", raw)
 	}
+	// occulited task 24: an addon shown as the whole window is a flag on its entry; read back as
+	// written, beside the pin, and left out when it is off
+	full := `{"addons":[{"id":"redmatic","pinned":true,"fullscreen":true},{"id":"mh","fullscreen":true}]}`
+	if st, _, raw := do(t, srv, "PUT", "/api/auth/v1/me/preferences", full, bob); st != 200 || raw != full+"\n" {
+		t.Fatalf("put fullscreen: %d %s", st, raw)
+	}
+	if _, _, raw := do(t, srv, "GET", "/api/auth/v1/me/preferences", "", bob); raw != full+"\n" {
+		t.Fatalf("get fullscreen: %s", raw)
+	}
 	if st, _, raw := do(t, srv, "PUT", "/api/auth/v1/me/preferences", body, bob); st != 200 || raw != body+"\n" {
 		t.Fatalf("put back: %d %s", st, raw)
 	}

@@ -857,6 +857,9 @@
       },
       "AuthAddonPreference": {
         "properties": {
+          "fullscreen": {
+            "type": "boolean"
+          },
           "id": {
             "type": "string"
           },
@@ -871,6 +874,9 @@
       },
       "AuthAddonPreferenceInput": {
         "properties": {
+          "fullscreen": {
+            "type": "boolean"
+          },
           "id": {
             "type": "string"
           },
@@ -5712,6 +5718,9 @@
       },
       "ManifestUI": {
         "properties": {
+          "fullscreen": {
+            "type": "boolean"
+          },
           "icon": {
             "type": "string"
           },
@@ -8040,6 +8049,9 @@
             ]
           },
           "failed": {
+            "type": "boolean"
+          },
+          "fullscreen": {
             "type": "boolean"
           },
           "id": {

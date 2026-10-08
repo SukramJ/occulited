@@ -25,10 +25,15 @@ type Preferences struct {
 	AppHidden bool `json:"app_hidden,omitempty"`
 }
 
-// AddonPreference is one addon's place in the dropdown and whether it has a tab.
+// AddonPreference is one addon's place in the dropdown, whether it has a tab, and whether its
+// frontend is shown as the whole window.
 type AddonPreference struct {
 	ID     string `json:"id"`
 	Pinned bool   `json:"pinned,omitempty"`
+	// Fullscreen (occulited task 24): the shell shows the addon's frontend without its top bar.
+	// The user's choice alone; the shell acts on it only for an addon whose manifest declares
+	// ui.fullscreen (GET /addons), so a stale entry is harmless like the rest of the list.
+	Fullscreen bool `json:"fullscreen,omitempty"`
 }
 
 // ErrBadPreferences is a preferences body the store refuses; the message says why.
@@ -65,7 +70,7 @@ func (p Preferences) normalised() (Preferences, error) {
 			return out, fmt.Errorf("%w: addon %q named twice", ErrBadPreferences, a.ID)
 		}
 		seen[a.ID] = true
-		out.Addons = append(out.Addons, AddonPreference{ID: a.ID, Pinned: a.Pinned})
+		out.Addons = append(out.Addons, AddonPreference{ID: a.ID, Pinned: a.Pinned, Fullscreen: a.Fullscreen})
 	}
 	return out, nil
 }

@@ -317,6 +317,11 @@ type Addon struct {
 	// SessionHeader: the addon's settings page reads the gate's X-Occulite-Session, so the shell
 	// opens it without ?sid= (task 88, D-67). Set per request by GET /addons (httpapi.SessionHeader).
 	SessionHeader bool `json:"session_header,omitempty"`
+	// Fullscreen: the addon's stored manifest declares ui.fullscreen (occulited task 24) - its
+	// frontend offers its own way back, so the shell offers to show it as the whole window. The
+	// user's choice is a preference (auth.AddonPreference.Fullscreen), not this. Set per request
+	// by GET /addons (httpapi.Fullscreen).
+	Fullscreen bool `json:"fullscreen,omitempty"`
 	// LegacySession: the shell opens the settings page with the session's ?sid=@..@ alias (task
 	// 125): the addon does not read the header, and the legacy session is switched on for it.
 	// Set per request by GET /addons (httpapi.LegacySession).

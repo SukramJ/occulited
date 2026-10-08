@@ -30,7 +30,8 @@ func TestPreferences(t *testing.T) {
 		t.Fatalf("no account: %v", err)
 	}
 
-	want := Preferences{Addons: []AddonPreference{{ID: "redmatic", Pinned: true}, {ID: "mh"}, {ID: "jp-hb-devices-addon", Pinned: true}}}
+	// occulited task 24: the whole-window flag is kept per entry, with or without the pin
+	want := Preferences{Addons: []AddonPreference{{ID: "redmatic", Pinned: true, Fullscreen: true}, {ID: "mh", Fullscreen: true}, {ID: "jp-hb-devices-addon", Pinned: true}}}
 	if err := s.SetPreferences("bob", want); err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +73,7 @@ func TestPreferences(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p, _ := s2.Preferences("bob"); len(p.Addons) != 3 || !p.Addons[0].Pinned || p.Addons[1].Pinned {
+	if p, _ := s2.Preferences("bob"); len(p.Addons) != 3 || !p.Addons[0].Pinned || p.Addons[1].Pinned || !p.Addons[1].Fullscreen || p.Addons[2].Fullscreen {
 		t.Fatalf("reopened: %+v", p)
 	}
 	// the account list never carries them

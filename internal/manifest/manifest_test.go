@@ -21,7 +21,7 @@ const good = `{
   "homepage": "https://github.com/homematic-community/ccu-addon-mosquitto",
   "release": {"github": "homematic-community/ccu-addon-mosquitto", "asset": "mosquitto-{arch}-{version}.tar.gz", "fallback_asset": "mosquitto-{version}.tar.gz"},
   "requires": {"architectures": ["armv7l", "aarch64", "x86_64"]},
-  "ui": {"session_header": true},
+  "ui": {"session_header": true, "fullscreen": true},
   "runtime": {
     "needs": [],
     "ports": [1883, 8883],
@@ -38,8 +38,12 @@ func TestParse(t *testing.T) {
 	if m.ID != "mosquitto" || m.Name.In("de") != "Mosquitto" || m.Description.In("de") != "Der MQTT-Broker." || m.Description.In("fr") != "The MQTT broker." {
 		t.Fatalf("%+v", m)
 	}
-	if m.Release == nil || m.Release.GitHub != "homematic-community/ccu-addon-mosquitto" || !m.UI.SessionHeader {
+	if m.Release == nil || m.Release.GitHub != "homematic-community/ccu-addon-mosquitto" || !m.UI.SessionHeader || !m.UI.Fullscreen {
 		t.Fatalf("%+v %+v", m.Release, m.UI)
+	}
+	// occulited task 24: ui.fullscreen is false unless declared
+	if m2, err := Parse([]byte(`{"format": 1, "id": "x", "name": "X", "ui": {"session_header": true}}`)); err != nil || m2.UI.Fullscreen {
+		t.Fatalf("fullscreen undeclared: %v %+v", err, m2.UI)
 	}
 	if m.Runtime == nil || m.Runtime.Needs == nil || len(*m.Runtime.Needs) != 0 || !m.Runtime.PortInfo["8883"].TLS || m.Runtime.PortInfo["8883"].Label.In("en") != "MQTT over TLS" {
 		t.Fatalf("%+v", m.Runtime)

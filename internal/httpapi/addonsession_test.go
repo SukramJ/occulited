@@ -128,10 +128,15 @@ func TestNavAndAddonsSessionHeader(t *testing.T) {
 			if (a["session_header"] == true) != want {
 				t.Errorf("addon %v: session_header want %v", a["id"], want)
 			}
+			// occulited task 24: the manifest's ui.fullscreen rides along on GET /addons the same
+			// way, and is absent - never false - for an addon that does not declare it
+			if (a["fullscreen"] == true) != want || (!want && a["fullscreen"] != nil) {
+				t.Errorf("addon %v: fullscreen %v, want declared %v", a["id"], a["fullscreen"], want)
+			}
 		}
 	}
 	check(false) // nothing declared yet
-	storeManifest(t, root, "redmatic", `{"format": 1, "id": "redmatic", "name": "RedMatic", "ui": {"session_header": true}}`)
+	storeManifest(t, root, "redmatic", `{"format": 1, "id": "redmatic", "name": "RedMatic", "ui": {"session_header": true, "fullscreen": true}}`)
 	check(true)
 }
 
