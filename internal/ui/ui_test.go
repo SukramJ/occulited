@@ -7,7 +7,12 @@ import (
 	"testing"
 )
 
-// B-150: a missing file is a 404; a client-side route and the root still get the app shell
+// B-150: a missing file is a 404; a client-side route and the root still get the app shell.
+//
+// openccu-lite task 331: the system ships the WebUI's device pictures, DEVDB.tcl, stringtable_de.txt
+// and translate.lang*.js at the CCU's paths, and lighttpd serves them itself (the fork's lite
+// webui.conf), so those URLs never reach the shell. Should one reach it anyway - a lighttpd without
+// that block, the development server - it is a 404 here, never the app shell in place of the file.
 func TestMissingFileIsNotTheAppShell(t *testing.T) {
 	h := Handler()
 	for _, c := range []struct {
@@ -21,6 +26,10 @@ func TestMissingFileIsNotTheAppShell(t *testing.T) {
 		{"/addon-settings/hm2mqtt.js", 200, true},
 		{"/catalog/ioBroker.json", 200, true},
 		{"/config/img/devices/50/5_hm-cc-tc_thumb.png", 404, false},
+		{"/config/img/devices/250/coupling/c_1.png", 404, false},
+		{"/config/devdescr/DEVDB.tcl", 404, false},
+		{"/config/stringtable_de.txt", 404, false},
+		{"/webui/js/lang/de/translate.lang.js", 404, false},
 		{"/assets/gone-1234.js", 404, false},
 		{"/favicon-missing.ICO", 404, false},
 	} {

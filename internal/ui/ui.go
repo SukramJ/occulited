@@ -104,6 +104,8 @@ var staticExt = map[string]bool{
 	".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".webp": true, ".svg": true, ".ico": true,
 	".css": true, ".js": true, ".mjs": true, ".map": true, ".json": true, ".xml": true, ".txt": true,
 	".woff": true, ".woff2": true, ".ttf": true, ".webmanifest": true,
+	// the WebUI's DEVDB.tcl (openccu-lite task 331): lighttpd serves it, never the shell
+	".tcl": true,
 }
 
 // spaPrefixes are the client-side routes that carry an id in their path - an addon's id may end
